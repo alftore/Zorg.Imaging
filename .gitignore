@@ -1,0 +1,39 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+artifacts/
+*.nupkg
+*.snupkg
+TestResults/
+BenchmarkDotNet.Artifacts/
+
+# Local scratch and temporary files (never committed)
+.tmp/
+
+# Downloaded test corpora (fetched by scripts/fetch-corpora.sh, checksummed, never committed)
+.cache/
+
+# Test output images written for inspection
+*.actual.png
+*.actual.webp
+*.actual.jpg
+
+# IDE and OS files
+.claude/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Secrets and local settings
+*.env
+appsettings.Local.json
+
+# Snapshot candidates
+*.received.*
+
+# A Windows redirect run from a POSIX shell creates a real file with this name
+NUL

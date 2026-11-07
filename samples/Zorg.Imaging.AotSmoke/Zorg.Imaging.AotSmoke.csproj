@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <!-- Report each trim and AOT warning, not one summary warning per assembly. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Zorg.Imaging\Zorg.Imaging.csproj" />
+  </ItemGroup>
+
+</Project>

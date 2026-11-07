@@ -1,0 +1,11 @@
+# The Linux gate image, glibc variant. Ubuntu 24.04 has no oxipng package, so this image runs the
+# unit tests and the AOT publish on glibc; the Alpine image is the one with every oracle.
+# The packages are baked into the image once. Do not run apt-get in a test run.
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libpng-tools libjpeg-turbo-progs webp \
+        libimage-exiftool-perl imagemagick clang zlib1g-dev curl \
+ && rm -rf /var/lib/apt/lists/*
+ENV DOTNET_NOLOGO=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1

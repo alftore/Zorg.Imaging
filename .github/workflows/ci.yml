@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build Zorg.Imaging.slnx -c Release
+
+      # Oracle-backed tests skip here (no oracle tools on the runners); the oracles job runs them in the gate image.
+      - name: Test
+        run: dotnet test --project tests/Zorg.Imaging.Tests -c Release --no-build
+
+      - name: Pack
+        shell: bash
+        run: dotnet pack src/Zorg.Imaging/Zorg.Imaging.csproj -c Release --no-build -p:PackageOutputPath="$RUNNER_TEMP/packages"
+
+  oracles:
+    name: Oracle tests (Alpine gate, Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same container as local runs: every oracle tool is baked into scripts/linux/Dockerfile.alpine,
+      # and ZORG_REQUIRE_ORACLES=1 makes a missing tool a failure, not a skip.
+      - name: Linux gate
+        env:
+          ZORG_IMAGING_CONTAINER_CLI: docker
+        run: scripts/test-linux.sh --variant alpine
+
+  aot-smoke:
+    name: AOT smoke publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Install Native AOT prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      # The explicit shell turns on pipefail, so a failed publish isn't hidden by tee.
+      # A clean publish proves little on its own, so the sample is also run.
+      - name: Publish
+        shell: bash
+        run: |
+          dotnet publish samples/Zorg.Imaging.AotSmoke -r linux-x64 -c Release -o "$RUNNER_TEMP/aot" | tee "$RUNNER_TEMP/publish.log"
+          if grep -E '\bIL[23][0-9]{3}\b' "$RUNNER_TEMP/publish.log"; then
+            echo "::error::The publish reported trim or AOT warnings."
+            exit 1
+          fi
+
+      - name: Run
+        shell: bash
+        run: '"$RUNNER_TEMP/aot/Zorg.Imaging.AotSmoke"'

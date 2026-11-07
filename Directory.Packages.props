@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <!-- docs/dependencies.md records the licence and risk review for every package here.
+       The library itself has no runtime packages, and that is a design rule, not an accident. -->
+
+  <ItemGroup Label="Build">
+    <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Tests">
+    <PackageVersion Include="coverlet.MTP" Version="10.1.0" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+  </ItemGroup>
+</Project>

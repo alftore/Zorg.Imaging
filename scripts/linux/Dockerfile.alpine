@@ -1,0 +1,12 @@
+# The Linux gate image, musl variant, and the one with the full oracle set.
+# Pinned to the Alpine minor, so tool versions don't change under a run.
+# Oracles (black boxes only, never read as source): libpng tools, libjpeg-turbo (djpeg/cjpeg),
+# libwebp (dwebp/cwebp/webpmux), oxipng, exiftool, ImageMagick with JPEG and WebP modules.
+# clang, build-base and zlib-dev are for the Native AOT publish.
+FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine3.24
+RUN apk add --no-cache libpng-utils libjpeg-turbo-utils libwebp-tools oxipng exiftool \
+        imagemagick imagemagick-jpeg imagemagick-webp \
+        clang build-base zlib-dev tar curl
+ENV DOTNET_NOLOGO=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1

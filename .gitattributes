@@ -1,0 +1,14 @@
+# Normalise line endings in the repository; check out with the platform default.
+* text=auto
+
+*.sh text eol=lf
+
+# Image fixtures are byte-exact test data: never convert line endings in them.
+*.png binary
+*.apng binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.icc binary
+*.bin binary
