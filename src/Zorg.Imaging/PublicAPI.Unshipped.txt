@@ -1,1 +1,80 @@
 #nullable enable
+Zorg.Imaging.FormatPeek
+Zorg.Imaging.FormatPeek.Format.get -> Zorg.Imaging.ImageFormat?
+Zorg.Imaging.FormatPeek.Stream.get -> System.IO.Stream!
+Zorg.Imaging.IdentifyOptions
+Zorg.Imaging.IdentifyOptions.CountFrames.get -> bool
+Zorg.Imaging.IdentifyOptions.CountFrames.init -> void
+Zorg.Imaging.IdentifyOptions.IdentifyOptions() -> void
+Zorg.Imaging.IdentifyOptions.Limits.get -> Zorg.Imaging.ImageLimits!
+Zorg.Imaging.IdentifyOptions.Limits.init -> void
+Zorg.Imaging.IdentifyResult
+Zorg.Imaging.IdentifyResult.Format.get -> Zorg.Imaging.ImageFormat?
+Zorg.Imaging.IdentifyResult.Info.get -> Zorg.Imaging.ImageInfo?
+Zorg.Imaging.IdentifyResult.Message.get -> string?
+Zorg.Imaging.IdentifyResult.Status.get -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyResult.Succeeded.get -> bool
+Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.Corrupt = 5 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.ExceedsLimits = 6 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.None = 0 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.NotAnImage = 2 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.Ok = 1 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.Truncated = 4 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.UnsupportedFormat = 3 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.Image
+Zorg.Imaging.ImageFormat
+Zorg.Imaging.ImageFormat.FileExtensions.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Imaging.ImageFormat.IsSupported.get -> bool
+Zorg.Imaging.ImageFormat.MimeType.get -> string!
+Zorg.Imaging.ImageFormat.Name.get -> string!
+Zorg.Imaging.ImageFormats
+Zorg.Imaging.ImageInfo
+Zorg.Imaging.ImageInfo.DisplayHeight.get -> int
+Zorg.Imaging.ImageInfo.DisplayWidth.get -> int
+Zorg.Imaging.ImageInfo.Format.get -> Zorg.Imaging.ImageFormat!
+Zorg.Imaging.ImageInfo.FrameCount.get -> int?
+Zorg.Imaging.ImageInfo.HasAlpha.get -> bool
+Zorg.Imaging.ImageInfo.HasExif.get -> bool
+Zorg.Imaging.ImageInfo.HasIccProfile.get -> bool
+Zorg.Imaging.ImageInfo.Height.get -> int
+Zorg.Imaging.ImageInfo.IsAnimated.get -> bool
+Zorg.Imaging.ImageInfo.Orientation.get -> int
+Zorg.Imaging.ImageInfo.Width.get -> int
+Zorg.Imaging.ImageLimits
+Zorg.Imaging.ImageLimits.ImageLimits() -> void
+Zorg.Imaging.ImageLimits.MaxFrames.get -> int
+Zorg.Imaging.ImageLimits.MaxFrames.init -> void
+Zorg.Imaging.ImageLimits.MaxHeaderBytes.get -> int
+Zorg.Imaging.ImageLimits.MaxHeaderBytes.init -> void
+Zorg.Imaging.ImageLimits.MaxPixels.get -> long
+Zorg.Imaging.ImageLimits.MaxPixels.init -> void
+const Zorg.Imaging.ImageFormats.MaxSignatureLength = 64 -> int
+const Zorg.Imaging.ImageLimits.DefaultMaxFrames = 10000 -> int
+const Zorg.Imaging.ImageLimits.DefaultMaxHeaderBytes = 1048576 -> int
+const Zorg.Imaging.ImageLimits.DefaultMaxPixels = 268402689 -> long
+override Zorg.Imaging.IdentifyResult.ToString() -> string!
+override Zorg.Imaging.ImageFormat.ToString() -> string!
+override Zorg.Imaging.ImageInfo.ToString() -> string!
+static Zorg.Imaging.IdentifyOptions.Default.get -> Zorg.Imaging.IdentifyOptions!
+static Zorg.Imaging.Image.Identify(byte[]! data, Zorg.Imaging.IdentifyOptions? options = null) -> Zorg.Imaging.IdentifyResult!
+static Zorg.Imaging.Image.IdentifyAsync(System.IO.Stream! stream, Zorg.Imaging.IdentifyOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.IdentifyResult!>
+static Zorg.Imaging.ImageFormat.Avif.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Bmp.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Gif.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Heif.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Ico.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Jpeg.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.JpegXl.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Png.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Psd.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Qoi.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Tiff.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Webp.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormats.Detect(System.ReadOnlySpan<byte> head) -> Zorg.Imaging.ImageFormat?
+static Zorg.Imaging.ImageFormats.DetectAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.ImageFormat?>
+static Zorg.Imaging.ImageFormats.DetectFile(string! path) -> Zorg.Imaging.ImageFormat?
+static Zorg.Imaging.ImageFormats.IsSupported(System.ReadOnlySpan<byte> head) -> bool
+static Zorg.Imaging.ImageFormats.Known.get -> System.Collections.Generic.IReadOnlyList<Zorg.Imaging.ImageFormat!>!
+static Zorg.Imaging.ImageFormats.PeekAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.FormatPeek!>
+static Zorg.Imaging.ImageLimits.Default.get -> Zorg.Imaging.ImageLimits!

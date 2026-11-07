@@ -2,7 +2,7 @@
 
 Managed image decoding, resizing and encoding for .NET 10, written in C# only. PNG, JPEG, GIF and WebP in one package, with no native binaries and no NuGet dependencies.
 
-**Status: early development. Nothing works yet beyond the first building blocks, and nothing has been published.** The plan is in `.tmp/design/01-implementation-plan.md` on the maintainer's machine.
+**Status: early development. Nothing has been published. So far it can recognise image formats and read their headers (`ImageFormats.Detect`, `Image.Identify`), but not decode them.** The plan is in `.tmp/design/01-implementation-plan.md` on the maintainer's machine.
 
 ## Goals
 

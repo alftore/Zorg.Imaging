@@ -1,0 +1,100 @@
+using System;
+using System.Globalization;
+using System.Threading;
+using System.Threading.Tasks;
+using Zorg.Imaging.Codecs.Gif;
+using Zorg.Imaging.Codecs.Jpeg;
+using Zorg.Imaging.Codecs.Png;
+using Zorg.Imaging.Codecs.Webp;
+
+namespace Zorg.Imaging.Formats;
+
+/// <summary>
+/// The header check behind <see cref="Image.Identify"/>: detect the format, run its header reader, apply the limits,
+/// and turn every <see cref="IdentifyFailure"/> into a result.
+/// </summary>
+internal static class Identifier
+{
+    public static async ValueTask<IdentifyResult> IdentifyAsync(HeaderReader reader, IdentifyOptions options, CancellationToken cancellationToken)
+    {
+        byte[] head = new byte[ImageFormats.MaxSignatureLength];
+        int length = await reader.PeekAsync(head, cancellationToken).ConfigureAwait(false);
+        ImageFormat? format = FormatSignatures.Detect(head.AsSpan(0, length));
+        if (format is null)
+        {
+            return IdentifyResult.Failed(IdentifyStatus.NotAnImage, format: null, "The file isn't a PNG, JPEG, GIF or WebP image.");
+        }
+
+        if (!format.IsSupported)
+        {
+            return IdentifyResult.Failed(
+                IdentifyStatus.UnsupportedFormat,
+                format,
+                string.Create(CultureInfo.InvariantCulture, $"{format.Name} images aren't supported. Use PNG, JPEG, GIF or WebP."));
+        }
+
+        reader.FormatName = format.Name;
+        try
+        {
+            ImageInfo info = await ReadHeadersAsync(format, reader, options, cancellationToken).ConfigureAwait(false);
+            CheckLimits(info, options.Limits);
+            return IdentifyResult.Ok(info);
+        }
+        catch (IdentifyFailure failure)
+        {
+            return IdentifyResult.Failed(failure.Status, format, failure.Message);
+        }
+    }
+
+    private static ValueTask<ImageInfo> ReadHeadersAsync(ImageFormat format, HeaderReader reader, IdentifyOptions options, CancellationToken cancellationToken)
+    {
+        if (format == ImageFormat.Png)
+        {
+            return PngHeaderReader.ReadAsync(reader, options, cancellationToken);
+        }
+
+        if (format == ImageFormat.Jpeg)
+        {
+            return JpegHeaderReader.ReadAsync(reader, options, cancellationToken);
+        }
+
+        if (format == ImageFormat.Gif)
+        {
+            return GifHeaderReader.ReadAsync(reader, options, cancellationToken);
+        }
+
+        return WebpHeaderReader.ReadAsync(reader, options, cancellationToken);
+    }
+
+    private static void CheckLimits(ImageInfo info, ImageLimits limits)
+    {
+        if (info.Width <= 0 || info.Height <= 0)
+        {
+            throw IdentifyFailure.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The {info.Format.Name} file has a size of {info.Width}x{info.Height}."));
+        }
+
+        long pixels = (long)info.Width * info.Height;
+        if (pixels > limits.MaxPixels)
+        {
+            throw IdentifyFailure.ExceedsLimits(string.Create(
+                CultureInfo.InvariantCulture,
+                $"The image is {info.Width}x{info.Height} ({pixels} pixels), over the limit of {limits.MaxPixels} pixels."));
+        }
+
+        if (info.FrameCount < 1)
+        {
+            throw IdentifyFailure.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The {info.Format.Name} file declares an animation with no frames."));
+        }
+
+        if (info.FrameCount > limits.MaxFrames)
+        {
+            throw IdentifyFailure.ExceedsLimits(FramesOverLimit(limits));
+        }
+    }
+
+    /// <summary>The message for too many frames. Readers that stop counting early use it too.</summary>
+    /// <param name="limits">The limits.</param>
+    /// <returns>The message.</returns>
+    public static string FramesOverLimit(ImageLimits limits) =>
+        string.Create(CultureInfo.InvariantCulture, $"The image has more than {limits.MaxFrames} frames, the limit (ImageLimits.MaxFrames).");
+}
