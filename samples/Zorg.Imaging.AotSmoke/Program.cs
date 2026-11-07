@@ -121,6 +121,28 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     Check("colour space from cicp", ColorSpace.FromCicp(9, 16) == ColorSpace.Rec2020Pq && ColorSpace.Rec2020Pq.IsHdr);
 }
 
+// Resize: shrinking blends in linear light (black and white make sRGB 188), every filter and a 16-bit image.
+{
+    using var pair = new Image(2, 1, PixelFormat.Rgb24);
+    pair.GetRow<Rgb24>(0)[1] = new Rgb24(255, 255, 255);
+    using Image half = pair.Resize(1, 1);
+    Check("resize linear light", half.GetRow<Rgb24>(0)[0] == new Rgb24(188, 188, 188));
+
+    using var wide = new Image(30, 20, PixelFormat.Rgba64) { ColorSpace = ColorSpace.DisplayP3 };
+    wide.GetPixelBytes().Fill(0x80);
+    bool same = true;
+    foreach (Resampler filter in new[] { Resampler.Nearest, Resampler.Bilinear, Resampler.CatmullRom, Resampler.Mitchell, Resampler.Lanczos3 })
+    {
+        using Image smaller = wide.Resize(7, 0, filter);
+        using Image larger = wide.Resize(0, 45, filter);
+        same &= smaller.Height == 5 && larger.Width == 68 && smaller.ColorSpace == ColorSpace.DisplayP3
+            && smaller.GetRow<Rgba64>(4)[6] == new Rgba64(0x8080, 0x8080, 0x8080, 0x8080)
+            && larger.GetRow<Rgba64>(44)[67] == new Rgba64(0x8080, 0x8080, 0x8080, 0x8080);
+    }
+
+    Check("resize every filter keeps a flat colour", same);
+}
+
 return failures == 0 ? 0 : 1;
 
 static byte[] TinyPng(int width, int height)

@@ -62,6 +62,7 @@ Zorg.Imaging.Image.GetRowBytes(int y) -> System.Span<byte>
 Zorg.Imaging.Image.Height.get -> int
 Zorg.Imaging.Image.Image(int width, int height, Zorg.Imaging.PixelFormat pixelFormat) -> void
 Zorg.Imaging.Image.PixelFormat.get -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.Image.Resize(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.SaveAsPng(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null) -> void
 Zorg.Imaging.Image.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.Image.Stride.get -> int
@@ -129,6 +130,9 @@ Zorg.Imaging.PngEncoderOptions
 Zorg.Imaging.PngEncoderOptions.CompressionLevel.get -> int
 Zorg.Imaging.PngEncoderOptions.CompressionLevel.init -> void
 Zorg.Imaging.PngEncoderOptions.PngEncoderOptions() -> void
+Zorg.Imaging.Resampler
+Zorg.Imaging.Resampler.Name.get -> string!
+Zorg.Imaging.Resampler.Radius.get -> double
 Zorg.Imaging.Rgb24
 Zorg.Imaging.Rgb24.B.get -> byte
 Zorg.Imaging.Rgb24.B.set -> void
@@ -201,6 +205,7 @@ override Zorg.Imaging.L16.ToString() -> string!
 override Zorg.Imaging.L8.Equals(object? obj) -> bool
 override Zorg.Imaging.L8.GetHashCode() -> int
 override Zorg.Imaging.L8.ToString() -> string!
+override Zorg.Imaging.Resampler.ToString() -> string!
 override Zorg.Imaging.Rgb24.Equals(object? obj) -> bool
 override Zorg.Imaging.Rgb24.GetHashCode() -> int
 override Zorg.Imaging.Rgb24.ToString() -> string!
@@ -255,6 +260,11 @@ static Zorg.Imaging.L16.operator ==(Zorg.Imaging.L16 left, Zorg.Imaging.L16 righ
 static Zorg.Imaging.L8.operator !=(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
 static Zorg.Imaging.L8.operator ==(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
 static Zorg.Imaging.PngEncoderOptions.Default.get -> Zorg.Imaging.PngEncoderOptions!
+static Zorg.Imaging.Resampler.Bilinear.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Resampler.CatmullRom.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Resampler.Lanczos3.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Resampler.Mitchell.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Resampler.Nearest.get -> Zorg.Imaging.Resampler!
 static Zorg.Imaging.Rgb24.operator !=(Zorg.Imaging.Rgb24 left, Zorg.Imaging.Rgb24 right) -> bool
 static Zorg.Imaging.Rgb24.operator ==(Zorg.Imaging.Rgb24 left, Zorg.Imaging.Rgb24 right) -> bool
 static Zorg.Imaging.Rgb48.operator !=(Zorg.Imaging.Rgb48 left, Zorg.Imaging.Rgb48 right) -> bool

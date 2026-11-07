@@ -1,6 +1,6 @@
 # Working on Zorg.Imaging
 
-Managed image decoding, resizing and encoding for .NET 10, in C# only. Early development: the public API so far is the format check (`ImageFormats`, `Image.Identify`), the pixel buffer (`Image`, `PixelFormat`, the 8- and 16-bit pixel types), colour spaces (`ColorSpace`, `Image.ColorSpace`), the exception types, and PNG decode and encode (`Image.Decode`, `SaveAsPng`). No other codecs yet.
+Managed image decoding, resizing and encoding for .NET 10, in C# only. Early development: the public API so far is the format check (`ImageFormats`, `Image.Identify`), the pixel buffer (`Image`, `PixelFormat`, the 8- and 16-bit pixel types), colour spaces (`ColorSpace`, `Image.ColorSpace`), resizing (`Image.Resize`, `Resampler`), the exception types, and PNG decode and encode (`Image.Decode`, `SaveAsPng`). No other codecs yet.
 
 ## Working on the repo
 
