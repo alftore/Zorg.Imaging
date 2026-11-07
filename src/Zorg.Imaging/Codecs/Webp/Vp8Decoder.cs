@@ -1,4 +1,6 @@
 using System;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Webp;
@@ -798,59 +800,59 @@ internal sealed class Vp8Decoder
             return;
         }
 
-        Span<int> output = stackalloc int[16];
-        bool dcOnly = true;
-        for (int i = 1; i < 16; i++)
-        {
-            if (input[i] != 0)
-            {
-                dcOnly = false;
-                break;
-            }
-        }
+        byte[] data = plane.Data;
+        int stride = plane.Stride;
+        int at = plane.Index(x0, y0);
 
-        if (dcOnly)
+        // Only the DC: the same value added to all 16 pixels.
+        if (MemoryMarshal.Cast<short, ulong>(input[..16])[1..] is var rest && rest[0] == 0 && rest[1] == 0 && rest[2] == 0
+            && (MemoryMarshal.Cast<short, ulong>(input[..16])[0] & ~0xFFFFUL) == 0)
         {
-            output.Fill((input[0] + 4) >> 3);
-        }
-        else
-        {
-            const int Cos = 20091;
-            const int Sin = 35468;
-            Span<int> temp = stackalloc int[16];
-            for (int i = 0; i < 4; i++)
+            int dc = (input[0] + 4) >> 3;
+            for (int r = 0; r < 4; r++, at += stride)
             {
-                int a1 = input[i] + input[8 + i];
-                int b1 = input[i] - input[8 + i];
-                int c1 = ((input[4 + i] * Sin) >> 16) - (input[12 + i] + ((input[12 + i] * Cos) >> 16));
-                int d1 = input[4 + i] + ((input[4 + i] * Cos) >> 16) + ((input[12 + i] * Sin) >> 16);
-                temp[i] = a1 + d1;
-                temp[12 + i] = a1 - d1;
-                temp[4 + i] = b1 + c1;
-                temp[8 + i] = b1 - c1;
+                data[at] = Clamp(data[at] + dc);
+                data[at + 1] = Clamp(data[at + 1] + dc);
+                data[at + 2] = Clamp(data[at + 2] + dc);
+                data[at + 3] = Clamp(data[at + 3] + dc);
             }
 
-            for (int i = 0; i < 4; i++)
-            {
-                ReadOnlySpan<int> ip = temp.Slice(i * 4, 4);
-                int a1 = ip[0] + ip[2];
-                int b1 = ip[0] - ip[2];
-                int c1 = ((ip[1] * Sin) >> 16) - (ip[3] + ((ip[3] * Cos) >> 16));
-                int d1 = ip[1] + ((ip[1] * Cos) >> 16) + ((ip[3] * Sin) >> 16);
-                output[(i * 4) + 0] = (a1 + d1 + 4) >> 3;
-                output[(i * 4) + 3] = (a1 - d1 + 4) >> 3;
-                output[(i * 4) + 1] = (b1 + c1 + 4) >> 3;
-                output[(i * 4) + 2] = (b1 - c1 + 4) >> 3;
-            }
+            return;
         }
 
-        for (int r = 0; r < 4; r++)
+        const int Cos = 20091;
+        const int Sin = 35468;
+        Span<int> temp = stackalloc int[16];
+        for (int i = 0; i < 4; i++)
         {
-            Span<byte> row = plane.Row(y0 + r).Slice(x0, 4);
-            for (int c = 0; c < 4; c++)
-            {
-                row[c] = Clamp(row[c] + output[(r * 4) + c]);
-            }
+            int i0 = input[i];
+            int i4 = input[4 + i];
+            int i8 = input[8 + i];
+            int i12 = input[12 + i];
+            int a1 = i0 + i8;
+            int b1 = i0 - i8;
+            int c1 = ((i4 * Sin) >> 16) - (i12 + ((i12 * Cos) >> 16));
+            int d1 = i4 + ((i4 * Cos) >> 16) + ((i12 * Sin) >> 16);
+            temp[i] = a1 + d1;
+            temp[12 + i] = a1 - d1;
+            temp[4 + i] = b1 + c1;
+            temp[8 + i] = b1 - c1;
+        }
+
+        for (int i = 0; i < 4; i++, at += stride)
+        {
+            int t0 = temp[i * 4];
+            int t1 = temp[(i * 4) + 1];
+            int t2 = temp[(i * 4) + 2];
+            int t3 = temp[(i * 4) + 3];
+            int a1 = t0 + t2;
+            int b1 = t0 - t2;
+            int c1 = ((t1 * Sin) >> 16) - (t3 + ((t3 * Cos) >> 16));
+            int d1 = t1 + ((t1 * Cos) >> 16) + ((t3 * Sin) >> 16);
+            data[at] = Clamp(data[at] + ((a1 + d1 + 4) >> 3));
+            data[at + 1] = Clamp(data[at + 1] + ((b1 + c1 + 4) >> 3));
+            data[at + 2] = Clamp(data[at + 2] + ((b1 - c1 + 4) >> 3));
+            data[at + 3] = Clamp(data[at + 3] + ((a1 - d1 + 4) >> 3));
         }
     }
 
@@ -955,35 +957,49 @@ internal sealed class Vp8Decoder
         Plane p = _y;
         if (mx > 0)
         {
-            SimpleEdge(p, x0, y0, 1, 0, mbLimit);
+            SimpleEdge(p, x0, y0, 1, mbLimit);
         }
 
         if (inner)
         {
-            SimpleEdge(p, x0 + 4, y0, 1, 0, subLimit);
-            SimpleEdge(p, x0 + 8, y0, 1, 0, subLimit);
-            SimpleEdge(p, x0 + 12, y0, 1, 0, subLimit);
+            SimpleEdge(p, x0 + 4, y0, 1, subLimit);
+            SimpleEdge(p, x0 + 8, y0, 1, subLimit);
+            SimpleEdge(p, x0 + 12, y0, 1, subLimit);
         }
 
         if (my > 0)
         {
-            SimpleEdge(p, x0, y0, 0, 1, mbLimit);
+            SimpleEdge(p, x0, y0, 0, mbLimit);
         }
 
         if (inner)
         {
-            SimpleEdge(p, x0, y0 + 4, 0, 1, subLimit);
-            SimpleEdge(p, x0, y0 + 8, 0, 1, subLimit);
-            SimpleEdge(p, x0, y0 + 12, 0, 1, subLimit);
+            SimpleEdge(p, x0, y0 + 4, 0, subLimit);
+            SimpleEdge(p, x0, y0 + 8, 0, subLimit);
+            SimpleEdge(p, x0, y0 + 12, 0, subLimit);
         }
     }
 
     // An edge of 16 pixels: (dx, dy) = (1, 0) for a vertical edge at x, (0, 1) for a horizontal edge at y.
-    private static void SimpleEdge(Plane plane, int x, int y, int dx, int dy, int limit)
+    private static void SimpleEdge(Plane plane, int x, int y, int dx, int limit)
+    {
+        int across = dx == 1 ? 1 : plane.Stride;
+        int along = dx == 1 ? plane.Stride : 1;
+        if (Vector128.IsHardwareAccelerated)
+        {
+            Vp8Filter.Edge(plane.Data, plane.Index(x, y), across, along, 16, Vp8Filter.Kind.Simple, limit, 0, 0);
+            return;
+        }
+
+        ScalarSimpleEdge(plane.Data, plane.Index(x, y), across, along, limit);
+    }
+
+    /// <summary>The scalar simple filter on 16 points of an edge: the reference the SIMD version is tested against.</summary>
+    internal static void ScalarSimpleEdge(byte[] data, int at, int across, int along, int limit)
     {
         for (int i = 0; i < 16; i++)
         {
-            Edge edge = new(plane.Data, plane.Index(x + (dy * i), y + (dx * i)), dx == 1 ? 1 : plane.Stride);
+            Edge edge = new(data, at + (i * along), across);
             if ((Math.Abs(edge[-1] - edge[0]) * 2) + (Math.Abs(edge[-2] - edge[1]) >> 1) <= limit)
             {
                 Common(edge, outerTaps: true);
@@ -995,36 +1011,50 @@ internal sealed class Vp8Decoder
     {
         if (mx > 0)
         {
-            NormalEdge(plane, x0, y0, 1, 0, size, level + 2, interior, hev, macroblock: true);
+            NormalEdge(plane, x0, y0, 1, size, level + 2, interior, hev, macroblock: true);
         }
 
         if (inner)
         {
             for (int at = 4; at < size; at += 4)
             {
-                NormalEdge(plane, x0 + at, y0, 1, 0, size, level, interior, hev, macroblock: false);
+                NormalEdge(plane, x0 + at, y0, 1, size, level, interior, hev, macroblock: false);
             }
         }
 
         if (my > 0)
         {
-            NormalEdge(plane, x0, y0, 0, 1, size, level + 2, interior, hev, macroblock: true);
+            NormalEdge(plane, x0, y0, 0, size, level + 2, interior, hev, macroblock: true);
         }
 
         if (inner)
         {
             for (int at = 4; at < size; at += 4)
             {
-                NormalEdge(plane, x0, y0 + at, 0, 1, size, level, interior, hev, macroblock: false);
+                NormalEdge(plane, x0, y0 + at, 0, size, level, interior, hev, macroblock: false);
             }
         }
     }
 
-    private static void NormalEdge(Plane plane, int x, int y, int dx, int dy, int size, int edgeLimit, int interior, int hevThreshold, bool macroblock)
+    private static void NormalEdge(Plane plane, int x, int y, int dx, int size, int edgeLimit, int interior, int hevThreshold, bool macroblock)
+    {
+        int across = dx == 1 ? 1 : plane.Stride;
+        int along = dx == 1 ? plane.Stride : 1;
+        if (Vector128.IsHardwareAccelerated)
+        {
+            Vp8Filter.Edge(plane.Data, plane.Index(x, y), across, along, size, macroblock ? Vp8Filter.Kind.Macroblock : Vp8Filter.Kind.Subblock, edgeLimit, interior, hevThreshold);
+            return;
+        }
+
+        ScalarNormalEdge(plane.Data, plane.Index(x, y), across, along, size, edgeLimit, interior, hevThreshold, macroblock);
+    }
+
+    /// <summary>The scalar normal filter on an edge: the reference the SIMD version is tested against.</summary>
+    internal static void ScalarNormalEdge(byte[] data, int at, int across, int along, int size, int edgeLimit, int interior, int hevThreshold, bool macroblock)
     {
         for (int i = 0; i < size; i++)
         {
-            Edge e = new(plane.Data, plane.Index(x + (dy * i), y + (dx * i)), dx == 1 ? 1 : plane.Stride);
+            Edge e = new(data, at + (i * along), across);
             int p3 = e[-4], p2 = e[-3], p1 = e[-2], p0 = e[-1], q0 = e[0], q1 = e[1], q2 = e[2], q3 = e[3];
             bool pass = (Math.Abs(p0 - q0) * 2) + (Math.Abs(p1 - q1) >> 1) <= (2 * edgeLimit) + interior
                 && Math.Abs(p3 - p2) <= interior && Math.Abs(p2 - p1) <= interior && Math.Abs(p1 - p0) <= interior
@@ -1125,3 +1155,4 @@ internal sealed class Vp8Decoder
         }
     }
 }
+

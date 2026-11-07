@@ -1,4 +1,8 @@
 using System;
+using System.Buffers;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Webp;
@@ -59,64 +63,102 @@ internal static class WebpLossy
         }
     }
 
-    // Two output rows (the second may be absent), the first nearer chroma row `top`, the second nearer `current`.
+    // Two output rows (the second may be absent), the first nearer chroma row `top`, the second nearer `current`: the
+    // chroma of each row is upsampled into a full-width row first, then each row converts in one pass.
     private static void Pair(Vp8Decoder frame, int topRow, int bottomRow, int top, int current, uint[] argb, int width)
     {
-        ReadOnlySpan<byte> topU = frame.URow(top);
-        ReadOnlySpan<byte> topV = frame.VRow(top);
-        ReadOnlySpan<byte> curU = frame.URow(current);
-        ReadOnlySpan<byte> curV = frame.VRow(current);
-        ReadOnlySpan<byte> topY = frame.LumaRow(topRow);
-        ReadOnlySpan<byte> bottomY = bottomRow >= 0 ? frame.LumaRow(bottomRow) : default;
-        Span<uint> topOut = argb.AsSpan(topRow * width, width);
-        Span<uint> bottomOut = bottomRow >= 0 ? argb.AsSpan(bottomRow * width, width) : default;
-
-        int tlU = topU[0];
-        int tlV = topV[0];
-        int lU = curU[0];
-        int lV = curV[0];
-        topOut[0] = Pixel(topY[0], ((3 * tlU) + lU + 2) >> 2, ((3 * tlV) + lV + 2) >> 2);
-        if (bottomRow >= 0)
+        byte[] rented = ArrayPool<byte>.Shared.Rent(4 * width);
+        try
         {
-            bottomOut[0] = Pixel(bottomY[0], ((3 * lU) + tlU + 2) >> 2, ((3 * lV) + tlV + 2) >> 2);
+            Span<byte> topUp = rented.AsSpan(0, width);
+            Span<byte> topVp = rented.AsSpan(width, width);
+            Span<byte> bottomUp = rented.AsSpan(2 * width, width);
+            Span<byte> bottomVp = rented.AsSpan(3 * width, width);
+            Upsample(frame.URow(top), frame.URow(current), topUp, bottomUp, width);
+            Upsample(frame.VRow(top), frame.VRow(current), topVp, bottomVp, width);
+            ToArgb(frame.LumaRow(topRow), topUp, topVp, argb.AsSpan(topRow * width, width));
+            if (bottomRow >= 0)
+            {
+                ToArgb(frame.LumaRow(bottomRow), bottomUp, bottomVp, argb.AsSpan(bottomRow * width, width));
+            }
         }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
 
+    // libwebp's fancy upsampler for one chroma plane: the row nearer `top`, and the row nearer `current`.
+    private static void Upsample(ReadOnlySpan<byte> topRow, ReadOnlySpan<byte> currentRow, Span<byte> nearTop, Span<byte> nearCurrent, int width)
+    {
+        int tl = topRow[0];
+        int l = currentRow[0];
+        nearTop[0] = (byte)(((3 * tl) + l + 2) >> 2);
+        nearCurrent[0] = (byte)(((3 * l) + tl + 2) >> 2);
         int pairs = (width - 1) >> 1;
         for (int x = 1; x <= pairs; x++)
         {
-            int tU = topU[x];
-            int tV = topV[x];
-            int u = curU[x];
-            int v = curV[x];
-            int avgU = tlU + tU + lU + u + 8;
-            int avgV = tlV + tV + lV + v + 8;
-            int diag12U = (avgU + (2 * (tU + lU))) >> 3;
-            int diag12V = (avgV + (2 * (tV + lV))) >> 3;
-            int diag03U = (avgU + (2 * (tlU + u))) >> 3;
-            int diag03V = (avgV + (2 * (tlV + v))) >> 3;
-            topOut[(2 * x) - 1] = Pixel(topY[(2 * x) - 1], (diag12U + tlU) >> 1, (diag12V + tlV) >> 1);
-            topOut[2 * x] = Pixel(topY[2 * x], (diag03U + tU) >> 1, (diag03V + tV) >> 1);
-            if (bottomRow >= 0)
-            {
-                bottomOut[(2 * x) - 1] = Pixel(bottomY[(2 * x) - 1], (diag03U + lU) >> 1, (diag03V + lV) >> 1);
-                bottomOut[2 * x] = Pixel(bottomY[2 * x], (diag12U + u) >> 1, (diag12V + v) >> 1);
-            }
-
-            tlU = tU;
-            tlV = tV;
-            lU = u;
-            lV = v;
+            int t = topRow[x];
+            int c = currentRow[x];
+            int average = tl + t + l + c + 8;
+            int diag12 = (average + (2 * (t + l))) >> 3;
+            int diag03 = (average + (2 * (tl + c))) >> 3;
+            nearTop[(2 * x) - 1] = (byte)((diag12 + tl) >> 1);
+            nearTop[2 * x] = (byte)((diag03 + t) >> 1);
+            nearCurrent[(2 * x) - 1] = (byte)((diag03 + l) >> 1);
+            nearCurrent[2 * x] = (byte)((diag12 + c) >> 1);
+            tl = t;
+            l = c;
         }
 
         if ((width & 1) == 0)
         {
-            topOut[width - 1] = Pixel(topY[width - 1], ((3 * tlU) + lU + 2) >> 2, ((3 * tlV) + lV + 2) >> 2);
-            if (bottomRow >= 0)
-            {
-                bottomOut[width - 1] = Pixel(bottomY[width - 1], ((3 * lU) + tlU + 2) >> 2, ((3 * lV) + tlV + 2) >> 2);
-            }
+            nearTop[width - 1] = (byte)(((3 * tl) + l + 2) >> 2);
+            nearCurrent[width - 1] = (byte)(((3 * l) + tl + 2) >> 2);
         }
     }
+
+    // One row of full-resolution Y, U and V to ARGB: eight pixels at a time in 32-bit lanes, then the rest.
+    private static void ToArgb(ReadOnlySpan<byte> y, ReadOnlySpan<byte> u, ReadOnlySpan<byte> v, Span<uint> output)
+    {
+        int x = 0;
+        if (Vector256.IsHardwareAccelerated)
+        {
+            ref byte y0 = ref MemoryMarshal.GetReference(y);
+            ref byte u0 = ref MemoryMarshal.GetReference(u);
+            ref byte v0 = ref MemoryMarshal.GetReference(v);
+            ref uint o0 = ref MemoryMarshal.GetReference(output);
+            Vector256<int> top = Vector256.Create(255);
+            Vector256<int> alpha = Vector256.Create(unchecked((int)0xFF000000u));
+            for (; x + 8 <= output.Length; x += 8)
+            {
+                Vector256<int> luma = Vector256.ShiftRightArithmetic(Widen8(ref y0, x) * 19077, 8);
+                Vector256<int> cu = Widen8(ref u0, x);
+                Vector256<int> cv = Widen8(ref v0, x);
+                Vector256<int> r = Clip(luma + Vector256.ShiftRightArithmetic(cv * 26149, 8) - Vector256.Create(14234), top);
+                Vector256<int> g = Clip(luma - Vector256.ShiftRightArithmetic(cu * 6419, 8) - Vector256.ShiftRightArithmetic(cv * 13320, 8) + Vector256.Create(8708), top);
+                Vector256<int> b = Clip(luma + Vector256.ShiftRightArithmetic(cu * 33050, 8) - Vector256.Create(17685), top);
+                Vector256<int> argb = alpha | Vector256.ShiftLeft(r, 16) | Vector256.ShiftLeft(g, 8) | b;
+                argb.AsUInt32().StoreUnsafe(ref o0, (nuint)x);
+            }
+        }
+
+        for (; x < output.Length; x++)
+        {
+            output[x] = Pixel(y[x], u[x], v[x]);
+        }
+    }
+
+    private static Vector256<int> Widen8(ref byte source, int x)
+    {
+        Vector128<byte> bytes = Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, x))).AsByte();
+        Vector128<ushort> shorts = Vector128.WidenLower(bytes);
+        return Vector256.Create(Vector128.WidenLower(shorts), Vector128.WidenUpper(shorts)).AsInt32();
+    }
+
+    // (v & ~16383) == 0 ? v >> 6 : v < 0 ? 0 : 255 is the same as clamping v >> 6 to 0..255.
+    private static Vector256<int> Clip(Vector256<int> value, Vector256<int> top) =>
+        Vector256.Min(Vector256.Max(Vector256.ShiftRightArithmetic(value, 6), Vector256<int>.Zero), top);
 
     // BT.601 studio range to RGB in 14-bit fixed point: R = 1.164 (Y - 16) + 1.596 (V - 128), and so on.
     private static uint Pixel(int y, int u, int v)

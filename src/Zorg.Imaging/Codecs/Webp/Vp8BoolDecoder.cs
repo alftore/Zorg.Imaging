@@ -1,62 +1,68 @@
 using System;
+using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Webp;
 
 /// <summary>The boolean entropy decoder of VP8 (RFC 6386, section 7.3).</summary>
 /// <remarks>
-/// The same arithmetic as the RFC's byte-at-a-time decoder, with the renormalising shifts done at once. A correct
-/// partition is never read past its end; a few zero bytes past it are allowed (the decoder looks two bytes ahead), and
-/// more throw a truncated <see cref="ImageFormatException"/>.
+/// <para>
+/// The RFC's arithmetic with a 64-bit window: the bytes ahead are loaded seven at a time, and the comparison uses the
+/// window's top bits at <c>_bits</c>. The range is kept as range - 1, which makes the split <c>(range - 1) * p / 256</c>
+/// and the test <c>value &gt; split</c> the RFC's <c>value &gt;= 1 + (range - 1) * p / 256</c> exactly; the shift that
+/// renormalises comes from the range's highest set bit instead of a loop.
+/// </para>
+/// <para>
+/// A correct partition is never read past its end. One byte of zeros past it is allowed, as libwebp allows it; needing
+/// more throws a truncated <see cref="ImageFormatException"/>.
+/// </para>
 /// </remarks>
 internal sealed class Vp8BoolDecoder
 {
     private readonly byte[] _data;
     private readonly int _end;
     private int _position;
-    private uint _value;
-    private uint _range = 255;
-    private int _bitCount;
+    private ulong _value;
+    private int _bits = -8;
+    private uint _range = 255 - 1;
+    private bool _pastEnd;
 
     public Vp8BoolDecoder(byte[] data, int start, int length)
     {
         _data = data;
         _position = start;
         _end = start + length;
-        _value = (uint)((NextByte() << 8) | NextByte());
+        Load();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool ReadBool(int probability)
     {
-        uint split = 1 + (((_range - 1) * (uint)probability) >> 8);
-        uint bigSplit = split << 8;
-        bool bit;
-        if (_value >= bigSplit)
+        if (_bits < 0)
         {
-            bit = true;
-            _range -= split;
-            _value -= bigSplit;
+            Load();
+        }
+
+        int position = _bits;
+        uint split = (_range * (uint)probability) >> 8;
+        uint value = (uint)(_value >> position);
+        uint range;
+        bool bit = value > split;
+        if (bit)
+        {
+            range = _range - split;
+            _value -= (ulong)(split + 1) << position;
         }
         else
         {
-            bit = false;
-            _range = split;
+            range = split + 1;
         }
 
-        if (_range < 128)
-        {
-            int shift = BitOperations.LeadingZeroCount(_range) - 24;
-            _range <<= shift;
-            _value <<= shift;
-            _bitCount += shift;
-            if (_bitCount >= 8)
-            {
-                _bitCount -= 8;
-                _value |= (uint)NextByte() << _bitCount;
-            }
-        }
-
+        int shift = 7 ^ BitOperations.Log2(range);
+        _range = (range << shift) - 1;
+        _bits = position - shift;
         return bit;
     }
 
@@ -95,18 +101,30 @@ internal sealed class Vp8BoolDecoder
         return -i;
     }
 
-    private int NextByte()
+    // Seven bytes at once while they last, then one at a time, then zeros once.
+    private void Load()
     {
-        if (_position < _end)
+        if (_position + 8 <= _end)
         {
-            return _data[_position++];
+            ulong next = BinaryPrimitives.ReadUInt64BigEndian(_data.AsSpan(_position, 8)) >> 8;
+            _position += 7;
+            _value = (_value << 56) | next;
+            _bits += 56;
         }
-
-        if (++_position > _end + 2)
+        else if (_position < _end)
+        {
+            _value = (_value << 8) | _data[_position++];
+            _bits += 8;
+        }
+        else if (!_pastEnd)
+        {
+            _value <<= 8;
+            _bits += 8;
+            _pastEnd = true;
+        }
+        else
         {
             throw ImageErrors.Truncated("The WebP lossy data ends early.");
         }
-
-        return 0;
     }
 }
