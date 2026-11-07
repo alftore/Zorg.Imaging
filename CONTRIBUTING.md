@@ -31,7 +31,7 @@ The containers use `--network host`, as in Zorg.Ssh: on the Podman machine used 
 
 ### Test files
 
-The JPEG tests use small files in `tests/Zorg.Imaging.Tests/Codecs/Jpeg/Files`, written by `cjpeg` from ImageMagick plasma fractals, with `djpeg`'s decodes beside them as references, so they run on any machine. `scripts/make-jpeg-fixtures.sh` makes them again in the gate image. Benchmarks that need large photos read them from a folder named by an environment variable, such as `ZORG_BENCH_JPEG_DIR`; they aren't committed.
+The JPEG tests use small files in `tests/Zorg.Imaging.Tests/Codecs/Jpeg/Files`, written by `cjpeg` from ImageMagick plasma fractals, with `djpeg`'s decodes beside them as references, so they run on any machine. `scripts/make-jpeg-fixtures.sh` makes them again in the gate image; the WebP files in `tests/Zorg.Imaging.Tests/Codecs/Webp/Files`, with `dwebp`'s decodes, come from `scripts/make-webp-fixtures.sh` the same way. Benchmarks that need large photos read them from a folder named by an environment variable, such as `ZORG_BENCH_JPEG_DIR`; they aren't committed.
 
 ## Clean-room rules
 

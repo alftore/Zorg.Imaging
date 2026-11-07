@@ -15,3 +15,4 @@
 *.pnm binary
 *.ppm binary
 *.pgm binary
+*.pam binary

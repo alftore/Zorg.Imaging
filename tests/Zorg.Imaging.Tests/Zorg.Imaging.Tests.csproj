@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <None Include="Codecs\Jpeg\Files\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Codecs\Webp\Files\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

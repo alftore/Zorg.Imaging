@@ -213,6 +213,18 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
             && again.ColorSpace.IccProfile.Length > 128);
 }
 
+// WebP: a lossless file with alpha decodes exactly as libwebp's dwebp decodes it.
+{
+    using Stream resource = typeof(ForwardOnlyStream).Assembly.GetManifestResourceStream("lossless-alpha.webp")!;
+    using var copy = new MemoryStream();
+    resource.CopyTo(copy);
+    using Image webp = Image.Decode(copy.ToArray());
+    Check(
+        "webp lossless decode",
+        webp.PixelFormat == PixelFormat.Rgba32 && (webp.Width, webp.Height) == (33, 17)
+            && webp.GetRow<Rgba32>(0)[0] == new Rgba32(171, 216, 49, 0) && webp.GetRow<Rgba32>(16)[32] == new Rgba32(107, 15, 226, 247));
+}
+
 return failures == 0 ? 0 : 1;
 
 static byte[] TinyPng(int width, int height)

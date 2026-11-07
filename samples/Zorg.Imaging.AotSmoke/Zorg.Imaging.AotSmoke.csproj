@@ -11,6 +11,8 @@
   <ItemGroup>
     <!-- A 67 x 45 4:2:0 JPEG from libjpeg-turbo's cjpeg (tests/Zorg.Imaging.Tests/Codecs/Jpeg/Files/s420.jpg). -->
     <EmbeddedResource Include="s420.jpg" LogicalName="s420.jpg" />
+    <!-- A 33 x 17 lossless WebP with alpha from libwebp's cwebp (tests/Zorg.Imaging.Tests/Codecs/Webp/Files). -->
+    <EmbeddedResource Include="lossless-alpha.webp" LogicalName="lossless-alpha.webp" />
   </ItemGroup>
 
   <ItemGroup>
