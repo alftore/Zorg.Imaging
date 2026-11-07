@@ -28,6 +28,10 @@ public sealed class FormatPeek
     /// The stream to read the whole file from, starting with the bytes the peek read. It doesn't own the stream that
     /// was peeked, so disposing it leaves that stream open.
     /// </summary>
+    /// <remarks>
+    /// When the peeked stream can't seek, this is a wrapper that the library's readers give their bytes back to:
+    /// <see cref="Image.IdentifyAsync"/> on it, whatever the outcome, leaves it still holding the whole file.
+    /// </remarks>
     /// <example><code>IdentifyResult result = await Image.IdentifyAsync(peek.Stream, cancellationToken: cancellationToken);</code></example>
     public Stream Stream { get; }
 }

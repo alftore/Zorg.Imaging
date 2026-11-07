@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -58,6 +59,70 @@ public class IdentifyTests
 
         IdentifyResult result = await Image.IdentifyAsync(peek.Stream, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded, result.Message);
+
+        Assert.Same(format, await ImageFormats.DetectAsync(peek.Stream, TestContext.Current.CancellationToken));
+        Assert.Equal(file, await ReadAllAsync(peek.Stream));
+    }
+
+    // Every outcome, not only success, leaves the peeked stream whole: a caller may log or store a rejected upload.
+    [Theory]
+    [MemberData(nameof(Samples))]
+    public async Task Peeked_stream_is_whole_after_every_truncation_and_corruption(string name)
+    {
+        byte[] file = Sample(name).File;
+        foreach (byte[] variant in Mutations(file))
+        {
+            using var body = new ForwardOnlyStream(variant);
+            FormatPeek peek = await ImageFormats.PeekAsync(body, TestContext.Current.CancellationToken);
+            _ = await Image.IdentifyAsync(peek.Stream, cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Equal(variant, await ReadAllAsync(peek.Stream));
+        }
+    }
+
+    [Fact]
+    public async Task Peeked_stream_is_whole_after_the_header_limit_is_hit()
+    {
+        // A GIF counted frame by frame on a stream that can't seek reads past the budget.
+        byte[] whole = ManyFrameGif(20);
+        var options = new IdentifyOptions { CountFrames = true, Limits = new ImageLimits { MaxHeaderBytes = ImageFormats.MaxSignatureLength } };
+        using var body = new ForwardOnlyStream(whole);
+        FormatPeek peek = await ImageFormats.PeekAsync(body, TestContext.Current.CancellationToken);
+
+        IdentifyResult result = await Image.IdentifyAsync(peek.Stream, options, TestContext.Current.CancellationToken);
+
+        Assert.Equal(IdentifyStatus.ExceedsLimits, result.Status);
+        Assert.Equal(whole, await ReadAllAsync(peek.Stream));
+    }
+
+    [Fact]
+    public async Task Peeked_stream_keeps_what_was_read_when_the_body_fails()
+    {
+        // Counting frames reads past the 64 bytes the peek took, into the part of the body that never arrives.
+        byte[] file = ManyFrameGif(20);
+        using var body = new FailingStream(file, failAfter: 100);
+        FormatPeek peek = await ImageFormats.PeekAsync(body, TestContext.Current.CancellationToken);
+        var options = new IdentifyOptions { CountFrames = true };
+
+        await Assert.ThrowsAsync<IOException>(async () => await Image.IdentifyAsync(peek.Stream, options, TestContext.Current.CancellationToken));
+
+        byte[] replayed = new byte[100];
+        await peek.Stream.ReadExactlyAsync(replayed, TestContext.Current.CancellationToken);
+        Assert.Equal(file[..100], replayed);
+    }
+
+    [Fact]
+    public async Task Peeking_a_peeked_stream_returns_it_unchanged()
+    {
+        byte[] file = Sample("webp").File;
+        using var body = new ForwardOnlyStream(file);
+        FormatPeek first = await ImageFormats.PeekAsync(body, TestContext.Current.CancellationToken);
+
+        FormatPeek second = await ImageFormats.PeekAsync(first.Stream, TestContext.Current.CancellationToken);
+
+        Assert.Same(first.Stream, second.Stream);
+        Assert.Same(ImageFormat.Webp, second.Format);
+        Assert.Equal(file, await ReadAllAsync(second.Stream));
     }
 
     [Fact]
@@ -206,6 +271,14 @@ public class IdentifyTests
         0x3B,
     ];
 
+    /// <summary>The sample GIF with its frame repeated: 21 frames, a few hundred bytes.</summary>
+    private static byte[] ManyFrameGif(int extraFrames)
+    {
+        byte[] file = Gif(7, 6);
+        const int FirstFrame = 6 + 7 + 6; // header, screen descriptor, two-entry colour table
+        return [.. file[..^1], .. Enumerable.Repeat(file[FirstFrame..^1], extraFrames).SelectMany(frame => frame), 0x3B];
+    }
+
     private static byte[] Webp(int width, int height)
     {
         // A lossless (VP8L) header: signature 0x2F, then width - 1 and height - 1 in 14 bits each.
@@ -219,6 +292,64 @@ public class IdentifyTests
         BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(16), (uint)vp8l.Length);
         vp8l.CopyTo(file.AsSpan(20));
         return file;
+    }
+
+    private static async Task<byte[]> ReadAllAsync(Stream stream)
+    {
+        using var copy = new MemoryStream();
+        await stream.CopyToAsync(copy, TestContext.Current.CancellationToken);
+        return copy.ToArray();
+    }
+
+    /// <summary>A stream that can't seek and fails once <paramref name="failAfter"/> bytes have been read, like a dropped connection.</summary>
+    private sealed class FailingStream(byte[] data, int failAfter) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (_position >= failAfter)
+            {
+                throw new IOException("The connection was reset.");
+            }
+
+            int count = Math.Min(buffer.Length, Math.Min(failAfter, data.Length) - _position);
+            data.AsSpan(_position, count).CopyTo(buffer);
+            _position += count;
+            return count;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            new(Read(buffer.Span));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromResult(Read(buffer.AsSpan(offset, count)));
     }
 
     /// <summary>A stream that can't seek, like a request body.</summary>

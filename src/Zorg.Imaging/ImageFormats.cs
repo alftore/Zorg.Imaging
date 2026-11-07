@@ -102,7 +102,10 @@ public static class ImageFormats
     /// <summary>
     /// Recognises the format at the current position of a seekable stream, then puts the position back where it was.
     /// </summary>
-    /// <param name="stream">A readable, seekable stream. For a stream that can't seek, use <see cref="PeekAsync"/>.</param>
+    /// <param name="stream">
+    /// A readable, seekable stream, or the stream from <see cref="PeekAsync"/>, which gets its bytes back. For any other
+    /// stream that can't seek, use <see cref="PeekAsync"/>.
+    /// </param>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The format, or <see langword="null"/> when no known signature matches.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
@@ -116,6 +119,11 @@ public static class ImageFormats
     public static async ValueTask<ImageFormat?> DetectAsync(Stream stream, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
+        if (stream is ReplayStream replay)
+        {
+            return await DetectReplayAsync(replay, cancellationToken).ConfigureAwait(false);
+        }
+
         if (!stream.CanRead || !stream.CanSeek)
         {
             throw new NotSupportedException("DetectAsync needs a readable, seekable stream. Use PeekAsync for other streams.");
@@ -151,6 +159,11 @@ public static class ImageFormats
     /// Reads at most <see cref="MaxSignatureLength"/> bytes. The returned stream doesn't own <paramref name="stream"/>:
     /// disposing it leaves <paramref name="stream"/> open.
     /// </para>
+    /// <para>
+    /// Pass the returned stream to the rest of the library: <see cref="Image.IdentifyAsync"/>, <see cref="DetectAsync"/>
+    /// and this method give back every byte they read from it, so it still holds the whole file for decoding or storing.
+    /// Peeking it again returns the same stream rather than wrapping it a second time.
+    /// </para>
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
     /// <exception cref="NotSupportedException"><paramref name="stream"/> can't read.</exception>
@@ -173,7 +186,7 @@ public static class ImageFormats
             throw new NotSupportedException("PeekAsync needs a readable stream.");
         }
 
-        if (stream.CanSeek)
+        if (stream.CanSeek || stream is ReplayStream)
         {
             ImageFormat? format = await DetectAsync(stream, cancellationToken).ConfigureAwait(false);
             return new FormatPeek(format, stream);
@@ -182,5 +195,20 @@ public static class ImageFormats
         byte[] head = new byte[MaxSignatureLength];
         int length = await stream.ReadAtLeastAsync(head, MaxSignatureLength, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
         return new FormatPeek(Detect(head.AsSpan(0, length)), new ReplayStream(head.AsMemory(0, length), stream));
+    }
+
+    private static async ValueTask<ImageFormat?> DetectReplayAsync(ReplayStream stream, CancellationToken cancellationToken)
+    {
+        byte[] head = ArrayPool<byte>.Shared.Rent(MaxSignatureLength);
+        try
+        {
+            using ReplayStream.Rewind rewind = stream.Record();
+            int length = await stream.ReadAtLeastAsync(head.AsMemory(0, MaxSignatureLength), MaxSignatureLength, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
+            return Detect(head.AsSpan(0, length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(head);
+        }
     }
 }

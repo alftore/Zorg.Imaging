@@ -237,6 +237,51 @@ public class ReplayStreamTests
         return bytes;
     }
 
+    // A recording that spans the end of the replayed bytes and the start of the inner stream, read in every way.
+    [Theory]
+    [MemberData(nameof(ModesAndChunks))]
+    public async Task Recorded_bytes_are_put_back_in_order(ReadMode mode, int chunk)
+    {
+        byte[] all = new byte[200];
+        for (int i = 0; i < all.Length; i++)
+        {
+            all[i] = (byte)i;
+        }
+
+        using var inner = new MemoryStream(all, 30, 170);
+        var stream = new ReplayStream(all.AsMemory(0, 30), inner);
+        byte[] first = new byte[10];
+        await stream.ReadExactlyAsync(first, TestContext.Current.CancellationToken);
+
+        using (stream.Record())
+        {
+            byte[] middle = new byte[70];
+            await stream.ReadExactlyAsync(middle, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(all[10..], await ReadAllAsync(stream, mode, chunk));
+        Assert.Equal(0, stream.PendingLength);
+    }
+
+    [Fact]
+    public void Only_one_recording_runs_at_a_time()
+    {
+        using var inner = new MemoryStream([1, 2, 3]);
+        var stream = new ReplayStream(ReadOnlyMemory<byte>.Empty, inner);
+
+        using (stream.Record())
+        {
+            Assert.Throws<InvalidOperationException>(() => stream.Record());
+        }
+
+        using (stream.Record())
+        {
+            Assert.Equal(1, stream.ReadByte());
+        }
+
+        Assert.Equal(1, stream.ReadByte());
+    }
+
     private static async Task<byte[]> ReadAllAsync(Stream stream, ReadMode mode, int chunk)
     {
         using MemoryStream result = new();

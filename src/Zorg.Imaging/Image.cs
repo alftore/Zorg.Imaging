@@ -60,8 +60,9 @@ public sealed class Image
     /// </summary>
     /// <param name="stream">
     /// A readable stream positioned at the start of the file. A seekable stream is put back at that position afterwards,
-    /// and skipped data is seeked over rather than read. A stream that can't seek keeps whatever was read: use
-    /// <c>Request.EnableBuffering()</c> or <c>IFormFile.OpenReadStream()</c> when the body is needed afterwards.
+    /// and skipped data is seeked over rather than read. The stream from <see cref="ImageFormats.PeekAsync"/> gets back
+    /// every byte read, so it can still be read in full afterwards. Any other stream that can't seek loses what was read:
+    /// pass it through <see cref="ImageFormats.PeekAsync"/> first when the body is needed afterwards.
     /// </param>
     /// <param name="options">The limits and options, or <see langword="null"/> for <see cref="IdentifyOptions.Default"/>.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
@@ -72,11 +73,14 @@ public sealed class Image
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     /// <example>
     /// <code>
-    /// IdentifyResult result = await Image.IdentifyAsync(upload.OpenReadStream(), cancellationToken: cancellationToken);
+    /// FormatPeek peek = await ImageFormats.PeekAsync(request.Body, cancellationToken);
+    /// IdentifyResult result = await Image.IdentifyAsync(peek.Stream, cancellationToken: cancellationToken);
     /// if (!result.Succeeded)
     /// {
     ///     return Results.BadRequest(result.Message);
     /// }
+    ///
+    /// await peek.Stream.CopyToAsync(storage, cancellationToken); // still the whole file
     /// </code>
     /// </example>
     public static async ValueTask<IdentifyResult> IdentifyAsync(Stream stream, IdentifyOptions? options = null, CancellationToken cancellationToken = default)
@@ -88,11 +92,16 @@ public sealed class Image
         }
 
         options ??= IdentifyOptions.Default;
+        if (stream is ReplayStream replay)
+        {
+            using ReplayStream.Rewind rewind = replay.Record();
+            return await IdentifyStreamAsync(stream, options, cancellationToken).ConfigureAwait(false);
+        }
+
         long start = stream.CanSeek ? stream.Position : 0;
         try
         {
-            var reader = HeaderReader.FromStream(stream, options.Limits.MaxHeaderBytes);
-            return await Identifier.IdentifyAsync(reader, options, cancellationToken).ConfigureAwait(false);
+            return await IdentifyStreamAsync(stream, options, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -101,5 +110,11 @@ public sealed class Image
                 stream.Position = start;
             }
         }
+    }
+
+    private static ValueTask<IdentifyResult> IdentifyStreamAsync(Stream stream, IdentifyOptions options, CancellationToken cancellationToken)
+    {
+        var reader = HeaderReader.FromStream(stream, options.Limits.MaxHeaderBytes);
+        return Identifier.IdentifyAsync(reader, options, cancellationToken);
     }
 }

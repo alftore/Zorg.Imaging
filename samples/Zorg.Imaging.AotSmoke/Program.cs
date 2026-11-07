@@ -35,6 +35,9 @@ Check("identify png bytes", fromBytes.Succeeded && fromBytes.Info.Width == 3 && 
 FormatPeek peek = ImageFormats.PeekAsync(new ForwardOnlyStream(png)).AsTask().GetAwaiter().GetResult();
 IdentifyResult fromStream = Image.IdentifyAsync(peek.Stream).AsTask().GetAwaiter().GetResult();
 Check("identify png peeked stream", peek.Format == ImageFormat.Png && fromStream.Succeeded && fromStream.Info.Height == 2);
+var rest = new MemoryStream();
+peek.Stream.CopyTo(rest);
+Check("peeked stream whole after identify", rest.ToArray().AsSpan().SequenceEqual(png));
 Check("identify not an image", Image.Identify("not an image"u8.ToArray()).Status == IdentifyStatus.NotAnImage);
 
 return failures == 0 ? 0 : 1;

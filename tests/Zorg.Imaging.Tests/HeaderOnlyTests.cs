@@ -73,6 +73,23 @@ public class HeaderOnlyTests
         Assert.Equal(8, fromStream.Info.Orientation);
     }
 
+    [Theory]
+    [MemberData(nameof(BulkyExifNames))]
+    public async Task A_peeked_stream_that_cant_seek_still_holds_the_whole_file_after_identify(string name)
+    {
+        byte[] file = WithBulkyExif(name, width: 40, height: 30, orientation: 6);
+        using var body = new CountingStream(file, canSeek: false);
+        FormatPeek peek = await ImageFormats.PeekAsync(body, Token);
+
+        IdentifyResult result = await Image.IdentifyAsync(peek.Stream, cancellationToken: Token);
+        using var copy = new MemoryStream();
+        await peek.Stream.CopyToAsync(copy, Token);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(file, copy.ToArray());
+        Assert.Equal(file.Length, body.BytesRead);
+    }
+
     [Fact]
     public async Task An_ifd_far_into_the_block_is_still_found()
     {
