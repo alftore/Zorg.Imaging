@@ -11,6 +11,14 @@ Zorg.Imaging.Bgra32.G.get -> byte
 Zorg.Imaging.Bgra32.G.set -> void
 Zorg.Imaging.Bgra32.R.get -> byte
 Zorg.Imaging.Bgra32.R.set -> void
+Zorg.Imaging.DecodeOptions
+Zorg.Imaging.DecodeOptions.ApplyOrientation.get -> bool
+Zorg.Imaging.DecodeOptions.ApplyOrientation.init -> void
+Zorg.Imaging.DecodeOptions.DecodeOptions() -> void
+Zorg.Imaging.DecodeOptions.Limits.get -> Zorg.Imaging.ImageLimits!
+Zorg.Imaging.DecodeOptions.Limits.init -> void
+Zorg.Imaging.DecodeOptions.PixelFormat.get -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.DecodeOptions.PixelFormat.init -> void
 Zorg.Imaging.FormatPeek
 Zorg.Imaging.FormatPeek.Format.get -> Zorg.Imaging.ImageFormat?
 Zorg.Imaging.FormatPeek.Stream.get -> System.IO.Stream!
@@ -44,6 +52,8 @@ Zorg.Imaging.Image.GetRowBytes(int y) -> System.Span<byte>
 Zorg.Imaging.Image.Height.get -> int
 Zorg.Imaging.Image.Image(int width, int height, Zorg.Imaging.PixelFormat pixelFormat) -> void
 Zorg.Imaging.Image.PixelFormat.get -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.Image.SaveAsPng(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null) -> void
+Zorg.Imaging.Image.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.Image.Stride.get -> int
 Zorg.Imaging.Image.Width.get -> int
 Zorg.Imaging.ImageException
@@ -96,6 +106,10 @@ Zorg.Imaging.PixelFormat.L8 = 4 -> Zorg.Imaging.PixelFormat
 Zorg.Imaging.PixelFormat.None = 0 -> Zorg.Imaging.PixelFormat
 Zorg.Imaging.PixelFormat.Rgb24 = 3 -> Zorg.Imaging.PixelFormat
 Zorg.Imaging.PixelFormat.Rgba32 = 1 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PngEncoderOptions
+Zorg.Imaging.PngEncoderOptions.CompressionLevel.get -> int
+Zorg.Imaging.PngEncoderOptions.CompressionLevel.init -> void
+Zorg.Imaging.PngEncoderOptions.PngEncoderOptions() -> void
 Zorg.Imaging.Rgb24
 Zorg.Imaging.Rgb24.B.get -> byte
 Zorg.Imaging.Rgb24.B.set -> void
@@ -128,6 +142,7 @@ const Zorg.Imaging.ImageFormats.MaxSignatureLength = 64 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxFrames = 10000 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxHeaderBytes = 1048576 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxPixels = 268402689 -> long
+const Zorg.Imaging.PngEncoderOptions.DefaultCompressionLevel = 6 -> int
 override Zorg.Imaging.Bgra32.Equals(object? obj) -> bool
 override Zorg.Imaging.Bgra32.GetHashCode() -> int
 override Zorg.Imaging.Bgra32.ToString() -> string!
@@ -146,7 +161,10 @@ override Zorg.Imaging.Rgba32.GetHashCode() -> int
 override Zorg.Imaging.Rgba32.ToString() -> string!
 static Zorg.Imaging.Bgra32.operator !=(Zorg.Imaging.Bgra32 left, Zorg.Imaging.Bgra32 right) -> bool
 static Zorg.Imaging.Bgra32.operator ==(Zorg.Imaging.Bgra32 left, Zorg.Imaging.Bgra32 right) -> bool
+static Zorg.Imaging.DecodeOptions.Default.get -> Zorg.Imaging.DecodeOptions!
 static Zorg.Imaging.IdentifyOptions.Default.get -> Zorg.Imaging.IdentifyOptions!
+static Zorg.Imaging.Image.Decode(byte[]! data, Zorg.Imaging.DecodeOptions? options = null) -> Zorg.Imaging.Image!
+static Zorg.Imaging.Image.DecodeAsync(System.IO.Stream! stream, Zorg.Imaging.DecodeOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.Image!>
 static Zorg.Imaging.Image.Identify(byte[]! data, Zorg.Imaging.IdentifyOptions? options = null) -> Zorg.Imaging.IdentifyResult!
 static Zorg.Imaging.Image.IdentifyAsync(System.IO.Stream! stream, Zorg.Imaging.IdentifyOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.IdentifyResult!>
 static Zorg.Imaging.ImageFormat.Avif.get -> Zorg.Imaging.ImageFormat!
@@ -170,6 +188,7 @@ static Zorg.Imaging.ImageFormats.PeekAsync(System.IO.Stream! stream, System.Thre
 static Zorg.Imaging.ImageLimits.Default.get -> Zorg.Imaging.ImageLimits!
 static Zorg.Imaging.L8.operator !=(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
 static Zorg.Imaging.L8.operator ==(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
+static Zorg.Imaging.PngEncoderOptions.Default.get -> Zorg.Imaging.PngEncoderOptions!
 static Zorg.Imaging.Rgb24.operator !=(Zorg.Imaging.Rgb24 left, Zorg.Imaging.Rgb24 right) -> bool
 static Zorg.Imaging.Rgb24.operator ==(Zorg.Imaging.Rgb24 left, Zorg.Imaging.Rgb24 right) -> bool
 static Zorg.Imaging.Rgba32.operator !=(Zorg.Imaging.Rgba32 left, Zorg.Imaging.Rgba32 right) -> bool

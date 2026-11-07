@@ -70,6 +70,42 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     Check("image other pixel types", bgra.GetPixelBytes()[0] == 3 && rgb.Stride == 3 && grey.GetPixelBytes()[0] == 9);
 }
 
+// PNG: encode, decode synchronously and through a stream that can't seek, and refuse damage.
+{
+    using var picture = new Image(40, 30, PixelFormat.Rgba32);
+    for (int y = 0; y < picture.Height; y++)
+    {
+        Span<Rgba32> row = picture.GetRow<Rgba32>(y);
+        for (int x = 0; x < row.Length; x++)
+        {
+            row[x] = new Rgba32((byte)(x * 6), (byte)(y * 8), (byte)(x ^ y), (byte)(255 - x));
+        }
+    }
+
+    using var encoded = new MemoryStream();
+    picture.SaveAsPng(encoded);
+    byte[] file = encoded.ToArray();
+    using Image decoded = Image.Decode(file);
+    Check("png round trip", decoded.PixelFormat == PixelFormat.Rgba32 && decoded.GetPixelBytes().SequenceEqual(picture.GetPixelBytes()));
+
+    using Image streamed = Image.DecodeAsync(new ForwardOnlyStream(file), new DecodeOptions { PixelFormat = PixelFormat.Bgra32 }).AsTask().GetAwaiter().GetResult();
+    Check("png decode stream bgra32", streamed.GetRow<Bgra32>(0)[1] == new Bgra32(1, 0, 6, 254));
+
+    byte[] damaged = (byte[])file.Clone();
+    damaged[^20] ^= 0xFF;
+    bool refused = false;
+    try
+    {
+        Image.Decode(damaged).Dispose();
+    }
+    catch (ImageFormatException)
+    {
+        refused = true;
+    }
+
+    Check("png damage refused", refused);
+}
+
 return failures == 0 ? 0 : 1;
 
 static byte[] TinyPng(int width, int height)
