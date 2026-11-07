@@ -160,7 +160,7 @@ public class JpegHeaderReaderTests
     public async Task A_missing_frame_header_is_corrupt(byte marker)
     {
         byte[] bytes = [.. Jpeg(), 0xFF, marker, 0x00, 0x08, 1, 2, 3, 4, 5, 6];
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(() => ReadMemory(bytes));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(() => ReadMemory(bytes));
 
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
         Assert.Contains("JPEG", failure.Message, StringComparison.Ordinal);
@@ -187,7 +187,7 @@ public class JpegHeaderReaderTests
     [Fact]
     public async Task A_height_of_zero_is_corrupt_and_says_it_is_not_supported()
     {
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(() => ReadMemory(Jpeg(Sof(0xC0, 10, 0))));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(() => ReadMemory(Jpeg(Sof(0xC0, 10, 0))));
 
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
         Assert.Contains("isn't supported", failure.Message, StringComparison.Ordinal);
@@ -251,7 +251,7 @@ public class JpegHeaderReaderTests
         byte[] bytes = Jpeg(Segment(0xE1, XmpSegmentData()), Sof(0xC0, 30, 40));
         HeaderReader reader = HeaderReader.FromStream(new NonSeekableStream(bytes), 4096);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(
             () => JpegHeaderReader.ReadAsync(reader, IdentifyOptions.Default, TestContext.Current.CancellationToken).AsTask());
 
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
@@ -284,7 +284,7 @@ public class JpegHeaderReaderTests
 
     private static async Task AssertStatus(IdentifyStatus status, byte[] bytes)
     {
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(() => ReadMemory(bytes));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(() => ReadMemory(bytes));
         Assert.Equal(status, failure.Status);
     }
 

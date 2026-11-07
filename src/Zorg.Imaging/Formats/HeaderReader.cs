@@ -12,7 +12,7 @@ namespace Zorg.Imaging.Formats;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every problem is thrown as an <see cref="IdentifyFailure"/>: reading past the end is
+/// Every problem is thrown as an <see cref="ImageException"/>: reading past the end is
 /// <see cref="IdentifyStatus.Truncated"/>, going over the budget is <see cref="IdentifyStatus.ExceedsLimits"/>.
 /// Readers never need to check lengths themselves.
 /// </para>
@@ -95,7 +95,7 @@ internal sealed class HeaderReader
     /// <param name="destination">Where to read to.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>A task that completes when the bytes are read.</returns>
-    /// <exception cref="IdentifyFailure">The data ends first, or the budget runs out.</exception>
+    /// <exception cref="ImageException">The data ends first, or the budget runs out.</exception>
     public ValueTask ReadExactlyAsync(Memory<byte> destination, CancellationToken cancellationToken)
     {
         if (_stream is null)
@@ -113,7 +113,7 @@ internal sealed class HeaderReader
     /// <summary>Reads one byte.</summary>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The byte.</returns>
-    /// <exception cref="IdentifyFailure">The data ends first, or the budget runs out.</exception>
+    /// <exception cref="ImageException">The data ends first, or the budget runs out.</exception>
     public ValueTask<byte> ReadByteAsync(CancellationToken cancellationToken)
     {
         if (_stream is null)
@@ -138,14 +138,14 @@ internal sealed class HeaderReader
     /// <param name="count">How many bytes to skip. Zero is allowed.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>A task that completes when the bytes are skipped.</returns>
-    /// <exception cref="IdentifyFailure">
+    /// <exception cref="ImageException">
     /// The data ends first, the budget runs out (only when the stream can't seek), or <paramref name="count"/> is negative.
     /// </exception>
     public ValueTask SkipAsync(long count, CancellationToken cancellationToken)
     {
         if (count < 0)
         {
-            throw IdentifyFailure.Corrupt(Format("The {0} file has a negative length."));
+            throw ImageErrors.Corrupt(Format("The {0} file has a negative length."));
         }
 
         if (_stream is null)
@@ -252,7 +252,7 @@ internal sealed class HeaderReader
     {
         if (_charged + count > _budget)
         {
-            throw IdentifyFailure.ExceedsLimits(string.Create(
+            throw ImageErrors.ExceedsLimits(string.Create(
                 CultureInfo.InvariantCulture,
                 $"The {FormatName} file's headers are longer than the {_budget}-byte limit (ImageLimits.MaxHeaderBytes)."));
         }
@@ -268,7 +268,7 @@ internal sealed class HeaderReader
         }
     }
 
-    private IdentifyFailure Truncated() => IdentifyFailure.Truncated(Format("The {0} file ends before its headers do."));
+    private ImageFormatException Truncated() => ImageErrors.Truncated(Format("The {0} file ends before its headers do."));
 
     private string Format(string template) => string.Format(CultureInfo.InvariantCulture, template, FormatName);
 }

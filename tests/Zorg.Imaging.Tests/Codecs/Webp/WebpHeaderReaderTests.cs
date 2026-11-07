@@ -217,7 +217,7 @@ public class WebpHeaderReaderTests
         byte[] bytes = Riff(Chunk("VP8X", Vp8X(Animation, 50, 60)), Anmf(), Anmf(), Anmf());
         var options = new IdentifyOptions { CountFrames = true, Limits = new ImageLimits { MaxFrames = 2 } };
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(() => Read(bytes, options));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(() => Read(bytes, options));
 
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
     }
@@ -359,7 +359,7 @@ public class WebpHeaderReaderTests
 
     private static async Task AssertStatus(IdentifyStatus status, byte[] bytes)
     {
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(() => Read(bytes));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(() => Read(bytes));
         Assert.Equal(status, failure.Status);
     }
 

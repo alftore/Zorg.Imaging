@@ -1,6 +1,6 @@
 # Working on Zorg.Imaging
 
-Managed image decoding, resizing and encoding for .NET 10, in C# only. Early development: the only public API so far is the format check (`ImageFormats`, `Image.Identify`).
+Managed image decoding, resizing and encoding for .NET 10, in C# only. Early development: the public API so far is the format check (`ImageFormats`, `Image.Identify`), the pixel buffer (`Image`, `PixelFormat`, the pixel types) and the exception types. No decoders yet.
 
 ## Working on the repo
 

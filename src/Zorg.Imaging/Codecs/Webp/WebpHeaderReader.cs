@@ -34,13 +34,13 @@ internal static class WebpHeaderReader
         await reader.ReadExactlyAsync(buffer.AsMemory(0, 12), cancellationToken).ConfigureAwait(false);
         if (!buffer.AsSpan(0, 4).SequenceEqual("RIFF"u8) || !buffer.AsSpan(8, 4).SequenceEqual("WEBP"u8))
         {
-            throw IdentifyFailure.Corrupt("The WebP file doesn't start with a RIFF WEBP header.");
+            throw ImageErrors.Corrupt("The WebP file doesn't start with a RIFF WEBP header.");
         }
 
         uint riffSize = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(4));
         if (riffSize < 4)
         {
-            throw IdentifyFailure.Corrupt("The WebP file has an invalid RIFF size.");
+            throw ImageErrors.Corrupt("The WebP file has an invalid RIFF size.");
         }
 
         long end = 8L + riffSize;
@@ -52,18 +52,18 @@ internal static class WebpHeaderReader
             {
                 if (size < 10)
                 {
-                    throw IdentifyFailure.Corrupt("The WebP VP8 chunk is too short.");
+                    throw ImageErrors.Corrupt("The WebP VP8 chunk is too short.");
                 }
 
                 await reader.ReadExactlyAsync(buffer.AsMemory(0, 10), cancellationToken).ConfigureAwait(false);
                 if ((buffer[0] & 1) != 0)
                 {
-                    throw IdentifyFailure.Corrupt("The WebP VP8 chunk doesn't start with a key frame.");
+                    throw ImageErrors.Corrupt("The WebP VP8 chunk doesn't start with a key frame.");
                 }
 
                 if (buffer[3] != 0x9D || buffer[4] != 0x01 || buffer[5] != 0x2A)
                 {
-                    throw IdentifyFailure.Corrupt("The WebP VP8 chunk has no start code.");
+                    throw ImageErrors.Corrupt("The WebP VP8 chunk has no start code.");
                 }
 
                 int width = BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(6)) & 0x3FFF;
@@ -75,19 +75,19 @@ internal static class WebpHeaderReader
             {
                 if (size < 5)
                 {
-                    throw IdentifyFailure.Corrupt("The WebP VP8L chunk is too short.");
+                    throw ImageErrors.Corrupt("The WebP VP8L chunk is too short.");
                 }
 
                 await reader.ReadExactlyAsync(buffer.AsMemory(0, 5), cancellationToken).ConfigureAwait(false);
                 if (buffer[0] != 0x2F)
                 {
-                    throw IdentifyFailure.Corrupt("The WebP VP8L chunk has a bad signature.");
+                    throw ImageErrors.Corrupt("The WebP VP8L chunk has a bad signature.");
                 }
 
                 uint bits = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(1));
                 if ((bits >> 29) != 0)
                 {
-                    throw IdentifyFailure.Corrupt("The WebP VP8L chunk has an unsupported version.");
+                    throw ImageErrors.Corrupt("The WebP VP8L chunk has an unsupported version.");
                 }
 
                 int width = (int)(bits & 0x3FFF) + 1;
@@ -99,7 +99,7 @@ internal static class WebpHeaderReader
                 return await ReadExtendedAsync(reader, options, end, size, buffer, cancellationToken).ConfigureAwait(false);
 
             default:
-                throw IdentifyFailure.Corrupt("The WebP file doesn't start with a VP8, VP8L or VP8X chunk.");
+                throw ImageErrors.Corrupt("The WebP file doesn't start with a VP8, VP8L or VP8X chunk.");
         }
     }
 
@@ -113,7 +113,7 @@ internal static class WebpHeaderReader
     {
         if (size < Vp8xLength)
         {
-            throw IdentifyFailure.Corrupt("The WebP VP8X chunk is too short.");
+            throw ImageErrors.Corrupt("The WebP VP8X chunk is too short.");
         }
 
         await reader.ReadExactlyAsync(buffer.AsMemory(0, Vp8xLength), cancellationToken).ConfigureAwait(false);
@@ -147,7 +147,7 @@ internal static class WebpHeaderReader
                     frames++;
                     if (frames > options.Limits.MaxFrames)
                     {
-                        throw IdentifyFailure.ExceedsLimits(Identifier.FramesOverLimit(options.Limits));
+                        throw ImageErrors.ExceedsLimits(Identifier.FramesOverLimit(options.Limits));
                     }
                 }
 
@@ -180,7 +180,7 @@ internal static class WebpHeaderReader
     {
         if (end - reader.Position < ChunkHeaderLength)
         {
-            throw IdentifyFailure.Corrupt(first ? "The WebP file has no image chunk." : "The WebP file has a partial chunk header.");
+            throw ImageErrors.Corrupt(first ? "The WebP file has no image chunk." : "The WebP file has a partial chunk header.");
         }
 
         await reader.ReadExactlyAsync(buffer.AsMemory(0, ChunkHeaderLength), cancellationToken).ConfigureAwait(false);
@@ -195,7 +195,7 @@ internal static class WebpHeaderReader
         uint size = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(4));
         if (reader.Position + size > end)
         {
-            throw IdentifyFailure.Corrupt("The WebP file has a chunk that extends past the end of the file.");
+            throw ImageErrors.Corrupt("The WebP file has a chunk that extends past the end of the file.");
         }
 
         return (fourCc, size);

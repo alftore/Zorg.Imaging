@@ -65,7 +65,7 @@ internal static class PngHeaderReader
 
             if (type == Iend)
             {
-                throw IdentifyFailure.Corrupt("The PNG file has no image data: its IEND chunk comes before any IDAT chunk.");
+                throw ImageErrors.Corrupt("The PNG file has no image data: its IEND chunk comes before any IDAT chunk.");
             }
 
             long skip = length + CrcLength;
@@ -74,7 +74,7 @@ internal static class PngHeaderReader
                 case Actl when !sawActl:
                     if (length != 8)
                     {
-                        throw IdentifyFailure.Corrupt("The PNG file's acTL chunk isn't 8 bytes long.");
+                        throw ImageErrors.Corrupt("The PNG file's acTL chunk isn't 8 bytes long.");
                     }
 
                     byte[] actl = new byte[8];
@@ -82,7 +82,7 @@ internal static class PngHeaderReader
                     uint declared = BinaryPrimitives.ReadUInt32BigEndian(actl);
                     if (declared == 0)
                     {
-                        throw IdentifyFailure.Corrupt("The PNG file's acTL chunk declares zero frames.");
+                        throw ImageErrors.Corrupt("The PNG file's acTL chunk declares zero frames.");
                     }
 
                     sawActl = true;
@@ -128,17 +128,17 @@ internal static class PngHeaderReader
         uint type = BinaryPrimitives.ReadUInt32BigEndian(head.AsSpan(4));
         if (type == CgBI)
         {
-            throw IdentifyFailure.Corrupt("The PNG file is in Apple's iOS-optimised format (it starts with a CgBI chunk), which isn't a standard PNG.");
+            throw ImageErrors.Corrupt("The PNG file is in Apple's iOS-optimised format (it starts with a CgBI chunk), which isn't a standard PNG.");
         }
 
         if (type != Ihdr)
         {
-            throw IdentifyFailure.Corrupt("The PNG file's first chunk isn't IHDR.");
+            throw ImageErrors.Corrupt("The PNG file's first chunk isn't IHDR.");
         }
 
         if (BinaryPrimitives.ReadUInt32BigEndian(head) != IhdrLength)
         {
-            throw IdentifyFailure.Corrupt("The PNG file's IHDR chunk isn't 13 bytes long.");
+            throw ImageErrors.Corrupt("The PNG file's IHDR chunk isn't 13 bytes long.");
         }
     }
 
@@ -148,14 +148,14 @@ internal static class PngHeaderReader
         uint crc = Crc32.Append(Crc32.Compute("IHDR"u8), data);
         if (crc != BinaryPrimitives.ReadUInt32BigEndian(ihdr.AsSpan(IhdrLength)))
         {
-            throw IdentifyFailure.Corrupt("The PNG file's IHDR chunk fails its checksum.");
+            throw ImageErrors.Corrupt("The PNG file's IHDR chunk fails its checksum.");
         }
 
         uint width = BinaryPrimitives.ReadUInt32BigEndian(data);
         uint height = BinaryPrimitives.ReadUInt32BigEndian(data[4..]);
         if (width is 0 or > int.MaxValue || height is 0 or > int.MaxValue)
         {
-            throw IdentifyFailure.Corrupt("The PNG file's width or height is zero or over 2147483647.");
+            throw ImageErrors.Corrupt("The PNG file's width or height is zero or over 2147483647.");
         }
 
         int bitDepth = data[8];
@@ -169,22 +169,22 @@ internal static class PngHeaderReader
         };
         if (!valid)
         {
-            throw IdentifyFailure.Corrupt("The PNG file's bit depth and colour type aren't a valid combination.");
+            throw ImageErrors.Corrupt("The PNG file's bit depth and colour type aren't a valid combination.");
         }
 
         if (data[10] != 0)
         {
-            throw IdentifyFailure.Corrupt("The PNG file's compression method isn't 0.");
+            throw ImageErrors.Corrupt("The PNG file's compression method isn't 0.");
         }
 
         if (data[11] != 0)
         {
-            throw IdentifyFailure.Corrupt("The PNG file's filter method isn't 0.");
+            throw ImageErrors.Corrupt("The PNG file's filter method isn't 0.");
         }
 
         if (data[12] > 1)
         {
-            throw IdentifyFailure.Corrupt("The PNG file's interlace method isn't 0 or 1.");
+            throw ImageErrors.Corrupt("The PNG file's interlace method isn't 0 or 1.");
         }
 
         return ((int)width, (int)height, colourType);
@@ -194,7 +194,7 @@ internal static class PngHeaderReader
     {
         if (length > MaxChunkLength)
         {
-            throw IdentifyFailure.Corrupt("The PNG file has a chunk longer than 2147483647 bytes.");
+            throw ImageErrors.Corrupt("The PNG file has a chunk longer than 2147483647 bytes.");
         }
 
         for (int i = 4; i < 8; i++)
@@ -202,7 +202,7 @@ internal static class PngHeaderReader
             int b = head[i] | 0x20;
             if (b is < 'a' or > 'z')
             {
-                throw IdentifyFailure.Corrupt("The PNG file has a chunk whose type isn't four letters.");
+                throw ImageErrors.Corrupt("The PNG file has a chunk whose type isn't four letters.");
             }
         }
     }

@@ -11,7 +11,7 @@ namespace Zorg.Imaging.Formats;
 
 /// <summary>
 /// The header check behind <see cref="Image.Identify"/>: detect the format, run its header reader, apply the limits,
-/// and turn every <see cref="IdentifyFailure"/> into a result.
+/// and turn every <see cref="ImageException"/> into a result.
 /// </summary>
 internal static class Identifier
 {
@@ -40,7 +40,7 @@ internal static class Identifier
             CheckLimits(info, options.Limits);
             return IdentifyResult.Ok(info);
         }
-        catch (IdentifyFailure failure)
+        catch (ImageException failure)
         {
             return IdentifyResult.Failed(failure.Status, format, failure.Message);
         }
@@ -70,25 +70,25 @@ internal static class Identifier
     {
         if (info.Width <= 0 || info.Height <= 0)
         {
-            throw IdentifyFailure.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The {info.Format.Name} file has a size of {info.Width}x{info.Height}."));
+            throw ImageErrors.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The {info.Format.Name} file has a size of {info.Width}x{info.Height}."));
         }
 
         long pixels = (long)info.Width * info.Height;
         if (pixels > limits.MaxPixels)
         {
-            throw IdentifyFailure.ExceedsLimits(string.Create(
+            throw ImageErrors.ExceedsLimits(string.Create(
                 CultureInfo.InvariantCulture,
                 $"The image is {info.Width}x{info.Height} ({pixels} pixels), over the limit of {limits.MaxPixels} pixels."));
         }
 
         if (info.FrameCount < 1)
         {
-            throw IdentifyFailure.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The {info.Format.Name} file declares an animation with no frames."));
+            throw ImageErrors.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The {info.Format.Name} file declares an animation with no frames."));
         }
 
         if (info.FrameCount > limits.MaxFrames)
         {
-            throw IdentifyFailure.ExceedsLimits(FramesOverLimit(limits));
+            throw ImageErrors.ExceedsLimits(FramesOverLimit(limits));
         }
     }
 

@@ -1,4 +1,16 @@
 #nullable enable
+Zorg.Imaging.Bgra32
+Zorg.Imaging.Bgra32.A.get -> byte
+Zorg.Imaging.Bgra32.A.set -> void
+Zorg.Imaging.Bgra32.B.get -> byte
+Zorg.Imaging.Bgra32.B.set -> void
+Zorg.Imaging.Bgra32.Bgra32() -> void
+Zorg.Imaging.Bgra32.Bgra32(byte b, byte g, byte r, byte a = 255) -> void
+Zorg.Imaging.Bgra32.Equals(Zorg.Imaging.Bgra32 other) -> bool
+Zorg.Imaging.Bgra32.G.get -> byte
+Zorg.Imaging.Bgra32.G.set -> void
+Zorg.Imaging.Bgra32.R.get -> byte
+Zorg.Imaging.Bgra32.R.set -> void
 Zorg.Imaging.FormatPeek
 Zorg.Imaging.FormatPeek.Format.get -> Zorg.Imaging.ImageFormat?
 Zorg.Imaging.FormatPeek.Stream.get -> System.IO.Stream!
@@ -23,11 +35,30 @@ Zorg.Imaging.IdentifyStatus.Ok = 1 -> Zorg.Imaging.IdentifyStatus
 Zorg.Imaging.IdentifyStatus.Truncated = 4 -> Zorg.Imaging.IdentifyStatus
 Zorg.Imaging.IdentifyStatus.UnsupportedFormat = 3 -> Zorg.Imaging.IdentifyStatus
 Zorg.Imaging.Image
+Zorg.Imaging.Image.BytesPerPixel.get -> int
+Zorg.Imaging.Image.Clone() -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Dispose() -> void
+Zorg.Imaging.Image.GetPixelBytes() -> System.Span<byte>
+Zorg.Imaging.Image.GetRow<T>(int y) -> System.Span<T>
+Zorg.Imaging.Image.GetRowBytes(int y) -> System.Span<byte>
+Zorg.Imaging.Image.Height.get -> int
+Zorg.Imaging.Image.Image(int width, int height, Zorg.Imaging.PixelFormat pixelFormat) -> void
+Zorg.Imaging.Image.PixelFormat.get -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.Image.Stride.get -> int
+Zorg.Imaging.Image.Width.get -> int
+Zorg.Imaging.ImageException
+Zorg.Imaging.ImageException.ImageException() -> void
+Zorg.Imaging.ImageException.ImageException(string! message) -> void
+Zorg.Imaging.ImageException.ImageException(string! message, System.Exception! innerException) -> void
 Zorg.Imaging.ImageFormat
 Zorg.Imaging.ImageFormat.FileExtensions.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Zorg.Imaging.ImageFormat.IsSupported.get -> bool
 Zorg.Imaging.ImageFormat.MimeType.get -> string!
 Zorg.Imaging.ImageFormat.Name.get -> string!
+Zorg.Imaging.ImageFormatException
+Zorg.Imaging.ImageFormatException.ImageFormatException() -> void
+Zorg.Imaging.ImageFormatException.ImageFormatException(string! message) -> void
+Zorg.Imaging.ImageFormatException.ImageFormatException(string! message, System.Exception! innerException) -> void
 Zorg.Imaging.ImageFormats
 Zorg.Imaging.ImageInfo
 Zorg.Imaging.ImageInfo.DisplayHeight.get -> int
@@ -41,6 +72,10 @@ Zorg.Imaging.ImageInfo.Height.get -> int
 Zorg.Imaging.ImageInfo.IsAnimated.get -> bool
 Zorg.Imaging.ImageInfo.Orientation.get -> int
 Zorg.Imaging.ImageInfo.Width.get -> int
+Zorg.Imaging.ImageLimitException
+Zorg.Imaging.ImageLimitException.ImageLimitException() -> void
+Zorg.Imaging.ImageLimitException.ImageLimitException(string! message) -> void
+Zorg.Imaging.ImageLimitException.ImageLimitException(string! message, System.Exception! innerException) -> void
 Zorg.Imaging.ImageLimits
 Zorg.Imaging.ImageLimits.ImageLimits() -> void
 Zorg.Imaging.ImageLimits.MaxFrames.get -> int
@@ -49,13 +84,68 @@ Zorg.Imaging.ImageLimits.MaxHeaderBytes.get -> int
 Zorg.Imaging.ImageLimits.MaxHeaderBytes.init -> void
 Zorg.Imaging.ImageLimits.MaxPixels.get -> long
 Zorg.Imaging.ImageLimits.MaxPixels.init -> void
+Zorg.Imaging.L8
+Zorg.Imaging.L8.Equals(Zorg.Imaging.L8 other) -> bool
+Zorg.Imaging.L8.L.get -> byte
+Zorg.Imaging.L8.L.set -> void
+Zorg.Imaging.L8.L8() -> void
+Zorg.Imaging.L8.L8(byte l) -> void
+Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.Bgra32 = 2 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.L8 = 4 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.None = 0 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.Rgb24 = 3 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.Rgba32 = 1 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.Rgb24
+Zorg.Imaging.Rgb24.B.get -> byte
+Zorg.Imaging.Rgb24.B.set -> void
+Zorg.Imaging.Rgb24.Equals(Zorg.Imaging.Rgb24 other) -> bool
+Zorg.Imaging.Rgb24.G.get -> byte
+Zorg.Imaging.Rgb24.G.set -> void
+Zorg.Imaging.Rgb24.R.get -> byte
+Zorg.Imaging.Rgb24.R.set -> void
+Zorg.Imaging.Rgb24.Rgb24() -> void
+Zorg.Imaging.Rgb24.Rgb24(byte r, byte g, byte b) -> void
+Zorg.Imaging.Rgba32
+Zorg.Imaging.Rgba32.A.get -> byte
+Zorg.Imaging.Rgba32.A.set -> void
+Zorg.Imaging.Rgba32.B.get -> byte
+Zorg.Imaging.Rgba32.B.set -> void
+Zorg.Imaging.Rgba32.Equals(Zorg.Imaging.Rgba32 other) -> bool
+Zorg.Imaging.Rgba32.G.get -> byte
+Zorg.Imaging.Rgba32.G.set -> void
+Zorg.Imaging.Rgba32.R.get -> byte
+Zorg.Imaging.Rgba32.R.set -> void
+Zorg.Imaging.Rgba32.Rgba32() -> void
+Zorg.Imaging.Rgba32.Rgba32(byte r, byte g, byte b, byte a = 255) -> void
+Zorg.Imaging.UnsupportedImageFormatException
+Zorg.Imaging.UnsupportedImageFormatException.Format.get -> Zorg.Imaging.ImageFormat?
+Zorg.Imaging.UnsupportedImageFormatException.UnsupportedImageFormatException() -> void
+Zorg.Imaging.UnsupportedImageFormatException.UnsupportedImageFormatException(string! message) -> void
+Zorg.Imaging.UnsupportedImageFormatException.UnsupportedImageFormatException(string! message, System.Exception! innerException) -> void
+Zorg.Imaging.UnsupportedImageFormatException.UnsupportedImageFormatException(string! message, Zorg.Imaging.ImageFormat? format) -> void
 const Zorg.Imaging.ImageFormats.MaxSignatureLength = 64 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxFrames = 10000 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxHeaderBytes = 1048576 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxPixels = 268402689 -> long
+override Zorg.Imaging.Bgra32.Equals(object? obj) -> bool
+override Zorg.Imaging.Bgra32.GetHashCode() -> int
+override Zorg.Imaging.Bgra32.ToString() -> string!
 override Zorg.Imaging.IdentifyResult.ToString() -> string!
+override Zorg.Imaging.Image.ToString() -> string!
 override Zorg.Imaging.ImageFormat.ToString() -> string!
 override Zorg.Imaging.ImageInfo.ToString() -> string!
+override Zorg.Imaging.L8.Equals(object? obj) -> bool
+override Zorg.Imaging.L8.GetHashCode() -> int
+override Zorg.Imaging.L8.ToString() -> string!
+override Zorg.Imaging.Rgb24.Equals(object? obj) -> bool
+override Zorg.Imaging.Rgb24.GetHashCode() -> int
+override Zorg.Imaging.Rgb24.ToString() -> string!
+override Zorg.Imaging.Rgba32.Equals(object? obj) -> bool
+override Zorg.Imaging.Rgba32.GetHashCode() -> int
+override Zorg.Imaging.Rgba32.ToString() -> string!
+static Zorg.Imaging.Bgra32.operator !=(Zorg.Imaging.Bgra32 left, Zorg.Imaging.Bgra32 right) -> bool
+static Zorg.Imaging.Bgra32.operator ==(Zorg.Imaging.Bgra32 left, Zorg.Imaging.Bgra32 right) -> bool
 static Zorg.Imaging.IdentifyOptions.Default.get -> Zorg.Imaging.IdentifyOptions!
 static Zorg.Imaging.Image.Identify(byte[]! data, Zorg.Imaging.IdentifyOptions? options = null) -> Zorg.Imaging.IdentifyResult!
 static Zorg.Imaging.Image.IdentifyAsync(System.IO.Stream! stream, Zorg.Imaging.IdentifyOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.IdentifyResult!>
@@ -78,3 +168,9 @@ static Zorg.Imaging.ImageFormats.IsSupported(System.ReadOnlySpan<byte> head) -> 
 static Zorg.Imaging.ImageFormats.Known.get -> System.Collections.Generic.IReadOnlyList<Zorg.Imaging.ImageFormat!>!
 static Zorg.Imaging.ImageFormats.PeekAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.FormatPeek!>
 static Zorg.Imaging.ImageLimits.Default.get -> Zorg.Imaging.ImageLimits!
+static Zorg.Imaging.L8.operator !=(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
+static Zorg.Imaging.L8.operator ==(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
+static Zorg.Imaging.Rgb24.operator !=(Zorg.Imaging.Rgb24 left, Zorg.Imaging.Rgb24 right) -> bool
+static Zorg.Imaging.Rgb24.operator ==(Zorg.Imaging.Rgb24 left, Zorg.Imaging.Rgb24 right) -> bool
+static Zorg.Imaging.Rgba32.operator !=(Zorg.Imaging.Rgba32 left, Zorg.Imaging.Rgba32 right) -> bool
+static Zorg.Imaging.Rgba32.operator ==(Zorg.Imaging.Rgba32 left, Zorg.Imaging.Rgba32 right) -> bool

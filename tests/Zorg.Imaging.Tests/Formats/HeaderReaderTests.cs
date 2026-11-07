@@ -210,7 +210,7 @@ public class HeaderReaderTests
         await reader.SkipAsync(10, Token);
         Assert.Equal(10, reader.Position);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.SkipAsync(1, Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.SkipAsync(1, Token));
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
@@ -240,7 +240,7 @@ public class HeaderReaderTests
     {
         HeaderReader reader = Create(kind, Pattern(5), 1000);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.ReadExactlyAsync(new byte[10], Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.ReadExactlyAsync(new byte[10], Token));
 
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
         Assert.False(string.IsNullOrWhiteSpace(failure.Message));
@@ -254,7 +254,7 @@ public class HeaderReaderTests
         await reader.ReadByteAsync(Token);
         await reader.ReadByteAsync(Token);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.ReadByteAsync(Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.ReadByteAsync(Token));
 
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
@@ -265,7 +265,7 @@ public class HeaderReaderTests
     {
         HeaderReader reader = Create(kind, [], 1000);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.ReadByteAsync(Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.ReadByteAsync(Token));
 
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
@@ -276,7 +276,7 @@ public class HeaderReaderTests
     {
         HeaderReader reader = Create(kind, Pattern(10), 1000);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.SkipAsync(11, Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.SkipAsync(11, Token));
 
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
@@ -287,7 +287,7 @@ public class HeaderReaderTests
     {
         HeaderReader reader = Create(kind, Pattern(10), int.MaxValue);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.SkipAsync(long.MaxValue, Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.SkipAsync(long.MaxValue, Token));
 
         // A forward-only stream is charged for the skip before it runs out of data, so it reports the budget instead.
         Assert.Contains(failure.Status, kind == ForwardKind
@@ -301,7 +301,7 @@ public class HeaderReaderTests
     {
         HeaderReader reader = Create(kind, Pattern(10), 1000);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.SkipAsync(-1, Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.SkipAsync(-1, Token));
 
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
         Assert.Equal(0, reader.Position);
@@ -313,7 +313,7 @@ public class HeaderReaderTests
     {
         HeaderReader reader = Create(kind, Pattern(100), 4);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.ReadExactlyAsync(new byte[5], Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.ReadExactlyAsync(new byte[5], Token));
 
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
     }
@@ -327,7 +327,7 @@ public class HeaderReaderTests
         await reader.ReadExactlyAsync(new byte[4], Token);
         Assert.Equal(4, reader.BytesCharged);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.ReadByteAsync(Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.ReadByteAsync(Token));
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
     }
 
@@ -341,7 +341,7 @@ public class HeaderReaderTests
         await reader.ReadByteAsync(Token);
         await reader.ReadByteAsync(Token);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.ReadByteAsync(Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.ReadByteAsync(Token));
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
         Assert.Equal(3, reader.BytesCharged);
     }
@@ -371,7 +371,7 @@ public class HeaderReaderTests
 
         Assert.Equal(10, reader.BytesCharged);
         Assert.Equal(10, reader.Position);
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.SkipAsync(1, Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.SkipAsync(1, Token));
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
     }
 
@@ -382,7 +382,7 @@ public class HeaderReaderTests
         using RecordingStream recording = new(new NonSeekableStream(new MemoryStream(data), 16));
         HeaderReader reader = HeaderReader.FromStream(recording, 50);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.SkipAsync(100, Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.SkipAsync(100, Token));
 
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
         Assert.Equal(0, recording.BytesRead);
@@ -443,7 +443,7 @@ public class HeaderReaderTests
     {
         HeaderReader reader = Create(ForwardKind, Pattern(100), 4);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.PeekAsync(new byte[8], Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.PeekAsync(new byte[8], Token));
 
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
     }
@@ -463,7 +463,7 @@ public class HeaderReaderTests
         Assert.Equal("image", reader.FormatName);
         reader.FormatName = "PNG";
 
-        IdentifyFailure failure = Assert.Throws<IdentifyFailure>(() => reader.ReadExactlyAsync(new byte[5], Token));
+        ImageException failure = Assert.ThrowsAny<ImageException>(() => reader.ReadExactlyAsync(new byte[5], Token));
 
         Assert.Contains("PNG", failure.Message, StringComparison.Ordinal);
     }
@@ -492,9 +492,9 @@ public class HeaderReaderTests
     {
         HeaderReader reader = Create(MemoryKind, Pattern(4), 1000);
 
-        Assert.Throws<IdentifyFailure>(() => reader.ReadExactlyAsync(new byte[8], Token));
-        Assert.Throws<IdentifyFailure>(() => reader.SkipAsync(8, Token));
-        Assert.Throws<IdentifyFailure>(() => reader.SkipAsync(-1, Token));
+        Assert.ThrowsAny<ImageException>(() => reader.ReadExactlyAsync(new byte[8], Token));
+        Assert.ThrowsAny<ImageException>(() => reader.SkipAsync(8, Token));
+        Assert.ThrowsAny<ImageException>(() => reader.SkipAsync(-1, Token));
     }
 
     [Fact]
@@ -503,7 +503,7 @@ public class HeaderReaderTests
         HeaderReader reader = HeaderReader.FromMemory(Pattern(100).AsMemory(0, 20), 1000);
         await reader.SkipAsync(20, Token);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () => await reader.ReadByteAsync(Token));
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () => await reader.ReadByteAsync(Token));
 
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }

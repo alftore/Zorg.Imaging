@@ -40,6 +40,36 @@ peek.Stream.CopyTo(rest);
 Check("peeked stream whole after identify", rest.ToArray().AsSpan().SequenceEqual(png));
 Check("identify not an image", Image.Identify("not an image"u8.ToArray()).Status == IdentifyStatus.NotAnImage);
 
+// Core: the pixel buffer, typed rows for every pixel type, and the format check on GetRow.
+using (var image = new Image(4, 3, PixelFormat.Rgba32))
+{
+    image.GetRow<Rgba32>(2)[3] = new Rgba32(1, 2, 3, 4);
+    using Image copy = image.Clone();
+    Check("image rgba32 row", copy.GetPixelBytes()[^4..].SequenceEqual(new byte[] { 1, 2, 3, 4 }) && copy.ToString() == "Rgba32 4x3");
+
+    bool refused = false;
+    try
+    {
+        _ = image.GetRow<Bgra32>(0);
+    }
+    catch (InvalidOperationException)
+    {
+        refused = true;
+    }
+
+    Check("image wrong pixel type refused", refused);
+}
+
+using (var bgra = new Image(1, 1, PixelFormat.Bgra32))
+using (var rgb = new Image(1, 1, PixelFormat.Rgb24))
+using (var grey = new Image(1, 1, PixelFormat.L8))
+{
+    bgra.GetRow<Bgra32>(0)[0] = new Bgra32(3, 2, 1, 255);
+    rgb.GetRow<Rgb24>(0)[0] = new Rgb24(1, 2, 3);
+    grey.GetRow<L8>(0)[0] = new L8(9);
+    Check("image other pixel types", bgra.GetPixelBytes()[0] == 3 && rgb.Stride == 3 && grey.GetPixelBytes()[0] == 9);
+}
+
 return failures == 0 ? 0 : 1;
 
 static byte[] TinyPng(int width, int height)

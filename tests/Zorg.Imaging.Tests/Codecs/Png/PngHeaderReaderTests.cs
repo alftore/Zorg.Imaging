@@ -66,7 +66,7 @@ public class PngHeaderReaderTests
     [InlineData(255, 8)]
     public async Task Invalid_colour_type_and_bit_depth_combinations_are_corrupt(int colourType, int bitDepth)
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(1, 1, bitDepth, colourType), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(1, 1, bitDepth, colourType), Idat()));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
@@ -76,7 +76,7 @@ public class PngHeaderReaderTests
     [InlineData(0, 0, 2)]
     public async Task Invalid_compression_filter_or_interlace_is_corrupt(int compression, int filter, int interlace)
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(1, 1, 8, 2, compression, filter, interlace), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(1, 1, 8, 2, compression, filter, interlace), Idat()));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
@@ -94,7 +94,7 @@ public class PngHeaderReaderTests
     [InlineData(5u, uint.MaxValue)]
     public async Task Zero_or_oversized_dimensions_are_corrupt(uint width, uint height)
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(width, height, 8, 2), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(width, height, 8, 2), Idat()));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
@@ -112,7 +112,7 @@ public class PngHeaderReaderTests
         byte[] ihdr = Ihdr(10, 10, 8, 2);
         ihdr[^1] ^= 0xFF;
 
-        IdentifyFailure failure = await FailMemoryAsync(Png(ihdr, Idat()));
+        ImageException failure = await FailMemoryAsync(Png(ihdr, Idat()));
 
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
         Assert.Contains("PNG", failure.Message, StringComparison.Ordinal);
@@ -121,7 +121,7 @@ public class PngHeaderReaderTests
     [Fact]
     public async Task A_first_chunk_that_is_not_IHDR_is_corrupt()
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Chunk("tEXt", new byte[4]), Ihdr(10, 10, 8, 2), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Chunk("tEXt", new byte[4]), Ihdr(10, 10, 8, 2), Idat()));
 
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
         Assert.Equal("The PNG file's first chunk isn't IHDR.", failure.Message);
@@ -130,14 +130,14 @@ public class PngHeaderReaderTests
     [Fact]
     public async Task An_IHDR_of_the_wrong_length_is_corrupt()
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Chunk("IHDR", new byte[12]), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Chunk("IHDR", new byte[12]), Idat()));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
     [Fact]
     public async Task An_Apple_CgBI_file_is_corrupt_with_a_message_saying_so()
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Chunk("CgBI", new byte[4]), Ihdr(10, 10, 8, 6), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Chunk("CgBI", new byte[4]), Ihdr(10, 10, 8, 6), Idat()));
 
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
         Assert.Contains("CgBI", failure.Message, StringComparison.Ordinal);
@@ -203,14 +203,14 @@ public class PngHeaderReaderTests
     [Fact]
     public async Task An_acTL_chunk_with_zero_frames_is_corrupt()
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 6), Chunk("acTL", Actl(0)), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 6), Chunk("acTL", Actl(0)), Idat()));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
     [Fact]
     public async Task An_acTL_chunk_of_the_wrong_length_is_corrupt()
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 6), Chunk("acTL", new byte[5]), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 6), Chunk("acTL", new byte[5]), Idat()));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
@@ -224,7 +224,7 @@ public class PngHeaderReaderTests
     [Fact]
     public async Task IEND_before_IDAT_is_corrupt()
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2), Chunk("IEND", [])));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2), Chunk("IEND", [])));
 
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
         Assert.Contains("no image data", failure.Message, StringComparison.Ordinal);
@@ -233,7 +233,7 @@ public class PngHeaderReaderTests
     [Fact]
     public async Task A_chunk_type_that_is_not_letters_is_corrupt()
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2), Chunk("te1t", new byte[2]), Idat()));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2), Chunk("te1t", new byte[2]), Idat()));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
@@ -244,7 +244,7 @@ public class PngHeaderReaderTests
         BinaryPrimitives.WriteUInt32BigEndian(huge, 0x80000000u);
         "tEXt"u8.CopyTo(huge.AsSpan(4));
 
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2), huge));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2), huge));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
@@ -255,7 +255,7 @@ public class PngHeaderReaderTests
         BinaryPrimitives.WriteUInt32BigEndian(huge, int.MaxValue);
         "tEXt"u8.CopyTo(huge.AsSpan(4));
 
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2), huge, new byte[100]));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2), huge, new byte[100]));
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
@@ -263,7 +263,7 @@ public class PngHeaderReaderTests
     public async Task A_file_that_ends_inside_IHDR_is_truncated()
     {
         byte[] full = Png(Ihdr(10, 10, 8, 2), Idat());
-        IdentifyFailure failure = await FailMemoryAsync(full[..(8 + 8 + 5)]);
+        ImageException failure = await FailMemoryAsync(full[..(8 + 8 + 5)]);
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
@@ -271,7 +271,7 @@ public class PngHeaderReaderTests
     public async Task A_file_that_ends_inside_a_chunk_header_is_truncated()
     {
         byte[] ihdr = Ihdr(10, 10, 8, 2);
-        IdentifyFailure failure = await FailMemoryAsync(Png(ihdr, new byte[3]));
+        ImageException failure = await FailMemoryAsync(Png(ihdr, new byte[3]));
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
@@ -279,7 +279,7 @@ public class PngHeaderReaderTests
     public async Task A_file_that_ends_inside_skipped_chunk_data_is_truncated()
     {
         byte[] full = Png(Ihdr(10, 10, 8, 2), Chunk("tEXt", new byte[100]));
-        IdentifyFailure failure = await FailMemoryAsync(full[..^50]);
+        ImageException failure = await FailMemoryAsync(full[..^50]);
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
@@ -289,7 +289,7 @@ public class PngHeaderReaderTests
         byte[] full = Png(Ihdr(10, 10, 8, 2), Chunk("tEXt", new byte[100]));
         using var stream = new MemoryStream(full[..^50]);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () =>
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () =>
             await PngHeaderReader.ReadAsync(HeaderReader.FromStream(stream, Budget), IdentifyOptions.Default, TestContext.Current.CancellationToken));
 
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
@@ -298,7 +298,7 @@ public class PngHeaderReaderTests
     [Fact]
     public async Task A_file_that_ends_before_any_image_data_is_truncated()
     {
-        IdentifyFailure failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2)));
+        ImageException failure = await FailMemoryAsync(Png(Ihdr(10, 10, 8, 2)));
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
@@ -317,7 +317,7 @@ public class PngHeaderReaderTests
         }
 
         using var forwardOnly = new ForwardOnlyStream(data);
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () =>
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () =>
             await PngHeaderReader.ReadAsync(HeaderReader.FromStream(forwardOnly, 4096), IdentifyOptions.Default, TestContext.Current.CancellationToken));
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
     }
@@ -357,8 +357,8 @@ public class PngHeaderReaderTests
     private static async Task<ImageInfo> ReadMemoryAsync(byte[] data, int budget = Budget) =>
         await PngHeaderReader.ReadAsync(HeaderReader.FromMemory(data, budget), IdentifyOptions.Default, TestContext.Current.CancellationToken);
 
-    private static async Task<IdentifyFailure> FailMemoryAsync(byte[] data) =>
-        await Assert.ThrowsAsync<IdentifyFailure>(async () => await ReadMemoryAsync(data));
+    private static async Task<ImageException> FailMemoryAsync(byte[] data) =>
+        await Assert.ThrowsAnyAsync<ImageException>(async () => await ReadMemoryAsync(data));
 
     private static byte[] Png(params byte[][] chunks)
     {

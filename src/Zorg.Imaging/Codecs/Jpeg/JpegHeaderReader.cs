@@ -38,7 +38,7 @@ internal static class JpegHeaderReader
         await reader.ReadExactlyAsync(scratch.AsMemory(0, 2), cancellationToken).ConfigureAwait(false);
         if (scratch[0] != MarkerPrefix || scratch[1] != Soi)
         {
-            throw IdentifyFailure.Corrupt("The JPEG file doesn't start with a start-of-image marker.");
+            throw ImageErrors.Corrupt("The JPEG file doesn't start with a start-of-image marker.");
         }
 
         bool hasExif = false;
@@ -56,14 +56,14 @@ internal static class JpegHeaderReader
 
             if (marker is Soi or Eoi or Sos or 0x00)
             {
-                throw IdentifyFailure.Corrupt("The JPEG file has no frame header.");
+                throw ImageErrors.Corrupt("The JPEG file has no frame header.");
             }
 
             await reader.ReadExactlyAsync(scratch.AsMemory(0, 2), cancellationToken).ConfigureAwait(false);
             int length = BinaryPrimitives.ReadUInt16BigEndian(scratch);
             if (length < 2)
             {
-                throw IdentifyFailure.Corrupt("The JPEG file has a segment with an invalid length.");
+                throw ImageErrors.Corrupt("The JPEG file has a segment with an invalid length.");
             }
 
             int dataLength = length - 2;
@@ -72,7 +72,7 @@ internal static class JpegHeaderReader
             {
                 if (dataLength < 6)
                 {
-                    throw IdentifyFailure.Corrupt("The JPEG frame header is too short.");
+                    throw ImageErrors.Corrupt("The JPEG frame header is too short.");
                 }
 
                 await reader.ReadExactlyAsync(scratch.AsMemory(0, 6), cancellationToken).ConfigureAwait(false);
@@ -80,12 +80,12 @@ internal static class JpegHeaderReader
                 int width = BinaryPrimitives.ReadUInt16BigEndian(scratch.AsSpan(3));
                 if (width == 0)
                 {
-                    throw IdentifyFailure.Corrupt("The JPEG file has a width of 0.");
+                    throw ImageErrors.Corrupt("The JPEG file has a width of 0.");
                 }
 
                 if (height == 0)
                 {
-                    throw IdentifyFailure.Corrupt("The JPEG file declares its height after the scan (DNL marker), which isn't supported.");
+                    throw ImageErrors.Corrupt("The JPEG file declares its height after the scan (DNL marker), which isn't supported.");
                 }
 
                 return new ImageInfo(ImageFormat.Jpeg, width, height)
@@ -129,7 +129,7 @@ internal static class JpegHeaderReader
         byte value = await reader.ReadByteAsync(cancellationToken).ConfigureAwait(false);
         if (value != MarkerPrefix)
         {
-            throw IdentifyFailure.Corrupt("The JPEG file has data where a marker was expected.");
+            throw ImageErrors.Corrupt("The JPEG file has data where a marker was expected.");
         }
 
         // Any number of 0xFF fill bytes may precede the marker code. Each iteration consumes a byte.

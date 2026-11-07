@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,23 +7,23 @@ using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging;
 
-/// <summary>An image. For now this holds the header check; the pixel buffer comes in a later slice.</summary>
+/// <summary>
+/// An image in memory: a width, a height, a <see cref="PixelFormat"/> and the pixels, row after row with no padding.
+/// The static <see cref="Identify"/> methods read a file's headers without decoding it.
+/// </summary>
+/// <remarks>
+/// The pixel memory is rented from a shared pool and goes back when the image is disposed, so dispose every image. An
+/// image isn't thread-safe for writes; several threads may read the same image at once.
+/// </remarks>
 /// <example>
 /// <code>
-/// IdentifyResult result = Image.Identify(bytes);
-/// if (!result.Succeeded)
-/// {
-///     return Results.BadRequest(result.Message);
-/// }
+/// using var image = new Image(320, 200, PixelFormat.Rgba32);
+/// Span&lt;Rgba32&gt; top = image.GetRow&lt;Rgba32&gt;(0);
+/// top.Fill(new Rgba32(255, 255, 255));
 /// </code>
 /// </example>
-[SuppressMessage("Design", "CA1052:Static holder types should be Static or NotInheritable", Justification = "Becomes the pixel buffer type; the identify methods stay as statics on it.")]
-public sealed class Image
+public sealed partial class Image
 {
-    private Image()
-    {
-    }
-
     /// <summary>
     /// Reads an image's headers, without decoding pixels, and checks them against the limits. Bad input gives a
     /// result, never an exception.

@@ -119,7 +119,7 @@ public class GifHeaderReaderTests
         byte[] data = Gif("89a", Screen(4, 4), Frame(4, 4), Frame(4, 4), Frame(4, 4), [0x3B]);
         var options = new IdentifyOptions { CountFrames = true, Limits = new ImageLimits { MaxFrames = 2 } };
 
-        IdentifyFailure failure = await FailAsync(data, options);
+        ImageException failure = await FailAsync(data, options);
 
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
     }
@@ -142,7 +142,7 @@ public class GifHeaderReaderTests
         byte[] data = Gif("89a", Screen(4, 4), Frame(4, 4), Frame(4, 4), [0x2C, 0, 0, 0, 0, 4, 0, 4, 0, 0]);
         var options = new IdentifyOptions { CountFrames = true, Limits = new ImageLimits { MaxFrames = 2 } };
 
-        IdentifyFailure failure = await FailAsync(data, options);
+        ImageException failure = await FailAsync(data, options);
 
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
     }
@@ -165,7 +165,7 @@ public class GifHeaderReaderTests
     public async Task A_file_that_ends_inside_frame_data_sub_blocks_is_truncated()
     {
         byte[] full = Gif("89a", Screen(4, 4), Frame(4, 4), Frame(4, 4), [0x3B]);
-        IdentifyFailure failure = await FailAsync(full[..^4], Counting);
+        ImageException failure = await FailAsync(full[..^4], Counting);
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
@@ -173,21 +173,21 @@ public class GifHeaderReaderTests
     public async Task A_file_that_ends_inside_an_extension_is_truncated()
     {
         byte[] full = Gif("89a", Screen(4, 4), Application("NETSCAPE2.0", [1, 0, 0]), Frame(4, 4));
-        IdentifyFailure failure = await FailAsync(full[..(6 + 7 + 8)]);
+        ImageException failure = await FailAsync(full[..(6 + 7 + 8)]);
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
     [Fact]
     public async Task A_file_that_ends_inside_the_screen_descriptor_is_truncated()
     {
-        IdentifyFailure failure = await FailAsync(Gif("89a", Screen(4, 4))[..10]);
+        ImageException failure = await FailAsync(Gif("89a", Screen(4, 4))[..10]);
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
     [Fact]
     public async Task A_file_that_ends_before_any_block_is_truncated()
     {
-        IdentifyFailure failure = await FailAsync(Gif("89a", Screen(4, 4)));
+        ImageException failure = await FailAsync(Gif("89a", Screen(4, 4)));
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
@@ -195,14 +195,14 @@ public class GifHeaderReaderTests
     public async Task A_file_that_ends_inside_a_global_colour_table_is_truncated()
     {
         byte[] data = Gif("89a", Screen(4, 4, tableBits: 2));
-        IdentifyFailure failure = await FailAsync(data[..^5]);
+        ImageException failure = await FailAsync(data[..^5]);
         Assert.Equal(IdentifyStatus.Truncated, failure.Status);
     }
 
     [Fact]
     public async Task A_bad_block_introducer_is_corrupt()
     {
-        IdentifyFailure failure = await FailAsync(Gif("89a", Screen(4, 4), [0x99, 0, 0]));
+        ImageException failure = await FailAsync(Gif("89a", Screen(4, 4), [0x99, 0, 0]));
 
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
         Assert.Contains("GIF", failure.Message, StringComparison.Ordinal);
@@ -211,14 +211,14 @@ public class GifHeaderReaderTests
     [Fact]
     public async Task A_bad_block_introducer_after_a_frame_is_corrupt_when_counting()
     {
-        IdentifyFailure failure = await FailAsync(Gif("89a", Screen(4, 4), Frame(4, 4), [0x99, 0, 0]), Counting);
+        ImageException failure = await FailAsync(Gif("89a", Screen(4, 4), Frame(4, 4), [0x99, 0, 0]), Counting);
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
     [Fact]
     public async Task A_trailer_with_no_image_is_corrupt()
     {
-        IdentifyFailure failure = await FailAsync(Gif("89a", Screen(4, 4), [0x3B]));
+        ImageException failure = await FailAsync(Gif("89a", Screen(4, 4), [0x3B]));
         Assert.Equal(IdentifyStatus.Corrupt, failure.Status);
     }
 
@@ -314,7 +314,7 @@ public class GifHeaderReaderTests
         byte[] data = Gif("89a", Screen(4, 4), FrameWithData(4, 4, new byte[100_000]), [0x3B]);
         using var forwardOnly = new ForwardOnlyStream(data);
 
-        IdentifyFailure failure = await Assert.ThrowsAsync<IdentifyFailure>(async () =>
+        ImageException failure = await Assert.ThrowsAnyAsync<ImageException>(async () =>
             await GifHeaderReader.ReadAsync(HeaderReader.FromStream(forwardOnly, 4096), Counting, TestContext.Current.CancellationToken));
 
         Assert.Equal(IdentifyStatus.ExceedsLimits, failure.Status);
@@ -335,8 +335,8 @@ public class GifHeaderReaderTests
     private static async Task<ImageInfo> ReadAsync(byte[] data, IdentifyOptions? options = null) =>
         await GifHeaderReader.ReadAsync(HeaderReader.FromMemory(data, Budget), options ?? IdentifyOptions.Default, TestContext.Current.CancellationToken);
 
-    private static async Task<IdentifyFailure> FailAsync(byte[] data, IdentifyOptions? options = null) =>
-        await Assert.ThrowsAsync<IdentifyFailure>(async () => await ReadAsync(data, options));
+    private static async Task<ImageException> FailAsync(byte[] data, IdentifyOptions? options = null) =>
+        await Assert.ThrowsAnyAsync<ImageException>(async () => await ReadAsync(data, options));
 
     private static byte[] Gif(string version, params byte[][] parts)
     {

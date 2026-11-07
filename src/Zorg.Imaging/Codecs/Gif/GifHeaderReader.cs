@@ -87,7 +87,7 @@ internal static class GifHeaderReader
 
             if (introducer != ImageDescriptor)
             {
-                throw IdentifyFailure.Corrupt("The GIF file has a block that isn't an extension, an image or the trailer.");
+                throw ImageErrors.Corrupt("The GIF file has a block that isn't an extension, an image or the trailer.");
             }
 
             frames++;
@@ -111,7 +111,7 @@ internal static class GifHeaderReader
 
             if (frames > options.Limits.MaxFrames)
             {
-                throw IdentifyFailure.ExceedsLimits(Identifier.FramesOverLimit(options.Limits));
+                throw ImageErrors.ExceedsLimits(Identifier.FramesOverLimit(options.Limits));
             }
 
             await SkipColourTableAsync(reader, descriptor[8], cancellationToken).ConfigureAwait(false);
@@ -121,7 +121,7 @@ internal static class GifHeaderReader
 
         if (frames == 0)
         {
-            throw IdentifyFailure.Corrupt("The GIF file has no image.");
+            throw ImageErrors.Corrupt("The GIF file has no image.");
         }
 
         return new ImageInfo(ImageFormat.Gif, width, height)
