@@ -109,12 +109,9 @@ internal static class JpegHeaderReader
 
                 if (isExif && !hasExif)
                 {
-                    // An APP segment is at most 65533 bytes, so this is bounded by the format, not by the file.
-                    byte[] block = new byte[Math.Min(dataLength, ExifOrientation.MaxBytesNeeded)];
-                    scratch.AsSpan(0, prefixLength).CopyTo(block);
-                    await reader.ReadExactlyAsync(block.AsMemory(prefixLength), cancellationToken).ConfigureAwait(false);
-                    rest = dataLength - block.Length;
-                    orientation = ExifOrientation.Read(block);
+                    (orientation, int read) = await ExifOrientation.ReadAsync(
+                        reader, scratch.AsMemory(0, prefixLength), dataLength, cancellationToken).ConfigureAwait(false);
+                    rest -= read;
                 }
 
                 hasExif |= isExif;

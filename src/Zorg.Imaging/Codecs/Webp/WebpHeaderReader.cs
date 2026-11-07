@@ -139,10 +139,8 @@ internal static class WebpHeaderReader
                 if (hasExif && !exifFound && fourCc == "EXIF")
                 {
                     exifFound = true;
-                    byte[] block = new byte[(int)Math.Min(chunkSize, (uint)ExifOrientation.MaxBytesNeeded)];
-                    await reader.ReadExactlyAsync(block, cancellationToken).ConfigureAwait(false);
-                    read = block.Length;
-                    orientation = ExifOrientation.Read(block);
+                    (orientation, read) = await ExifOrientation.ReadAsync(
+                        reader, ReadOnlyMemory<byte>.Empty, chunkSize, cancellationToken).ConfigureAwait(false);
                 }
                 else if (countFrames && fourCc == "ANMF")
                 {

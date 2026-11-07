@@ -100,11 +100,9 @@ internal static class PngHeaderReader
 
                 case Exif when !hasExif:
                     hasExif = true;
-                    int wanted = (int)Math.Min(length, ExifOrientation.MaxBytesNeeded);
-                    byte[] exif = new byte[wanted];
-                    await reader.ReadExactlyAsync(exif, cancellationToken).ConfigureAwait(false);
-                    orientation = ExifOrientation.Read(exif);
-                    skip = length - wanted + CrcLength;
+                    (orientation, int read) = await ExifOrientation.ReadAsync(
+                        reader, ReadOnlyMemory<byte>.Empty, length, cancellationToken).ConfigureAwait(false);
+                    skip = length - read + CrcLength;
                     break;
 
                 default:
