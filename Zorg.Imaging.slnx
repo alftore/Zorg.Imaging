@@ -14,6 +14,9 @@
   <Folder Name="/tests/">
     <Project Path="tests/Zorg.Imaging.Tests/Zorg.Imaging.Tests.csproj" />
   </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Zorg.Imaging.Benchmarks/Zorg.Imaging.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Zorg.Imaging.AotSmoke/Zorg.Imaging.AotSmoke.csproj" />
   </Folder>

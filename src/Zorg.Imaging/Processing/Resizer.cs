@@ -1,6 +1,10 @@
 using System;
+using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Threading.Tasks;
 
 namespace Zorg.Imaging.Processing;
 
@@ -171,24 +175,31 @@ internal static class Resizer
     }
 
     /// <summary>One resize, from source rows to output rows.</summary>
+    /// <remarks>
+    /// Rows hold one float per channel, except that RGB is padded to four, so a pixel is one 128-bit vector. Large
+    /// images are split into bands of output rows, resized in parallel; each band reads the few source rows at its
+    /// edges again rather than sharing them.
+    /// </remarks>
     private sealed class Pass
     {
+        // Below this many source and output pixels, threads cost more than they save.
+        private const long ParallelWork = 1 << 18;
+
         private readonly Image _source;
         private readonly Image _result;
-        private readonly TransferFunction _transfer;
         private readonly Weights _x;
         private readonly Weights _y;
         private readonly int _channels;
+        private readonly int _lanes;
         private readonly bool _alpha;
         private readonly bool _sixteen;
         private readonly float[] _toLinear;
-        private readonly float[] _thresholds;
+        private readonly Quantizer _encode;
 
         public Pass(Image source, Image result, TransferFunction transfer, Weights x, Weights y)
         {
             _source = source;
             _result = result;
-            _transfer = transfer;
             _x = x;
             _y = y;
             (_channels, _alpha) = source.PixelFormat switch
@@ -197,66 +208,70 @@ internal static class Resizer
                 PixelFormat.Rgb24 or PixelFormat.Rgb48 => (3, false),
                 _ => (4, true),
             };
+            _lanes = _channels == 1 ? 1 : 4;
             _sixteen = source.PixelFormat is PixelFormat.L16 or PixelFormat.Rgb48 or PixelFormat.Rgba64;
-            int max = _sixteen ? 65535 : 255;
-
-            // Every encoded value is converted once; the samples index the table.
-            _toLinear = new float[max + 1];
-            for (int v = 0; v <= max; v++)
-            {
-                _toLinear[v] = (float)transfer.ToLinear((double)v / max);
-            }
-
-            // 8-bit output: code k when the linear value lies between the linear values of k - 0.5 and k + 0.5, which is
-            // exact rounding in the encoded values without a power function per sample.
-            _thresholds = [];
-            if (!_sixteen)
-            {
-                _thresholds = new float[255];
-                for (int k = 0; k < 255; k++)
-                {
-                    _thresholds[k] = (float)transfer.ToLinear((k + 0.5) / 255);
-                }
-            }
+            _toLinear = transfer.LinearTable(_sixteen);
+            _encode = transfer.Encoder(_sixteen);
         }
 
         public void Run()
         {
-            int sourceWidth = _source.Width;
-            int width = _result.Width;
             int height = _result.Height;
-            int rowLength = width * _channels;
-            float[] linear = new float[sourceWidth * _channels];
-            float[] across = _x.IsIdentity ? linear : new float[rowLength];
-
-            // The output rows a source row adds into are consecutive; the ring holds as many as can be open at once.
             int ring = OpenRows();
-            float[] sums = new float[ring * rowLength];
-            int first = 0;
-            for (int r = 0; r < _source.Height && first < height; r++)
+            long work = ((long)_source.Width * _source.Height) + ((long)_result.Width * height);
+            int bands = work < ParallelWork ? 1 : Math.Clamp(Math.Min(Environment.ProcessorCount, height / 16), 1, 64);
+            if (bands == 1)
             {
-                if (r < _y.Start[first])
+                Band(0, height, ring);
+                return;
+            }
+
+            Parallel.For(0, bands, b => Band((int)((long)height * b / bands), (int)((long)height * (b + 1) / bands), ring));
+        }
+
+        // Output rows [from, to): each source row they need is read, resampled across, and added into the open rows.
+        private void Band(int from, int to, int ring)
+        {
+            int rowLength = _result.Width * _lanes;
+            float[] linear = ArrayPool<float>.Shared.Rent(_source.Width * _lanes);
+            float[] across = _x.IsIdentity ? linear : ArrayPool<float>.Shared.Rent(rowLength);
+            float[] sums = ArrayPool<float>.Shared.Rent(ring * rowLength);
+            sums.AsSpan(0, ring * rowLength).Clear();
+            try
+            {
+                Rows(from, to, ring, rowLength, linear, across, sums);
+            }
+            finally
+            {
+                ArrayPool<float>.Shared.Return(sums);
+                if (!_x.IsIdentity)
                 {
-                    continue;
+                    ArrayPool<float>.Shared.Return(across);
                 }
 
+                ArrayPool<float>.Shared.Return(linear);
+            }
+        }
+
+        private void Rows(int from, int to, int ring, int rowLength, float[] linear, float[] across, float[] sums)
+        {
+            int first = from;
+            int end = _y.Start[to - 1] + _y.Length[to - 1];
+            for (int r = _y.Start[from]; r < end; r++)
+            {
                 ReadRow(r, linear);
                 if (!_x.IsIdentity)
                 {
                     Across(linear, across);
                 }
 
-                for (int y = first; y < height && _y.Start[y] <= r; y++)
+                for (int y = first; y < to && _y.Start[y] <= r; y++)
                 {
                     float w = _y.Values[(y * _y.Stride) + r - _y.Start[y]];
-                    Span<float> sum = sums.AsSpan((y % ring) * rowLength, rowLength);
-                    for (int i = 0; i < sum.Length; i++)
-                    {
-                        sum[i] += w * across[i];
-                    }
+                    AddScaled(sums.AsSpan((y % ring) * rowLength, rowLength), across.AsSpan(0, rowLength), w);
                 }
 
-                while (first < height && _y.Start[first] + _y.Length[first] - 1 <= r)
+                while (first < to && _y.Start[first] + _y.Length[first] - 1 <= r)
                 {
                     Span<float> sum = sums.AsSpan((first % ring) * rowLength, rowLength);
                     WriteRow(first, sum);
@@ -290,6 +305,21 @@ internal static class Resizer
             return most;
         }
 
+        private static void AddScaled(Span<float> sum, ReadOnlySpan<float> row, float w)
+        {
+            int i = 0;
+            var weight = new Vector<float>(w);
+            for (; i <= sum.Length - Vector<float>.Count; i += Vector<float>.Count)
+            {
+                (new Vector<float>(sum[i..]) + (weight * new Vector<float>(row[i..]))).CopyTo(sum[i..]);
+            }
+
+            for (; i < sum.Length; i++)
+            {
+                sum[i] += w * row[i];
+            }
+        }
+
         private void ReadRow(int y, float[] linear)
         {
             Span<byte> bytes = _source.GetRowBytes(y);
@@ -306,22 +336,33 @@ internal static class Resizer
         private void ReadSamples<T>(ReadOnlySpan<T> samples, float[] linear, float unit)
             where T : unmanaged
         {
-            for (int i = 0; i < samples.Length; i += _channels)
+            float[] table = _toLinear;
+            if (_alpha)
             {
-                if (_alpha)
+                for (int i = 0; i + 3 < samples.Length && i + 3 < linear.Length; i += 4)
                 {
                     float a = Sample(samples[i + 3]) * unit;
-                    linear[i] = _toLinear[Sample(samples[i])] * a;
-                    linear[i + 1] = _toLinear[Sample(samples[i + 1])] * a;
-                    linear[i + 2] = _toLinear[Sample(samples[i + 2])] * a;
+                    linear[i] = table[Sample(samples[i])] * a;
+                    linear[i + 1] = table[Sample(samples[i + 1])] * a;
+                    linear[i + 2] = table[Sample(samples[i + 2])] * a;
                     linear[i + 3] = a;
                 }
-                else
+            }
+            else if (_channels == 3)
+            {
+                for (int i = 0, o = 0; i + 2 < samples.Length && o + 3 < linear.Length; i += 3, o += 4)
                 {
-                    for (int k = 0; k < _channels; k++)
-                    {
-                        linear[i + k] = _toLinear[Sample(samples[i + k])];
-                    }
+                    linear[o] = table[Sample(samples[i])];
+                    linear[o + 1] = table[Sample(samples[i + 1])];
+                    linear[o + 2] = table[Sample(samples[i + 2])];
+                    linear[o + 3] = 0;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < samples.Length && i < linear.Length; i++)
+                {
+                    linear[i] = table[Sample(samples[i])];
                 }
             }
         }
@@ -340,21 +381,58 @@ internal static class Resizer
 
         private void Across(float[] linear, float[] across)
         {
-            int c = _channels;
-            for (int x = 0; x < _result.Width; x++)
+            int width = _result.Width;
+            int stride = _x.Stride;
+            int[] starts = _x.Start;
+            int[] lengths = _x.Length;
+            float[] weights = _x.Values;
+            if (_lanes == 4)
             {
-                ReadOnlySpan<float> w = _x.Values.AsSpan(x * _x.Stride, _x.Length[x]);
-                int start = _x.Start[x] * c;
-                for (int k = 0; k < c; k++)
+                // Indices are in range by construction: each window lies inside the source row.
+                ref float source = ref MemoryMarshal.GetArrayDataReference(linear);
+                ref float weight = ref MemoryMarshal.GetArrayDataReference(weights);
+                for (int x = 0; x < width; x++)
                 {
-                    float sum = 0;
-                    for (int j = 0; j < w.Length; j++)
+                    int length = lengths[x];
+                    nuint start = (nuint)starts[x] * 4;
+                    int w = x * stride;
+                    // Four sums, so each multiply-add doesn't wait for the one before it.
+                    Vector128<float> sum0 = Vector128<float>.Zero;
+                    Vector128<float> sum1 = Vector128<float>.Zero;
+                    Vector128<float> sum2 = Vector128<float>.Zero;
+                    Vector128<float> sum3 = Vector128<float>.Zero;
+                    int j = 0;
+                    for (; j + 3 < length; j += 4)
                     {
-                        sum += w[j] * linear[start + (j * c) + k];
+                        nuint at = start + ((nuint)j * 4);
+                        sum0 += Vector128.LoadUnsafe(ref source, at) * Vector128.Create(Unsafe.Add(ref weight, w + j));
+                        sum1 += Vector128.LoadUnsafe(ref source, at + 4) * Vector128.Create(Unsafe.Add(ref weight, w + j + 1));
+                        sum2 += Vector128.LoadUnsafe(ref source, at + 8) * Vector128.Create(Unsafe.Add(ref weight, w + j + 2));
+                        sum3 += Vector128.LoadUnsafe(ref source, at + 12) * Vector128.Create(Unsafe.Add(ref weight, w + j + 3));
                     }
 
-                    across[(x * c) + k] = sum;
+                    for (; j < length; j++)
+                    {
+                        sum0 += Vector128.LoadUnsafe(ref source, start + ((nuint)j * 4)) * Vector128.Create(Unsafe.Add(ref weight, w + j));
+                    }
+
+                    ((sum0 + sum1) + (sum2 + sum3)).CopyTo(across.AsSpan(x * 4, 4));
                 }
+
+                return;
+            }
+
+            for (int x = 0; x < width; x++)
+            {
+                ReadOnlySpan<float> w = weights.AsSpan(x * stride, lengths[x]);
+                ReadOnlySpan<float> s = linear.AsSpan(starts[x], w.Length);
+                float sum = 0;
+                for (int j = 0; j < w.Length; j++)
+                {
+                    sum += w[j] * s[j];
+                }
+
+                across[x] = sum;
             }
         }
 
@@ -362,61 +440,43 @@ internal static class Resizer
         {
             Span<byte> bytes = _result.GetRowBytes(y);
             Span<ushort> wide = _sixteen ? MemoryMarshal.Cast<byte, ushort>(bytes) : default;
+            int width = _result.Width;
             int c = _channels;
-            for (int i = 0; i < sum.Length; i += c)
+            int colours = _alpha ? 3 : c;
+            float max = _sixteen ? 65535 : 255;
+            for (int x = 0; x < width; x++)
             {
+                int i = x * _lanes;
+                int o = x * c;
                 float scale = 1;
                 if (_alpha)
                 {
                     float a = Math.Clamp(sum[i + 3], 0f, 1f);
                     scale = a > 0 ? 1 / a : 0;
-                    Put(bytes, wide, i + 3, a, encode: false);
+                    int alpha = (int)MathF.Round(a * max);
+                    if (_sixteen)
+                    {
+                        wide[o + 3] = (ushort)alpha;
+                    }
+                    else
+                    {
+                        bytes[o + 3] = (byte)alpha;
+                    }
                 }
 
-                int colours = _alpha ? 3 : c;
                 for (int k = 0; k < colours; k++)
                 {
-                    Put(bytes, wide, i + k, Math.Clamp(sum[i + k] * scale, 0f, 1f), encode: true);
+                    int code = _encode.Encode(sum[i + k] * scale);
+                    if (_sixteen)
+                    {
+                        wide[o + k] = (ushort)code;
+                    }
+                    else
+                    {
+                        bytes[o + k] = (byte)code;
+                    }
                 }
             }
-        }
-
-        private void Put(Span<byte> bytes, Span<ushort> wide, int index, float value, bool encode)
-        {
-            if (_sixteen)
-            {
-                double v = encode ? _transfer.FromLinear(value) : value;
-                wide[index] = (ushort)Math.Round(Math.Clamp(v, 0, 1) * 65535);
-            }
-            else if (encode)
-            {
-                bytes[index] = (byte)Code(value);
-            }
-            else
-            {
-                bytes[index] = (byte)Math.Round(value * 255);
-            }
-        }
-
-        // The number of thresholds at or below the value: its 8-bit code.
-        private int Code(float value)
-        {
-            int low = 0;
-            int high = _thresholds.Length;
-            while (low < high)
-            {
-                int mid = (low + high) >> 1;
-                if (_thresholds[mid] <= value)
-                {
-                    low = mid + 1;
-                }
-                else
-                {
-                    high = mid;
-                }
-            }
-
-            return low;
         }
     }
 }

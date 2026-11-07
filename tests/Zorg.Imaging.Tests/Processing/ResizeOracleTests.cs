@@ -14,27 +14,31 @@ namespace Zorg.Imaging.Tests.Processing;
 /// </summary>
 public class ResizeOracleTests
 {
-    public static TheoryData<string, string, int, int, bool> Cases()
+    public static TheoryData<string, string, int, int, bool, int> Cases()
     {
-        var data = new TheoryData<string, string, int, int, bool>();
+        var data = new TheoryData<string, string, int, int, bool, int>();
         (string Ours, string Theirs)[] filters = [("Bilinear", "Triangle"), ("Catmull-Rom", "Catrom"), ("Mitchell", "Mitchell"), ("Lanczos3", "Lanczos")];
         foreach ((string ours, string theirs) in filters)
         {
-            data.Add(ours, theirs, 23, 17, true);
-            data.Add(ours, theirs, 7, 30, false);
-            data.Add(ours, theirs, 151, 97, true);
+            data.Add(ours, theirs, 23, 17, true, 64);
+            data.Add(ours, theirs, 7, 30, false, 64);
+            data.Add(ours, theirs, 151, 97, true, 64);
         }
+
+        // Large enough to be split into bands that run in parallel.
+        data.Add("Lanczos3", "Lanczos", 211, 157, true, 800);
+        data.Add("Mitchell", "Mitchell", 1203, 901, false, 800);
 
         return data;
     }
 
     [Theory]
     [MemberData(nameof(Cases))]
-    public async Task Resizing_matches_ImageMagick(string ours, string theirs, int width, int height, bool alpha)
+    public async Task Resizing_matches_ImageMagick(string ours, string theirs, int width, int height, bool alpha, int sourceWidth)
     {
         string magick = Oracle.Require("magick");
         using Oracle.TempFolder folder = Oracle.CreateFolder();
-        using Image source = Photo(64, 48, alpha);
+        using Image source = Photo(sourceWidth, sourceWidth * 3 / 4, alpha);
         await File.WriteAllBytesAsync(folder.File("in.png"), PngEncoderTests.Save(source), TestContext.Current.CancellationToken);
 
         bool shrinking = width < source.Width || height < source.Height;

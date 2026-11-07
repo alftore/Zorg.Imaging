@@ -21,6 +21,12 @@ Rules:
 | xunit.v3 4.0.2 | Apache-2.0 | Test framework | Low. |
 | coverlet.MTP 10.1.0 | MIT | Coverage | Low. |
 
+## Benchmarks (not shipped)
+
+| Package | Licence | Why | Risk |
+|---|---|---|---|
+| BenchmarkDotNet 0.15.8 | MIT (checked in the `.nuspec`) | Measures speed and allocations | Low. Its own dependencies are only in the benchmark project; nothing reaches `src/`. |
+
 ## Considered and rejected
 
 | Package | Reason |
