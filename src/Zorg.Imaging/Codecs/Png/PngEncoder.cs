@@ -69,14 +69,14 @@ internal static class PngEncoder
             previous.AsSpan(0, rowBytes).Clear();
             for (int y = 0; y < image.Height; y++)
             {
-                FilterRow(image, y, raw.AsSpan(0, rowBytes), previous.AsSpan(0, rowBytes), bytesPerPixel, options.CompressionLevel, best, trial);
+                byte[] chosen = FilterRow(image, y, raw.AsSpan(0, rowBytes), previous.AsSpan(0, rowBytes), bytesPerPixel, options.CompressionLevel, best, trial);
                 if (sync)
                 {
-                    zlib.Write(best, 0, rowBytes + 1);
+                    zlib.Write(chosen, 0, rowBytes + 1);
                 }
                 else
                 {
-                    await zlib.WriteAsync(best.AsMemory(0, rowBytes + 1), cancellationToken).ConfigureAwait(false);
+                    await zlib.WriteAsync(chosen.AsMemory(0, rowBytes + 1), cancellationToken).ConfigureAwait(false);
                 }
 
                 (raw, previous) = (previous, raw);
@@ -107,7 +107,8 @@ internal static class PngEncoder
         }
     }
 
-    private static void FilterRow(
+    // Fills `raw` and returns the buffer (best or trial) that holds the chosen filter byte and filtered row.
+    private static byte[] FilterRow(
         Image image, int y, Span<byte> raw, ReadOnlySpan<byte> previous, int bytesPerPixel, int level, byte[] best, byte[] trial)
     {
         ReadOnlySpan<byte> pixels = image.GetRowBytes(y);
@@ -139,21 +140,23 @@ internal static class PngEncoder
         raw.CopyTo(best.AsSpan(1));
         if (level == 0)
         {
-            return;
+            return best;
         }
 
-        long bestScore = Score(best.AsSpan(1, raw.Length));
+        // Each filter scored in the same pass that applies it; the winner swaps into `best`, so nothing is copied.
+        long bestScore = PngFilters.Score(raw);
         for (int filter = 1; filter <= 4; filter++)
         {
-            PngFilters.Filter(filter, raw, previous, bytesPerPixel, trial.AsSpan(1, raw.Length));
-            long score = Score(trial.AsSpan(1, raw.Length));
+            long score = PngFilters.FilterAndScore(filter, raw, previous, bytesPerPixel, trial.AsSpan(1, raw.Length));
             if (score < bestScore)
             {
                 bestScore = score;
                 trial[0] = (byte)filter;
-                trial.AsSpan(0, raw.Length + 1).CopyTo(best);
+                (best, trial) = (trial, best);
             }
         }
+
+        return best;
     }
 
     /// <summary>
@@ -218,17 +221,6 @@ internal static class PngEncoder
         data.CopyTo(chunk.AsSpan(8));
         PngChunkWriter.Frame(chunk, type, data.Length);
         output.Write(chunk);
-    }
-
-    private static long Score(ReadOnlySpan<byte> filtered)
-    {
-        long sum = 0;
-        foreach (byte b in filtered)
-        {
-            sum += Math.Abs((int)(sbyte)b);
-        }
-
-        return sum;
     }
 
     internal static ValueTask WriteAsync(Stream output, ReadOnlyMemory<byte> data, bool sync, CancellationToken cancellationToken)
