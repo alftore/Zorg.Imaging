@@ -58,6 +58,17 @@ while [ "$n" -lt "${ZORG_GATE_REPEAT:-1}" ]; do
   run_tests tests/Zorg.Imaging.Tests 900 /tmp/unit.log
 done
 
+# The SIMD fallbacks: the same tests with AVX-512, then AVX2, then every hardware intrinsic switched off, so each
+# narrower path and the scalar code run too (D13). Results must not change.
+if [ "${ZORG_GATE_FALLBACKS:-0}" = 1 ]; then
+  for knob in DOTNET_EnableAVX512F DOTNET_EnableAVX2 DOTNET_EnableHWIntrinsic; do
+    step "Unit tests with $knob=0"
+    export "$knob=0"
+    run_tests tests/Zorg.Imaging.Tests 1200 "/tmp/unit-$knob.log"
+    unset "$knob"
+  done
+fi
+
 if [ "${ZORG_GATE_AOT:-0}" = 1 ]; then
   step "Native AOT publish"
   if [ "$(uname -m)" = aarch64 ]; then arch=arm64; else arch=x64; fi

@@ -6,18 +6,19 @@ using BenchmarkDotNet.Attributes;
 namespace Zorg.Imaging.Benchmarks;
 
 /// <summary>
-/// Decoding a 12-megapixel phone-sized JPEG, whole and as a thumbnail through the pipeline (shrink-on-load). The files
-/// aren't in the repository: set <c>ZORG_BENCH_JPEG_DIR</c> to a folder with <c>photo.jpg</c> (baseline) and
-/// <c>photo-progressive.jpg</c>, 4000 x 3000, for example made with ImageMagick and cjpeg in the gate image.
+/// Every codec on the same 12-megapixel photo, and the pipeline's thumbnail and web sizes. The files aren't in the
+/// repository: <c>scripts/make-bench-files.sh</c> makes them, with the native tools' times beside them, and
+/// <c>ZORG_BENCH_JPEG_DIR</c> names their folder.
 /// </summary>
 [MemoryDiagnoser]
-public class JpegBenchmarks
+public class CodecBenchmarks
 {
     private byte[] _baseline = [];
     private byte[] _progressive = [];
     private Image _decoded = null!;
     private byte[] _lossless = [];
     private byte[] _lossy = [];
+    private byte[] _png = [];
 
     [GlobalSetup]
     public void Setup()
@@ -31,6 +32,28 @@ public class JpegBenchmarks
         _lossless = File.Exists(lossless) ? File.ReadAllBytes(lossless) : [];
         string lossy = Path.Combine(folder, "photo-lossy.webp");
         _lossy = File.Exists(lossy) ? File.ReadAllBytes(lossy) : [];
+        string png = Path.Combine(folder, "photo.png");
+        _png = File.Exists(png) ? File.ReadAllBytes(png) : [];
+    }
+
+    [Benchmark]
+    public int Decode_Png()
+    {
+        if (_png.Length == 0)
+        {
+            return 0;
+        }
+
+        using Image image = Image.Decode(_png);
+        return image.Width;
+    }
+
+    [Benchmark]
+    public int Encode_Png()
+    {
+        using var output = new MemoryStream();
+        _decoded.SaveAsPng(output);
+        return (int)output.Length;
     }
 
     /// <summary>A lossy WebP of the same photo (<c>photo-lossy.webp</c>, from <c>cwebp -q 80</c>), when present.</summary>

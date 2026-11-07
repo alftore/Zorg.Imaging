@@ -164,7 +164,7 @@ internal sealed class JpegComponent(int id, int h, int v, int quantisationTable)
 
     public int UsedHigh => JpegFrame.DivideUp(SamplesHigh, 8);
 
-    /// <summary>Every block's 64 coefficients in zigzag order, as decoded (not yet multiplied by the quantisation).</summary>
+    /// <summary>Every block's 64 coefficients in natural (row-major) order, as decoded (not yet multiplied by the quantisation).</summary>
     public short[] Coefficients { get; private set; } = [];
 
     /// <summary>The quantisation table, copied when the component's first scan starts.</summary>

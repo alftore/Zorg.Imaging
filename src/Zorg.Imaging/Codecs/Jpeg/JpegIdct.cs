@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -37,16 +38,28 @@ internal static class JpegIdct
     private static readonly float[][] Basis = [Make(1), Make(2), [], Make(4), [], [], [], Make(8)];
 
     /// <summary>Turns one block of quantised coefficients into samples.</summary>
-    /// <param name="coefficients">The 64 coefficients in zigzag order, as decoded.</param>
-    /// <param name="quantisation">The 64 quantisation values in zigzag order.</param>
+    /// <param name="coefficients">The 64 coefficients in natural (row-major) order, as decoded.</param>
+    /// <param name="quantisation">The 64 quantisation values in natural order.</param>
     /// <param name="wide">The samples across: 8, 4, 2 or 1.</param>
     /// <param name="high">The samples down: 8, 4, 2 or 1.</param>
     /// <param name="output">Where row 0 of the samples goes.</param>
     /// <param name="stride">The distance between rows in <paramref name="output"/>.</param>
-    public static void Transform(ReadOnlySpan<short> coefficients, ReadOnlySpan<ushort> quantisation, int wide, int high, Span<byte> output, int stride)
+    public static void Transform(ReadOnlySpan<short> coefficients, ReadOnlySpan<float> quantisation, int wide, int high, Span<byte> output, int stride)
     {
+        // Which rows of coefficients have anything in them, from one compare per row; the DC is masked out of row 0.
+        ReadOnlySpan<Vector128<short>> rows = MemoryMarshal.Cast<short, Vector128<short>>(coefficients[..64]);
+        int used = 0;
+        for (int v = 0; v < 8; v++)
+        {
+            Vector128<short> row = v == 0 ? rows[0] & Vector128.Create(0, -1, -1, -1, -1, -1, -1, -1) : rows[v];
+            if (row != Vector128<short>.Zero)
+            {
+                used |= 1 << v;
+            }
+        }
+
         // Only DC: the block is flat, at any size.
-        if (!HasAc(coefficients))
+        if (used == 0)
         {
             byte flat = Clamp((coefficients[0] * quantisation[0] / 8f) + 128);
             for (int y = 0; y < high; y++)
@@ -57,91 +70,82 @@ internal static class JpegIdct
             return;
         }
 
-        Span<float> block = stackalloc float[64];
-        block.Clear();
-        for (int k = 0; k < 64; k++)
+        // Dequantise row by row as vectors: 8 shorts widened to floats, times the row's quantisation.
+        used |= 1;
+        Span<Vector256<float>> block = stackalloc Vector256<float>[8];
+        ReadOnlySpan<Vector256<float>> q = MemoryMarshal.Cast<float, Vector256<float>>(quantisation[..64]);
+        for (int v = 0; v < 8; v++)
         {
-            if (coefficients[k] != 0)
+            if ((used & (1 << v)) == 0)
             {
-                block[ZigZag[k]] = coefficients[k] * quantisation[k];
+                block[v] = Vector256<float>.Zero;
+                continue;
             }
+
+            Vector128<short> row = rows[v];
+            Vector256<int> wideRow = Vector256.Create(Vector128.WidenLower(row), Vector128.WidenUpper(row));
+            block[v] = Vector256.ConvertToSingle(wideRow) * q[v];
         }
 
         if (wide == 8 && high == 8)
         {
-            Transform8(block, output, stride);
+            Transform8(block, used, output, stride);
         }
         else
         {
-            TransformReduced(block, wide, high, output, stride);
+            TransformReduced(MemoryMarshal.Cast<Vector256<float>, float>(block), wide, high, output, stride);
         }
     }
 
-    private static bool HasAc(ReadOnlySpan<short> coefficients)
-    {
-        // Eight 128-bit loads cover the 64 coefficients; the DC is masked out of the first.
-        ReadOnlySpan<Vector128<short>> vectors = MemoryMarshal.Cast<short, Vector128<short>>(coefficients[..64]);
-        Vector128<short> any = vectors[0] & Vector128.Create(0, -1, -1, -1, -1, -1, -1, -1);
-        for (int i = 1; i < 8; i++)
-        {
-            any |= vectors[i];
-        }
-
-        return any != Vector128<short>.Zero;
-    }
-
-    private static void Transform8(Span<float> block, Span<byte> output, int stride)
+    private static void Transform8(ReadOnlySpan<Vector256<float>> block, int used, Span<byte> output, int stride)
     {
         ReadOnlySpan<Vector256<float>> basis = MemoryMarshal.Cast<float, Vector256<float>>(Basis[7]);
         Span<Vector256<float>> rows = stackalloc Vector256<float>[8];
-        int used = 0;
 
-        // Across: row v becomes Σu F(v, u) · basis row u.
+        // Across: row v becomes the sum over u of F(v, u) times basis row u.
         for (int v = 0; v < 8; v++)
         {
-            ReadOnlySpan<float> f = block.Slice(v * 8, 8);
-            Vector256<float> sum = Vector256<float>.Zero;
-            bool any = false;
-            for (int u = 0; u < 8; u++)
+            if ((used & (1 << v)) == 0)
             {
-                if (f[u] != 0)
-                {
-                    sum += basis[u] * f[u];
-                    any = true;
-                }
+                continue;
             }
 
+            // Each coefficient broadcast straight from memory, which is cheaper than taking it out of a register.
+            ReadOnlySpan<float> f = MemoryMarshal.Cast<Vector256<float>, float>(block.Slice(v, 1));
+            Vector256<float> sum = basis[0] * f[0];
+            sum += basis[1] * f[1];
+            sum += basis[2] * f[2];
+            sum += basis[3] * f[3];
+            sum += basis[4] * f[4];
+            sum += basis[5] * f[5];
+            sum += basis[6] * f[6];
+            sum += basis[7] * f[7];
             rows[v] = sum;
-            if (any)
-            {
-                used |= 1 << v;
-            }
         }
 
-        // Down: output row y is Σv basis(v, y) · row v.
+        // Down: output row y is the sum over v of basis(v, y) times row v; then round, clamp to 0..255 and narrow
+        // eight samples at once.
         float[] b = Basis[7];
-        Span<float> samples = stackalloc float[8];
+        Vector256<float> half = Vector256.Create(128.5f);
+        Vector256<int> top = Vector256.Create(255);
         for (int y = 0; y < 8; y++)
         {
-            Vector256<float> sum = Vector256.Create(128f);
-            for (int v = 0; v < 8; v++)
+            Vector256<float> sum = half;
+            for (int remaining = used; remaining != 0; remaining &= remaining - 1)
             {
-                if ((used & (1 << v)) != 0)
-                {
-                    sum += rows[v] * b[(v * 8) + y];
-                }
+                int v = BitOperations.TrailingZeroCount(remaining);
+                sum += rows[v] * b[(v * 8) + y];
             }
 
-            sum.CopyTo(samples);
-            Span<byte> row = output.Slice(y * stride, 8);
-            for (int x = 0; x < 8; x++)
-            {
-                row[x] = Clamp(samples[x]);
-            }
+            // Floor of (value + 0.5) is round-half-up; values here are never far below zero.
+            Vector256<int> ints = Vector256.Min(Vector256.Max(Vector256.ConvertToInt32(Vector256.Floor(sum)), Vector256<int>.Zero), top);
+            Vector128<short> shorts = Vector128.Narrow(ints.GetLower(), ints.GetUpper());
+            Vector128<byte> bytes = Vector128.Narrow(shorts.AsUInt16(), shorts.AsUInt16());
+            MemoryMarshal.Write(output.Slice(y * stride, 8), bytes.AsUInt64().ToScalar());
         }
     }
 
-    private static void TransformReduced(Span<float> block, int wide, int high, Span<byte> output, int stride)
+    private static void TransformReduced(ReadOnlySpan<float> block, int wide, int high, Span<byte> output, int stride)
     {
         float[] across = Basis[wide - 1];
         float[] down = Basis[high - 1];

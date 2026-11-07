@@ -233,6 +233,7 @@ internal static class JpegDecoder
                 }
             }
 
+            data.Pad();
             scan.Decode(new JpegBitReader(data.Buffer, data.Length, data.Restarts));
         }
         finally
@@ -526,10 +527,28 @@ internal static class JpegDecoder
             }
         }
 
+        /// <summary>Puts the zero bytes the bit reader needs after the data (JpegBitReader.Padding).</summary>
+        public void Pad()
+        {
+            EnsureRoom(JpegBitReader.Padding);
+            Buffer.AsSpan(Length, JpegBitReader.Padding).Clear();
+        }
+
         public void Dispose()
         {
             ArrayPool<byte>.Shared.Return(Buffer);
             Buffer = [];
+        }
+
+        private void EnsureRoom(int more)
+        {
+            if (Length + more > Buffer.Length)
+            {
+                byte[] larger = ArrayPool<byte>.Shared.Rent((int)Math.Min(Math.Max((long)Buffer.Length * 2, (long)Length + more), Array.MaxLength));
+                Buffer.AsSpan(0, Length).CopyTo(larger);
+                ArrayPool<byte>.Shared.Return(Buffer);
+                Buffer = larger;
+            }
         }
 
         private void Add(ReadOnlySpan<byte> bytes, long cap)
@@ -539,14 +558,7 @@ internal static class JpegDecoder
                 throw ImageErrors.Corrupt("A JPEG scan has more data than its blocks could use.");
             }
 
-            if (Length + bytes.Length > Buffer.Length)
-            {
-                byte[] larger = ArrayPool<byte>.Shared.Rent((int)Math.Min(Math.Max((long)Buffer.Length * 2, Length + bytes.Length), Array.MaxLength));
-                Buffer.AsSpan(0, Length).CopyTo(larger);
-                ArrayPool<byte>.Shared.Return(Buffer);
-                Buffer = larger;
-            }
-
+            EnsureRoom(bytes.Length);
             bytes.CopyTo(Buffer.AsSpan(Length));
             Length += bytes.Length;
         }

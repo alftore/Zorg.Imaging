@@ -9,6 +9,10 @@ namespace Zorg.Imaging.Codecs.Jpeg;
 /// </summary>
 internal sealed class JpegScan
 {
+    // Coefficients are stored in natural (row-major) order, so the inverse DCT can load them as vectors; the
+    // entropy-coded order is zigzag (T.81, Figure A.6), and this maps one to the other.
+    private static ReadOnlySpan<byte> ZigZag => JpegIdct.ZigZag;
+
     private readonly JpegFrame _frame;
     private readonly JpegComponent[] _components;
     private readonly int _start;
@@ -107,6 +111,12 @@ internal sealed class JpegScan
 
     private void DecodeBlock(JpegBitReader bits, JpegComponent component, Span<short> block)
     {
+        DecodeBlockCore(bits, component, block);
+        bits.CheckEnd();
+    }
+
+    private void DecodeBlockCore(JpegBitReader bits, JpegComponent component, Span<short> block)
+    {
         if (!_frame.Progressive)
         {
             DecodeSequential(bits, component, block);
@@ -132,29 +142,85 @@ internal sealed class JpegScan
         }
     }
 
+    // The hot loop of baseline decoding: the bit buffer lives in locals, codes of up to 9 bits (and most AC
+    // coefficients with their value bits) decode with one table lookup, and the reader is only called for longer codes.
     private static void DecodeSequential(JpegBitReader bits, JpegComponent component, Span<short> block)
     {
-        component.DcPredictor += DecodeDcDifference(bits, component.Dc!);
+        (ulong buffer, int count, int position) = bits.State;
+        byte[] data = bits.Data;
+        int length = bits.Length;
+        const int Shift = 64 - JpegHuffman.FastBits;
+
+        // DC: a size category, then that many bits of difference.
+        if (count < 32)
+        {
+            JpegBitReader.Refill(ref buffer, ref count, ref position, data, length);
+        }
+
+        JpegHuffman dc = component.Dc!;
+        int dcSize;
+        int fastDc = dc.Fast[(int)(buffer >> Shift)];
+        if (fastDc != 0)
+        {
+            buffer <<= fastDc >> 8;
+            count -= fastDc >> 8;
+            dcSize = fastDc & 0xFF;
+        }
+        else
+        {
+            bits.Store(buffer, count, position);
+            dcSize = dc.Decode(bits);
+            (buffer, count, position) = bits.State;
+        }
+
+        if (dcSize > 11)
+        {
+            throw ImageErrors.Corrupt("The JPEG image data has a DC difference of more than 11 bits.");
+        }
+
+        if (dcSize > 0)
+        {
+            if (count < dcSize)
+            {
+                JpegBitReader.Refill(ref buffer, ref count, ref position, data, length);
+            }
+
+            int raw = (int)(buffer >> (64 - dcSize));
+            buffer <<= dcSize;
+            count -= dcSize;
+            component.DcPredictor += raw < (1 << (dcSize - 1)) ? raw - (1 << dcSize) + 1 : raw;
+        }
+
         block[0] = (short)component.DcPredictor;
         JpegHuffman ac = component.Ac!;
         int[] fast = ac.FastAc;
+        ReadOnlySpan<byte> zigZag = ZigZag;
         for (int k = 1; k < 64;)
         {
-            int entry = fast[bits.Peek16() >> (16 - JpegHuffman.FastBits)];
+            if (count < 32)
+            {
+                JpegBitReader.Refill(ref buffer, ref count, ref position, data, length);
+            }
+
+            int entry = fast[(int)(buffer >> Shift)];
             if (entry != 0)
             {
-                bits.Skip(entry & 0xFF);
+                int used = entry & 0xFF;
+                buffer <<= used;
+                count -= used;
                 k += (entry >> 8) & 15;
                 if (k > 63)
                 {
                     throw ImageErrors.Corrupt("The JPEG image data has a coefficient outside its block.");
                 }
 
-                block[k++] = (short)(entry >> 16);
+                block[zigZag[k++]] = (short)(entry >> 16);
                 continue;
             }
 
+            bits.Store(buffer, count, position);
             int rs = ac.Decode(bits);
+            (buffer, count, position) = bits.State;
             int run = rs >> 4;
             int size = rs & 15;
             if (size == 0)
@@ -174,8 +240,19 @@ internal sealed class JpegScan
                 throw ImageErrors.Corrupt("The JPEG image data has a coefficient outside its block.");
             }
 
-            block[k++] = (short)bits.ReadSigned(size);
+            // At most 16 bits went on the code, so 16 or more remain for the value's 10.
+            if (count < size)
+            {
+                JpegBitReader.Refill(ref buffer, ref count, ref position, data, length);
+            }
+
+            int value = (int)(buffer >> (64 - size));
+            buffer <<= size;
+            count -= size;
+            block[zigZag[k++]] = (short)(value < (1 << (size - 1)) ? value - (1 << size) + 1 : value);
         }
+
+        bits.Store(buffer, count, position);
     }
 
     private static int DecodeDcDifference(JpegBitReader bits, JpegHuffman dc)
@@ -228,7 +305,7 @@ internal sealed class JpegScan
                 throw ImageErrors.Corrupt("The JPEG image data has a coefficient outside its spectral band.");
             }
 
-            block[k++] = (short)(bits.ReadSigned(size) * (1 << _low));
+            block[ZigZag[k++]] = (short)(bits.ReadSigned(size) * (1 << _low));
         }
     }
 
@@ -267,9 +344,9 @@ internal sealed class JpegScan
 
                 while (k <= _end)
                 {
-                    if (block[k] != 0)
+                    if (block[ZigZag[k]] != 0)
                     {
-                        Correct(bits, ref block[k], plus, minus);
+                        Correct(bits, ref block[ZigZag[k]], plus, minus);
                     }
                     else
                     {
@@ -277,7 +354,7 @@ internal sealed class JpegScan
                         {
                             if (value != 0)
                             {
-                                block[k] = (short)value;
+                                block[ZigZag[k]] = (short)value;
                             }
 
                             k++;
@@ -297,9 +374,9 @@ internal sealed class JpegScan
             // The rest of the band has no new coefficients, only corrections to those already there.
             for (; k <= _end; k++)
             {
-                if (block[k] != 0)
+                if (block[ZigZag[k]] != 0)
                 {
-                    Correct(bits, ref block[k], plus, minus);
+                    Correct(bits, ref block[ZigZag[k]], plus, minus);
                 }
             }
 

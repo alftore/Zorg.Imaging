@@ -101,8 +101,9 @@ internal static class JpegOutput
         ReadOnlySpan<byte> c2 = rows[2];
         if (format == PixelFormat.Rgb24 && !isRgb)
         {
-            // The usual case, without the per-pixel format switch.
-            for (int x = 0, o = 0; x < width; x++, o += 3)
+            // The usual case: 16 pixels at a time where the hardware allows, then the rest one by one.
+            int done = JpegColour.YccToRgb24(c0, c1, c2, output, width);
+            for (int x = done, o = 3 * done; x < width; x++, o += 3)
             {
                 int luma = c0[x];
                 int cb = c1[x] - 128;
@@ -211,7 +212,14 @@ internal static class JpegOutput
             };
             int rows = component.UsedHigh * high;
             plane._samples = ArrayPool<byte>.Shared.Rent(plane._stride * rows);
-            ushort[] quantisation = component.Quantisation ?? new ushort[64];
+            // The quantisation table, stored in zigzag order, in natural order as floats for the transform.
+            ushort[] zigzag = component.Quantisation ?? new ushort[64];
+            float[] quantisation = new float[64];
+            for (int k = 0; k < 64; k++)
+            {
+                quantisation[JpegIdct.ZigZag[k]] = zigzag[k];
+            }
+
             byte[] samples = plane._samples;
             int stride = plane._stride;
 
@@ -269,14 +277,11 @@ internal static class JpegOutput
                 return;
             }
 
-            for (int x = 0; x < output.Length; x++)
-            {
-                int i = x >> 1;
-                int j = Math.Clamp(i + ((x & 1) == 0 ? -1 : 1), 0, last);
-                int columnI = _factorY == 2 ? (3 * nearRow[i]) + farRow[i] : 4 * nearRow[i];
-                int columnJ = _factorY == 2 ? (3 * nearRow[j]) + farRow[j] : 4 * nearRow[j];
-                output[x] = (byte)(((3 * columnI) + columnJ + 8) >> 4);
-            }
+            // Each column sum once, then each output pixel from its own and its neighbour's.
+            int columns = (output.Length + 1) >> 1;
+            Span<short> sums = columns <= 4096 ? stackalloc short[columns] : new short[columns];
+            JpegColour.ColumnSums(nearRow[..columns], _factorY == 2 ? farRow[..columns] : nearRow[..columns], _factorY == 2, sums);
+            JpegColour.UpsampleTwice(sums, output);
         }
 
         public void Dispose()

@@ -31,6 +31,9 @@ internal sealed class JpegHuffman
     /// </summary>
     public int[] FastAc { get; } = new int[1 << FastBits];
 
+    /// <summary>Indexed by the next <see cref="FastBits"/> bits: the code length in the high byte and the value in the low; 0 when longer.</summary>
+    public ushort[] Fast => _fast;
+
     /// <summary>Builds a table.</summary>
     /// <param name="counts">How many codes there are of each length, 1 to 16.</param>
     /// <param name="values">The values, in code order.</param>
