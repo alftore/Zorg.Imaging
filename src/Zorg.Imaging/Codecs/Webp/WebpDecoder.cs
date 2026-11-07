@@ -10,12 +10,12 @@ using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging.Codecs.Webp;
 
-/// <summary>Decodes a WebP file: the RIFF container (RFC 9649, section 2) and its lossless image.</summary>
+/// <summary>Decodes a WebP file: the RIFF container (RFC 9649, section 2) and its lossy (VP8) or lossless (VP8L) image.</summary>
 /// <remarks>
 /// <para>
-/// The simple form (one VP8L chunk) and the extended form (VP8X): an ICC profile becomes the colour space, EXIF
-/// orientation is applied as for JPEG, and an animation gives its first frame on a transparent canvas. Lossy (VP8)
-/// images throw <see cref="UnsupportedImageFormatException"/> for now.
+/// The simple form (one VP8 or VP8L chunk) and the extended form (VP8X): lossy images with or without an ALPH chunk,
+/// an ICC profile as the colour space, EXIF orientation applied as for JPEG, and an animation's first frame on a
+/// transparent canvas.
 /// </para>
 /// <para>
 /// Hostile input: the canvas and image sizes are checked against <see cref="ImageLimits.MaxPixels"/> before anything
@@ -44,7 +44,7 @@ internal static class WebpDecoder
         Picture picture = fourCc switch
         {
             "VP8L" => await file.ReadLosslessAsync(size, expectedWidth: 0, expectedHeight: 0, cancellationToken).ConfigureAwait(false),
-            "VP8 " => throw Lossy(),
+            "VP8 " => await file.ReadLossyAsync(size, alpha: null, expectedWidth: 0, expectedHeight: 0, cancellationToken).ConfigureAwait(false),
             "VP8X" => await file.ReadExtendedAsync(size, cancellationToken).ConfigureAwait(false),
             _ => throw ImageErrors.Corrupt("The WebP file's first chunk isn't VP8, VP8L or VP8X."),
         };
@@ -70,8 +70,6 @@ internal static class WebpDecoder
 
         return image;
     }
-
-    private static UnsupportedImageFormatException Lossy() => new("Lossy WebP (VP8) isn't supported yet; lossless WebP is.", ImageFormat.Webp);
 
     private static void CheckSize(int width, int height, ImageLimits limits)
     {
@@ -208,6 +206,42 @@ internal static class WebpDecoder
             return new Picture(width, height, Vp8lDecoder.Decode(data, width, height), alpha);
         }
 
+        public async ValueTask<Picture> ReadLossyAsync(uint size, byte[]? alpha, int expectedWidth, int expectedHeight, CancellationToken cancellationToken)
+        {
+            ReadOnlyMemory<byte> peek = await reader.PeekAsync(10, cancellationToken).ConfigureAwait(false);
+            (int width, int height) = Vp8Decoder.ReadSize(peek.Span[..(int)Math.Min(size, (uint)peek.Length)]);
+            if (expectedWidth != 0 && (width != expectedWidth || height != expectedHeight))
+            {
+                throw ImageErrors.Corrupt("The WebP lossy image's size doesn't match the canvas or frame.");
+            }
+
+            CheckSize(width, height, options.Limits);
+            byte[] data = await ReadPayloadAsync(size, width, height, cancellationToken).ConfigureAwait(false);
+            return new Picture(width, height, WebpLossy.Decode(data, alpha, width, height), HasAlpha: alpha is not null);
+        }
+
+        private async ValueTask<byte[]> ReadAlphaAsync(uint size, int width, int height, CancellationToken cancellationToken) =>
+            await ReadPayloadAsync(size, width, height, cancellationToken).ConfigureAwait(false);
+
+        // A chunk's data, refused when it's larger than its image could usefully need; then its pad byte.
+        private async ValueTask<byte[]> ReadPayloadAsync(uint size, int width, int height, CancellationToken cancellationToken)
+        {
+            long cap = ((long)width * height * 8) + (1 << 16);
+            if (size > cap)
+            {
+                throw ImageErrors.Corrupt("A WebP image chunk is larger than its image could need.");
+            }
+
+            byte[] data = new byte[size];
+            await reader.ReadExactlyAsync(data, cancellationToken).ConfigureAwait(false);
+            if ((size & 1) != 0 && reader.Position < end)
+            {
+                await reader.SkipAsync(1, cancellationToken).ConfigureAwait(false);
+            }
+
+            return data;
+        }
+
         public async ValueTask<Picture> ReadExtendedAsync(uint size, CancellationToken cancellationToken)
         {
             if (size < 10)
@@ -223,6 +257,7 @@ internal static class WebpDecoder
             CheckSize(width, height, options.Limits);
 
             Picture? picture = null;
+            byte[]? alpha = null;
             bool wantExif = (flags & ExifFlag) != 0;
             while (reader.Position + 8 <= end && (picture is null || wantExif))
             {
@@ -248,8 +283,13 @@ internal static class WebpDecoder
                         picture = await ReadLosslessAsync(chunkSize, width, height, cancellationToken).ConfigureAwait(false);
                         break;
 
-                    case "VP8 " or "ALPH" when picture is null:
-                        throw Lossy();
+                    case "ALPH" when picture is null:
+                        alpha = await ReadAlphaAsync(chunkSize, width, height, cancellationToken).ConfigureAwait(false);
+                        break;
+
+                    case "VP8 " when picture is null:
+                        picture = await ReadLossyAsync(chunkSize, alpha, width, height, cancellationToken).ConfigureAwait(false);
+                        break;
 
                     case "ANMF" when picture is null && (flags & AnimationFlag) != 0:
                         picture = await ReadFirstFrameAsync(chunkSize, width, height, cancellationToken).ConfigureAwait(false);
@@ -303,6 +343,7 @@ internal static class WebpDecoder
 
             long frameEnd = reader.Position + size - 16;
             Picture? frame = null;
+            byte[]? alpha = null;
             while (frame is null && reader.Position + 8 <= frameEnd)
             {
                 (string fourCc, uint chunkSize) = await NextChunkAsync(cancellationToken).ConfigureAwait(false);
@@ -311,8 +352,12 @@ internal static class WebpDecoder
                     case "VP8L":
                         frame = await ReadLosslessAsync(chunkSize, width, height, cancellationToken).ConfigureAwait(false);
                         break;
-                    case "VP8 " or "ALPH":
-                        throw Lossy();
+                    case "ALPH":
+                        alpha = await ReadAlphaAsync(chunkSize, width, height, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case "VP8 ":
+                        frame = await ReadLossyAsync(chunkSize, alpha, width, height, cancellationToken).ConfigureAwait(false);
+                        break;
                     default:
                         await SkipChunkAsync(chunkSize, cancellationToken).ConfigureAwait(false);
                         break;

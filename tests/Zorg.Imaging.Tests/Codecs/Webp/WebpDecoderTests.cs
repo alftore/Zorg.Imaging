@@ -86,12 +86,25 @@ public class WebpDecoderTests
         }
     }
 
-    [Fact]
-    public void Lossy_files_say_they_are_not_supported_yet()
+    [Theory]
+    [InlineData("lossy")]
+    [InlineData("lossy-alpha")]
+    public void Lossy_files_decode_as_libwebp_decodes_them(string name)
     {
-        UnsupportedImageFormatException error = Assert.Throws<UnsupportedImageFormatException>(() => Image.Decode(Sample("lossy")));
-        Assert.Same(ImageFormat.Webp, error.Format);
-        Assert.Throws<UnsupportedImageFormatException>(() => Image.Decode(Sample("lossy-alpha")));
+        (int width, int height, byte[] expected) = Pam(name);
+        using Image image = Image.Decode(Sample(name), new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        Assert.Equal((width, height), (image.Width, image.Height));
+        byte[] actual = image.GetPixelBytes().ToArray();
+        int max = 0;
+        int differing = 0;
+        for (int i = 0; i < actual.Length; i++)
+        {
+            int d = Math.Abs(actual[i] - expected[i]);
+            max = Math.Max(max, d);
+            differing += d == 0 ? 0 : 1;
+        }
+
+        Assert.True(max == 0, $"{name}: {differing} of {actual.Length} samples differ, by up to {max}");
     }
 
     [Fact]
@@ -154,7 +167,7 @@ public class WebpDecoderTests
     public void Random_damage_throws_only_our_exceptions_and_never_hangs()
     {
         var small = new DecodeOptions { Limits = new ImageLimits { MaxPixels = 1_000_000 } };
-        foreach (string name in new[] { "lossless-z0", "lossless-z9", "lossless-alpha", "lossless-palette3", "lossless-palette12", "animated" })
+        foreach (string name in new[] { "lossless-z0", "lossless-z9", "lossless-alpha", "lossless-palette3", "lossless-palette12", "animated", "lossy", "lossy-alpha" })
         {
             byte[] webp = Sample(name);
             var random = new Random(name.Length);

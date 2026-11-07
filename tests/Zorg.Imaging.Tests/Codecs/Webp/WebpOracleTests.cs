@@ -7,7 +7,7 @@ using Zorg.Imaging.Tests.Codecs.Png;
 
 namespace Zorg.Imaging.Tests.Codecs.Webp;
 
-/// <summary>Lossless WebP files from <c>cwebp</c>, in every effort and option it has, must decode exactly as <c>dwebp</c> decodes them.</summary>
+/// <summary>WebP files from <c>cwebp</c>, lossless and lossy, in every effort and option it has, must decode exactly as <c>dwebp</c> decodes them.</summary>
 public class WebpOracleTests
 {
     public static TheoryData<string, int, int, bool> Cases()
@@ -17,6 +17,20 @@ public class WebpOracleTests
         {
             data.Add(options, 517, 389, false);
             data.Add(options, 301, 7, true);
+        }
+
+        // Lossy: quality, effort, segments, the strong (normal) and simple loop filters, sharpness, and every alpha
+        // method and filter. libwebp's decode is deterministic, so ours must match it exactly.
+        string[] lossy =
+        [
+            "-q 80", "-q 5 -m 0", "-q 100 -m 6", "-q 50 -segments 1", "-q 70 -sns 100 -f 60 -sharpness 7",
+            "-q 60 -nostrong -f 40", "-q 90 -f 0", "-q 75 -sharp_yuv", "-q 40 -segments 4 -f 100 -sharpness 3",
+            "-q 80 -alpha_filter none", "-q 80 -alpha_filter best -alpha_q 50", "-q 80 -alpha_method 0", "-q 80 -exact -alpha_filter fast",
+        ];
+        foreach (string options in lossy)
+        {
+            data.Add(options, 517, 389, options.Contains("alpha", StringComparison.Ordinal));
+            data.Add(options, 33, 9, true);
         }
 
         return data;

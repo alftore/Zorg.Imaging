@@ -13,6 +13,7 @@
     <EmbeddedResource Include="s420.jpg" LogicalName="s420.jpg" />
     <!-- A 33 x 17 lossless WebP with alpha from libwebp's cwebp (tests/Zorg.Imaging.Tests/Codecs/Webp/Files). -->
     <EmbeddedResource Include="lossless-alpha.webp" LogicalName="lossless-alpha.webp" />
+    <EmbeddedResource Include="lossy-alpha.webp" LogicalName="lossy-alpha.webp" />
   </ItemGroup>
 
   <ItemGroup>

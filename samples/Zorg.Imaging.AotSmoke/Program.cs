@@ -223,6 +223,16 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
         "webp lossless decode",
         webp.PixelFormat == PixelFormat.Rgba32 && (webp.Width, webp.Height) == (33, 17)
             && webp.GetRow<Rgba32>(0)[0] == new Rgba32(171, 216, 49, 0) && webp.GetRow<Rgba32>(16)[32] == new Rgba32(107, 15, 226, 247));
+
+    // Lossy with alpha, also exactly as dwebp decodes it.
+    using Stream lossyResource = typeof(ForwardOnlyStream).Assembly.GetManifestResourceStream("lossy-alpha.webp")!;
+    using var lossyCopy = new MemoryStream();
+    lossyResource.CopyTo(lossyCopy);
+    using Image lossy = Image.Decode(lossyCopy.ToArray());
+    Check(
+        "webp lossy decode",
+        lossy.PixelFormat == PixelFormat.Rgba32 && (lossy.Width, lossy.Height) == (33, 17)
+            && lossy.GetRow<Rgba32>(5)[7] == new Rgba32(131, 206, 147, 54) && lossy.GetRow<Rgba32>(16)[32] == new Rgba32(114, 13, 214, 247));
 }
 
 return failures == 0 ? 0 : 1;

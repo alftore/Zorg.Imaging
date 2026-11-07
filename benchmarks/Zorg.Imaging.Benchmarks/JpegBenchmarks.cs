@@ -17,6 +17,7 @@ public class JpegBenchmarks
     private byte[] _progressive = [];
     private Image _decoded = null!;
     private byte[] _lossless = [];
+    private byte[] _lossy = [];
 
     [GlobalSetup]
     public void Setup()
@@ -28,6 +29,21 @@ public class JpegBenchmarks
         _decoded = Image.Decode(_baseline);
         string lossless = Path.Combine(folder, "photo-lossless.webp");
         _lossless = File.Exists(lossless) ? File.ReadAllBytes(lossless) : [];
+        string lossy = Path.Combine(folder, "photo-lossy.webp");
+        _lossy = File.Exists(lossy) ? File.ReadAllBytes(lossy) : [];
+    }
+
+    /// <summary>A lossy WebP of the same photo (<c>photo-lossy.webp</c>, from <c>cwebp -q 80</c>), when present.</summary>
+    [Benchmark]
+    public int Decode_WebpLossy()
+    {
+        if (_lossy.Length == 0)
+        {
+            return 0;
+        }
+
+        using Image image = Image.Decode(_lossy);
+        return image.Width;
     }
 
     /// <summary>A lossless WebP of the same photo (<c>photo-lossless.webp</c>, from <c>cwebp -lossless -z 6</c>), when present.</summary>
