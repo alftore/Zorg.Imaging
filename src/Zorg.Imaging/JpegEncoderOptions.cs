@@ -76,4 +76,20 @@ public sealed class JpegEncoderOptions
     /// </summary>
     /// <example><code>var onBlack = new JpegEncoderOptions { Background = new Rgba32(0, 0, 0) };</code></example>
     public Rgba32 Background { get; init; } = new(255, 255, 255);
+
+    /// <summary>
+    /// How many cores this encode may use, or 0 (the default) for <see cref="ImageDefaults.MaxDegreeOfParallelism"/>.
+    /// The file is the same, byte for byte, whatever the value.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    /// <example><code>var options = new JpegEncoderOptions { MaxDegreeOfParallelism = 1 };</code></example>
+    public int MaxDegreeOfParallelism
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            field = value;
+        }
+    }
 }

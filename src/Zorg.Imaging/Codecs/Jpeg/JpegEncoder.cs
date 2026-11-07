@@ -8,6 +8,7 @@ using System.Runtime.Intrinsics;
 using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Imaging.Metadata;
+using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging.Codecs.Jpeg;
 
@@ -57,7 +58,12 @@ internal static class JpegEncoder
         }
 
         ReadOnlyMemory<byte> profile = IccProfileWriter.For(image.ColorSpace, "JPEG");
-        byte[] file = Encode(image, options, profile.Span);
+        byte[] file;
+        using (Parallelism.Use(options.MaxDegreeOfParallelism))
+        {
+            file = Encode(image, options, profile.Span);
+        }
+
         if (sync)
         {
             stream.Write(file);
@@ -145,8 +151,8 @@ internal static class JpegEncoder
     {
         bool grey = planes.Length == 1;
         int mcuSide = 8 * factor;
-        int bands = (long)image.Width * image.Height < (1 << 18) ? 1 : Math.Clamp(Math.Min(Environment.ProcessorCount, mcusHigh / 2), 1, 64);
-        Parallel.For(0, bands, new ParallelOptions { MaxDegreeOfParallelism = bands }, band =>
+        int bands = Parallelism.Bands((long)image.Width * image.Height, mcusHigh / 2);
+        Parallelism.For(bands, band =>
         {
             int width = mcusWide * mcuSide;
             float[] y = new float[width * mcuSide];

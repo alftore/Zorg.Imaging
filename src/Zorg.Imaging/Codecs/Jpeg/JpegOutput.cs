@@ -1,7 +1,7 @@
 using System;
 using System.Buffers;
 using System.Runtime.InteropServices;
-using System.Threading.Tasks;
+using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging.Codecs.Jpeg;
 
@@ -19,8 +19,6 @@ namespace Zorg.Imaging.Codecs.Jpeg;
 /// </remarks>
 internal static class JpegOutput
 {
-    // Below this many pixels, threads cost more than they save.
-    private const long ParallelPixels = 1 << 18;
 
     public static Image Build(JpegFrame frame, int scale, bool isRgb, PixelFormat requested)
     {
@@ -41,8 +39,8 @@ internal static class JpegOutput
             Image target = image;
 
             // Rows are independent once the planes exist: large images are converted in parallel bands.
-            int bands = (long)width * height < ParallelPixels ? 1 : Math.Clamp(Math.Min(Environment.ProcessorCount, height / 16), 1, 64);
-            Parallel.For(0, bands, new ParallelOptions { MaxDegreeOfParallelism = bands }, band =>
+            int bands = Parallelism.Bands((long)width * height, height / 16);
+            Parallelism.For(bands, band =>
             {
                 byte[][] rows = new byte[planes.Length][];
                 for (int i = 0; i < rows.Length; i++)
@@ -219,8 +217,8 @@ internal static class JpegOutput
 
             // Each block row writes its own rows of the plane, so large components are transformed in parallel.
             long blocks = (long)component.UsedWide * component.UsedHigh;
-            int bands = blocks < ParallelPixels / 64 ? 1 : Math.Clamp(Math.Min(Environment.ProcessorCount, component.UsedHigh / 4), 1, 64);
-            Parallel.For(0, bands, new ParallelOptions { MaxDegreeOfParallelism = bands }, band =>
+            int bands = Parallelism.Bands(blocks * 64, component.UsedHigh / 4);
+            Parallelism.For(bands, band =>
             {
                 int end = (int)((long)component.UsedHigh * (band + 1) / bands);
                 for (int by = (int)((long)component.UsedHigh * band / bands); by < end; by++)

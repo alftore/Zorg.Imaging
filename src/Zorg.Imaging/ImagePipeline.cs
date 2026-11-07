@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging;
 
@@ -39,12 +40,14 @@ public sealed class ImagePipeline
     private readonly Source _source;
     private readonly Step[] _steps;
     private readonly DecodeOptions _options;
+    private readonly int _parallelism;
 
-    private ImagePipeline(Source source, Step[] steps, DecodeOptions options)
+    private ImagePipeline(Source source, Step[] steps, DecodeOptions options, int parallelism = 0)
     {
         _source = source;
         _steps = steps;
         _options = options;
+        _parallelism = parallelism;
     }
 
     /// <summary>Starts a pipeline from a whole file in memory.</summary>
@@ -115,7 +118,21 @@ public sealed class ImagePipeline
     public ImagePipeline WithDecodeOptions(DecodeOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return new ImagePipeline(_source, _steps, options);
+        return new ImagePipeline(_source, _steps, options, _parallelism);
+    }
+
+    /// <summary>
+    /// Sets how many cores the whole run (decode, steps and save) may use, overriding
+    /// <see cref="ImageDefaults.MaxDegreeOfParallelism"/>. 1 keeps everything on the calling thread.
+    /// </summary>
+    /// <param name="maxDegreeOfParallelism">The number of cores, at least 1.</param>
+    /// <returns>A new pipeline with the setting.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxDegreeOfParallelism"/> is less than 1.</exception>
+    /// <example><code>await ImagePipeline.Load(upload).WithMaxDegreeOfParallelism(1).Fit(1600, 1600).SaveAsJpegAsync(output);</code></example>
+    public ImagePipeline WithMaxDegreeOfParallelism(int maxDegreeOfParallelism)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDegreeOfParallelism, 1);
+        return new ImagePipeline(_source, _steps, _options, maxDegreeOfParallelism);
     }
 
     /// <summary>Adds <see cref="Image.Resize"/>.</summary>
@@ -242,6 +259,7 @@ public sealed class ImagePipeline
     /// <example><code>using Image thumb = await ImagePipeline.Load(bytes).Fit(320, 320).ToImageAsync();</code></example>
     public async ValueTask<Image> ToImageAsync(CancellationToken cancellationToken = default)
     {
+        using Parallelism.Scope scope = Parallelism.Use(_parallelism);
         // When the first step resizes, the decoder learns its target and may decode smaller (JPEG shrink-on-load).
         DecodeOptions options = _steps is [{ Size: { } size }, ..] ? _options.WithShrinkTarget(size) : _options;
         (Image image, bool owned) = await _source.OpenAsync(options, cancellationToken).ConfigureAwait(false);
@@ -337,6 +355,7 @@ public sealed class ImagePipeline
             throw new NotSupportedException("SaveAsJpegAsync needs a writable stream.");
         }
 
+        using Parallelism.Scope scope = Parallelism.Use(_parallelism);
         using Image image = await ToImageAsync(cancellationToken).ConfigureAwait(false);
         await image.SaveAsJpegAsync(stream, options, cancellationToken).ConfigureAwait(false);
     }
@@ -369,7 +388,7 @@ public sealed class ImagePipeline
         var steps = new Step[_steps.Length + 1];
         _steps.CopyTo(steps, 0);
         steps[^1] = new Step(name, apply, size);
-        return new ImagePipeline(_source, steps, _options);
+        return new ImagePipeline(_source, steps, _options, _parallelism);
     }
 
     /// <summary>One step. <c>Size</c>, for steps that resize, gives the size the step makes from an upright source size.</summary>

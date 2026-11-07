@@ -67,6 +67,22 @@ public sealed class DecodeOptions
     public bool ApplyOrientation { get; init; } = true;
 
     /// <summary>
+    /// How many cores this decode may use, or 0 (the default) for <see cref="ImageDefaults.MaxDegreeOfParallelism"/>.
+    /// 1 keeps the work on the calling thread. The pixels are the same whatever the value.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    /// <example><code>var options = new DecodeOptions { MaxDegreeOfParallelism = 1 };</code></example>
+    public int MaxDegreeOfParallelism
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            field = value;
+        }
+    }
+
+    /// <summary>
     /// For shrink-on-load: given the upright size, the size the first step will make. A decoder that can decode
     /// smaller (JPEG) then does, staying at least twice that size. Set only by <see cref="ImagePipeline"/>.
     /// </summary>
@@ -77,6 +93,7 @@ public sealed class DecodeOptions
         Limits = Limits,
         PixelFormat = PixelFormat,
         ApplyOrientation = ApplyOrientation,
+        MaxDegreeOfParallelism = MaxDegreeOfParallelism,
         ShrinkTarget = target,
     };
 }

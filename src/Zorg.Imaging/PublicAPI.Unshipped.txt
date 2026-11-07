@@ -25,6 +25,8 @@ Zorg.Imaging.DecodeOptions.ApplyOrientation.init -> void
 Zorg.Imaging.DecodeOptions.DecodeOptions() -> void
 Zorg.Imaging.DecodeOptions.Limits.get -> Zorg.Imaging.ImageLimits!
 Zorg.Imaging.DecodeOptions.Limits.init -> void
+Zorg.Imaging.DecodeOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.DecodeOptions.MaxDegreeOfParallelism.init -> void
 Zorg.Imaging.DecodeOptions.PixelFormat.get -> Zorg.Imaging.PixelFormat
 Zorg.Imaging.DecodeOptions.PixelFormat.init -> void
 Zorg.Imaging.FormatPeek
@@ -77,6 +79,7 @@ Zorg.Imaging.Image.SaveAsPng(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOp
 Zorg.Imaging.Image.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.Image.Stride.get -> int
 Zorg.Imaging.Image.Width.get -> int
+Zorg.Imaging.ImageDefaults
 Zorg.Imaging.ImageException
 Zorg.Imaging.ImageException.ImageException() -> void
 Zorg.Imaging.ImageException.ImageException(string! message) -> void
@@ -129,6 +132,7 @@ Zorg.Imaging.ImagePipeline.SaveAsJpegAsync(System.IO.Stream! stream, Zorg.Imagin
 Zorg.Imaging.ImagePipeline.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.ImagePipeline.ToImageAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.Image!>
 Zorg.Imaging.ImagePipeline.WithDecodeOptions(Zorg.Imaging.DecodeOptions! options) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.WithMaxDegreeOfParallelism(int maxDegreeOfParallelism) -> Zorg.Imaging.ImagePipeline!
 Zorg.Imaging.JpegChromaSubsampling
 Zorg.Imaging.JpegChromaSubsampling.Yuv420 = 0 -> Zorg.Imaging.JpegChromaSubsampling
 Zorg.Imaging.JpegChromaSubsampling.Yuv444 = 1 -> Zorg.Imaging.JpegChromaSubsampling
@@ -138,6 +142,8 @@ Zorg.Imaging.JpegEncoderOptions.Background.init -> void
 Zorg.Imaging.JpegEncoderOptions.ChromaSubsampling.get -> Zorg.Imaging.JpegChromaSubsampling
 Zorg.Imaging.JpegEncoderOptions.ChromaSubsampling.init -> void
 Zorg.Imaging.JpegEncoderOptions.JpegEncoderOptions() -> void
+Zorg.Imaging.JpegEncoderOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.JpegEncoderOptions.MaxDegreeOfParallelism.init -> void
 Zorg.Imaging.JpegEncoderOptions.Quality.get -> int
 Zorg.Imaging.JpegEncoderOptions.Quality.init -> void
 Zorg.Imaging.L16
@@ -273,6 +279,8 @@ static Zorg.Imaging.Image.Decode(byte[]! data, Zorg.Imaging.DecodeOptions? optio
 static Zorg.Imaging.Image.DecodeAsync(System.IO.Stream! stream, Zorg.Imaging.DecodeOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.Image!>
 static Zorg.Imaging.Image.Identify(byte[]! data, Zorg.Imaging.IdentifyOptions? options = null) -> Zorg.Imaging.IdentifyResult!
 static Zorg.Imaging.Image.IdentifyAsync(System.IO.Stream! stream, Zorg.Imaging.IdentifyOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.IdentifyResult!>
+static Zorg.Imaging.ImageDefaults.MaxDegreeOfParallelism.get -> int
+static Zorg.Imaging.ImageDefaults.MaxDegreeOfParallelism.set -> void
 static Zorg.Imaging.ImageFormat.Avif.get -> Zorg.Imaging.ImageFormat!
 static Zorg.Imaging.ImageFormat.Bmp.get -> Zorg.Imaging.ImageFormat!
 static Zorg.Imaging.ImageFormat.Gif.get -> Zorg.Imaging.ImageFormat!

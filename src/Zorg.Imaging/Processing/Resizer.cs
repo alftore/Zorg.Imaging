@@ -4,7 +4,6 @@ using System.Runtime.CompilerServices;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
-using System.Threading.Tasks;
 
 namespace Zorg.Imaging.Processing;
 
@@ -182,9 +181,6 @@ internal static class Resizer
     /// </remarks>
     private sealed class Pass
     {
-        // Below this many source and output pixels, threads cost more than they save.
-        private const long ParallelWork = 1 << 18;
-
         private readonly Image _source;
         private readonly Image _result;
         private readonly Weights _x;
@@ -219,14 +215,8 @@ internal static class Resizer
             int height = _result.Height;
             int ring = OpenRows();
             long work = ((long)_source.Width * _source.Height) + ((long)_result.Width * height);
-            int bands = work < ParallelWork ? 1 : Math.Clamp(Math.Min(Environment.ProcessorCount, height / 16), 1, 64);
-            if (bands == 1)
-            {
-                Band(0, height, ring);
-                return;
-            }
-
-            Parallel.For(0, bands, b => Band((int)((long)height * b / bands), (int)((long)height * (b + 1) / bands), ring));
+            int bands = Parallelism.Bands(work, height / 16);
+            Parallelism.For(bands, b => Band((int)((long)height * b / bands), (int)((long)height * (b + 1) / bands), ring));
         }
 
         // Output rows [from, to): each source row they need is read, resampled across, and added into the open rows.

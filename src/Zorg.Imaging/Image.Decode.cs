@@ -8,6 +8,7 @@ using Zorg.Imaging.Codecs.Jpeg;
 using Zorg.Imaging.Codecs.Png;
 using Zorg.Imaging.Codecs.Webp;
 using Zorg.Imaging.Formats;
+using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging;
 
@@ -82,6 +83,7 @@ public sealed partial class Image
 
     private static async ValueTask<Image> DecodeCoreAsync(DataReader reader, DecodeOptions options, bool sync, CancellationToken cancellationToken)
     {
+        using Parallelism.Scope scope = Parallelism.Use(options.MaxDegreeOfParallelism);
         ReadOnlyMemory<byte> head = await reader.PeekAsync(ImageFormats.MaxSignatureLength, cancellationToken).ConfigureAwait(false);
         ImageFormat? format = ImageFormats.Detect(head.Span);
         if (format == ImageFormat.Png)
