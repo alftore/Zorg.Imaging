@@ -55,14 +55,22 @@ Zorg.Imaging.Image.BytesPerPixel.get -> int
 Zorg.Imaging.Image.Clone() -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.ColorSpace.get -> Zorg.Imaging.ColorSpace!
 Zorg.Imaging.Image.ColorSpace.set -> void
+Zorg.Imaging.Image.Crop(int x, int y, int width, int height) -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.Dispose() -> void
+Zorg.Imaging.Image.Fill(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Fit(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Flatten(Zorg.Imaging.Rgba32 background) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.FlipHorizontal() -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.FlipVertical() -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.GetPixelBytes() -> System.Span<byte>
 Zorg.Imaging.Image.GetRow<T>(int y) -> System.Span<T>
 Zorg.Imaging.Image.GetRowBytes(int y) -> System.Span<byte>
 Zorg.Imaging.Image.Height.get -> int
 Zorg.Imaging.Image.Image(int width, int height, Zorg.Imaging.PixelFormat pixelFormat) -> void
+Zorg.Imaging.Image.Pad(int width, int height, Zorg.Imaging.Rgba32 background, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.PixelFormat.get -> Zorg.Imaging.PixelFormat
 Zorg.Imaging.Image.Resize(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Rotate(int degrees) -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.SaveAsPng(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null) -> void
 Zorg.Imaging.Image.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.Image.Stride.get -> int

@@ -143,6 +143,29 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     Check("resize every filter keeps a flat colour", same);
 }
 
+// Operations: crop, fit, fill, pad, rotate, flip and flatten.
+{
+    using var photo = new Image(40, 30, PixelFormat.Rgba32);
+    photo.GetRow<Rgba32>(0)[0] = new Rgba32(9, 8, 7, 255);
+    using Image corner = photo.Crop(0, 0, 2, 2);
+    using Image fitted = photo.Fit(20, 20);
+    using Image filled = photo.Fill(10, 10);
+    using Image padded = photo.Pad(50, 50, new Rgba32(255, 255, 255));
+    using Image turned = photo.Rotate(90);
+    using Image across = photo.FlipHorizontal();
+    using Image mirrored = across.FlipVertical();
+    using Image flat = photo.Flatten(new Rgba32(255, 255, 255));
+    Check(
+        "operations",
+        corner.GetRow<Rgba32>(0)[0] == new Rgba32(9, 8, 7, 255)
+            && (fitted.Width, fitted.Height) == (20, 15)
+            && (filled.Width, filled.Height) == (10, 10)
+            && padded.GetRow<Rgba32>(0)[0] == new Rgba32(255, 255, 255)
+            && turned.GetRow<Rgba32>(0)[29] == new Rgba32(9, 8, 7, 255)
+            && mirrored.GetRow<Rgba32>(29)[39] == new Rgba32(9, 8, 7, 255)
+            && flat.PixelFormat == PixelFormat.Rgb24 && flat.GetRow<Rgb24>(1)[1] == new Rgb24(255, 255, 255));
+}
+
 return failures == 0 ? 0 : 1;
 
 static byte[] TinyPng(int width, int height)
