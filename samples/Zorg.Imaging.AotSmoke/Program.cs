@@ -166,6 +166,25 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
             && flat.PixelFormat == PixelFormat.Rgb24 && flat.GetRow<Rgb24>(1)[1] == new Rgb24(255, 255, 255));
 }
 
+// Pipeline: load from a stream that can't seek, fit, flatten and save, then read the result back.
+{
+    using var photo = new Image(64, 48, PixelFormat.Rgba32) { ColorSpace = ColorSpace.DisplayP3 };
+    photo.GetPixelBytes().Fill(0x60);
+    using var original = new MemoryStream();
+    photo.SaveAsPng(original);
+    using var output = new MemoryStream();
+    ImagePipeline.Load(new ForwardOnlyStream(original.ToArray()))
+        .Fit(16, 16)
+        .Flatten(new Rgba32(255, 255, 255))
+        .SaveAsPngAsync(output)
+        .AsTask().GetAwaiter().GetResult();
+    using Image result = Image.Decode(output.ToArray());
+    Check(
+        "pipeline",
+        result.PixelFormat == PixelFormat.Rgb24 && (result.Width, result.Height) == (16, 12)
+            && result.ColorSpace == ColorSpace.DisplayP3 && result.GetRow<Rgb24>(11)[15] == new Rgb24(0xC3, 0xC3, 0xC3));
+}
+
 return failures == 0 ? 0 : 1;
 
 static byte[] TinyPng(int width, int height)

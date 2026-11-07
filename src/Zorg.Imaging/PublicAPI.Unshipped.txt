@@ -113,6 +113,19 @@ Zorg.Imaging.ImageLimits.MaxHeaderBytes.get -> int
 Zorg.Imaging.ImageLimits.MaxHeaderBytes.init -> void
 Zorg.Imaging.ImageLimits.MaxPixels.get -> long
 Zorg.Imaging.ImageLimits.MaxPixels.init -> void
+Zorg.Imaging.ImagePipeline
+Zorg.Imaging.ImagePipeline.Crop(int x, int y, int width, int height) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Fill(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Fit(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Flatten(Zorg.Imaging.Rgba32 background) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.FlipHorizontal() -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.FlipVertical() -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Pad(int width, int height, Zorg.Imaging.Rgba32 background, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Resize(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Rotate(int degrees) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.ToImageAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.Image!>
+Zorg.Imaging.ImagePipeline.WithDecodeOptions(Zorg.Imaging.DecodeOptions! options) -> Zorg.Imaging.ImagePipeline!
 Zorg.Imaging.L16
 Zorg.Imaging.L16.Equals(Zorg.Imaging.L16 other) -> bool
 Zorg.Imaging.L16.L.get -> ushort
@@ -207,6 +220,7 @@ override Zorg.Imaging.IdentifyResult.ToString() -> string!
 override Zorg.Imaging.Image.ToString() -> string!
 override Zorg.Imaging.ImageFormat.ToString() -> string!
 override Zorg.Imaging.ImageInfo.ToString() -> string!
+override Zorg.Imaging.ImagePipeline.ToString() -> string!
 override Zorg.Imaging.L16.Equals(object? obj) -> bool
 override Zorg.Imaging.L16.GetHashCode() -> int
 override Zorg.Imaging.L16.ToString() -> string!
@@ -263,6 +277,10 @@ static Zorg.Imaging.ImageFormats.IsSupported(System.ReadOnlySpan<byte> head) -> 
 static Zorg.Imaging.ImageFormats.Known.get -> System.Collections.Generic.IReadOnlyList<Zorg.Imaging.ImageFormat!>!
 static Zorg.Imaging.ImageFormats.PeekAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.FormatPeek!>
 static Zorg.Imaging.ImageLimits.Default.get -> Zorg.Imaging.ImageLimits!
+static Zorg.Imaging.ImagePipeline.From(Zorg.Imaging.Image! image) -> Zorg.Imaging.ImagePipeline!
+static Zorg.Imaging.ImagePipeline.Load(System.IO.Stream! stream) -> Zorg.Imaging.ImagePipeline!
+static Zorg.Imaging.ImagePipeline.Load(byte[]! data) -> Zorg.Imaging.ImagePipeline!
+static Zorg.Imaging.ImagePipeline.Load(string! path) -> Zorg.Imaging.ImagePipeline!
 static Zorg.Imaging.L16.operator !=(Zorg.Imaging.L16 left, Zorg.Imaging.L16 right) -> bool
 static Zorg.Imaging.L16.operator ==(Zorg.Imaging.L16 left, Zorg.Imaging.L16 right) -> bool
 static Zorg.Imaging.L8.operator !=(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
