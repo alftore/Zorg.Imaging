@@ -15,6 +15,7 @@ public class JpegBenchmarks
 {
     private byte[] _baseline = [];
     private byte[] _progressive = [];
+    private Image _decoded = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -23,6 +24,26 @@ public class JpegBenchmarks
             ?? throw new InvalidOperationException("Set ZORG_BENCH_JPEG_DIR to a folder with photo.jpg and photo-progressive.jpg.");
         _baseline = File.ReadAllBytes(Path.Combine(folder, "photo.jpg"));
         _progressive = File.ReadAllBytes(Path.Combine(folder, "photo-progressive.jpg"));
+        _decoded = Image.Decode(_baseline);
+    }
+
+    [GlobalCleanup]
+    public void Cleanup() => _decoded.Dispose();
+
+    [Benchmark]
+    public int Encode_Quality80()
+    {
+        using var output = new MemoryStream();
+        _decoded.SaveAsJpeg(output);
+        return (int)output.Length;
+    }
+
+    [Benchmark]
+    public async Task<int> Web_JpegToJpeg()
+    {
+        using var output = new MemoryStream();
+        await ImagePipeline.Load(_baseline).Fit(1600, 1600).SaveAsJpegAsync(output);
+        return (int)output.Length;
     }
 
     [Benchmark]

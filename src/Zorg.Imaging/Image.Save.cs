@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Zorg.Imaging.Codecs.Jpeg;
 using Zorg.Imaging.Codecs.Png;
 
 namespace Zorg.Imaging;
@@ -67,6 +68,64 @@ public sealed partial class Image
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
         return PngEncoder.EncodeAsync(this, stream, options ?? PngEncoderOptions.Default, sync: false, cancellationToken);
+    }
+
+    /// <summary>Writes the image as a JPEG file.</summary>
+    /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
+    /// <param name="options">The options, or <see langword="null"/> for <see cref="JpegEncoderOptions.Default"/>: quality 80, 4:2:0.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="stream"/> can't write; a side is longer than 65,535 pixels; or the <see cref="ColorSpace"/> is HDR
+    /// (PQ or HLG), or one that can't be described as an ICC profile yet.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <exception cref="IOException">The stream itself fails.</exception>
+    /// <remarks>
+    /// <para>
+    /// A baseline JFIF file, which every decoder reads: grey for <see cref="PixelFormat.L8"/> and
+    /// <see cref="PixelFormat.L16"/>, YCbCr otherwise. JPEG has no transparency, so pixels with alpha are drawn over
+    /// <see cref="JpegEncoderOptions.Background"/> (white unless set), and 16-bit samples are rounded to 8 bits.
+    /// </para>
+    /// <para>
+    /// The <see cref="ColorSpace"/> is written as an ICC profile, so the file shows the same colours: nothing for sRGB,
+    /// the image's own profile when it has one, or a small generated one (about 600 bytes) for Display P3, Rec.2020 and
+    /// other spaces known by their primaries. No other metadata is written.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// using FileStream file = File.Create("photo.jpg");
+    /// image.SaveAsJpeg(file, new JpegEncoderOptions { Quality = 85 });
+    /// </code>
+    /// </example>
+    public void SaveAsJpeg(Stream stream, JpegEncoderOptions? options = null)
+    {
+        CheckWritable(stream);
+        ObjectDisposedException.ThrowIf(_buffer is null, this);
+        ValueTask task = JpegEncoder.EncodeAsync(this, stream, options ?? JpegEncoderOptions.Default, sync: true, CancellationToken.None);
+        Debug.Assert(task.IsCompleted, "A synchronous encode must complete synchronously.");
+        task.GetAwaiter().GetResult();
+    }
+
+    /// <summary>Writes the image as a JPEG file, asynchronously.</summary>
+    /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
+    /// <param name="options">The options, or <see langword="null"/> for <see cref="JpegEncoderOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>A task that completes when the file is written.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="stream"/> can't write, a side is longer than 65,535 pixels, or the colour space can't be written.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <exception cref="IOException">The stream itself fails.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    /// <remarks>The file is the same as <see cref="SaveAsJpeg"/> writes.</remarks>
+    /// <example><code>await image.SaveAsJpegAsync(response.Body, cancellationToken: cancellationToken);</code></example>
+    public ValueTask SaveAsJpegAsync(Stream stream, JpegEncoderOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        CheckWritable(stream);
+        ObjectDisposedException.ThrowIf(_buffer is null, this);
+        return JpegEncoder.EncodeAsync(this, stream, options ?? JpegEncoderOptions.Default, sync: false, cancellationToken);
     }
 
     private static void CheckWritable(Stream stream)

@@ -199,6 +199,18 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
 
     using Image thumb = ImagePipeline.Load(new ForwardOnlyStream(jpeg)).Fit(16, 16).ToImageAsync().AsTask().GetAwaiter().GetResult();
     Check("jpeg shrink on load", (thumb.Width, thumb.Height) == (16, 11) && thumb.PixelFormat == PixelFormat.Rgb24);
+
+    // Encode: re-encode with a Display P3 profile, read it back, and check the colours and the profile survive.
+    decoded.ColorSpace = ColorSpace.DisplayP3;
+    using var encoded = new MemoryStream();
+    decoded.SaveAsJpeg(encoded, new JpegEncoderOptions { Quality = 95, ChromaSubsampling = JpegChromaSubsampling.Yuv444 });
+    using Image again = Image.Decode(encoded.ToArray());
+    Rgb24 a = again.GetRow<Rgb24>(20)[30];
+    Rgb24 b = decoded.GetRow<Rgb24>(20)[30];
+    Check(
+        "jpeg encode",
+        (again.Width, again.Height) == (67, 45) && Math.Abs(a.R - b.R) <= 8 && Math.Abs(a.G - b.G) <= 8 && Math.Abs(a.B - b.B) <= 8
+            && again.ColorSpace.IccProfile.Length > 128);
 }
 
 return failures == 0 ? 0 : 1;

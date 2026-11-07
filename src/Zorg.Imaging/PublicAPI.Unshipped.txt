@@ -71,6 +71,8 @@ Zorg.Imaging.Image.Pad(int width, int height, Zorg.Imaging.Rgba32 background, Zo
 Zorg.Imaging.Image.PixelFormat.get -> Zorg.Imaging.PixelFormat
 Zorg.Imaging.Image.Resize(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.Rotate(int degrees) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.SaveAsJpeg(System.IO.Stream! stream, Zorg.Imaging.JpegEncoderOptions? options = null) -> void
+Zorg.Imaging.Image.SaveAsJpegAsync(System.IO.Stream! stream, Zorg.Imaging.JpegEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.Image.SaveAsPng(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null) -> void
 Zorg.Imaging.Image.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.Image.Stride.get -> int
@@ -123,9 +125,21 @@ Zorg.Imaging.ImagePipeline.FlipVertical() -> Zorg.Imaging.ImagePipeline!
 Zorg.Imaging.ImagePipeline.Pad(int width, int height, Zorg.Imaging.Rgba32 background, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
 Zorg.Imaging.ImagePipeline.Resize(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
 Zorg.Imaging.ImagePipeline.Rotate(int degrees) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.SaveAsJpegAsync(System.IO.Stream! stream, Zorg.Imaging.JpegEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.ImagePipeline.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.ImagePipeline.ToImageAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.Image!>
 Zorg.Imaging.ImagePipeline.WithDecodeOptions(Zorg.Imaging.DecodeOptions! options) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.JpegChromaSubsampling
+Zorg.Imaging.JpegChromaSubsampling.Yuv420 = 0 -> Zorg.Imaging.JpegChromaSubsampling
+Zorg.Imaging.JpegChromaSubsampling.Yuv444 = 1 -> Zorg.Imaging.JpegChromaSubsampling
+Zorg.Imaging.JpegEncoderOptions
+Zorg.Imaging.JpegEncoderOptions.Background.get -> Zorg.Imaging.Rgba32
+Zorg.Imaging.JpegEncoderOptions.Background.init -> void
+Zorg.Imaging.JpegEncoderOptions.ChromaSubsampling.get -> Zorg.Imaging.JpegChromaSubsampling
+Zorg.Imaging.JpegEncoderOptions.ChromaSubsampling.init -> void
+Zorg.Imaging.JpegEncoderOptions.JpegEncoderOptions() -> void
+Zorg.Imaging.JpegEncoderOptions.Quality.get -> int
+Zorg.Imaging.JpegEncoderOptions.Quality.init -> void
 Zorg.Imaging.L16
 Zorg.Imaging.L16.Equals(Zorg.Imaging.L16 other) -> bool
 Zorg.Imaging.L16.L.get -> ushort
@@ -209,6 +223,7 @@ const Zorg.Imaging.ImageFormats.MaxSignatureLength = 64 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxFrames = 10000 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxHeaderBytes = 1048576 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxPixels = 268402689 -> long
+const Zorg.Imaging.JpegEncoderOptions.DefaultQuality = 80 -> int
 const Zorg.Imaging.PngEncoderOptions.DefaultCompressionLevel = 6 -> int
 override Zorg.Imaging.Bgra32.Equals(object? obj) -> bool
 override Zorg.Imaging.Bgra32.GetHashCode() -> int
@@ -281,6 +296,7 @@ static Zorg.Imaging.ImagePipeline.From(Zorg.Imaging.Image! image) -> Zorg.Imagin
 static Zorg.Imaging.ImagePipeline.Load(System.IO.Stream! stream) -> Zorg.Imaging.ImagePipeline!
 static Zorg.Imaging.ImagePipeline.Load(byte[]! data) -> Zorg.Imaging.ImagePipeline!
 static Zorg.Imaging.ImagePipeline.Load(string! path) -> Zorg.Imaging.ImagePipeline!
+static Zorg.Imaging.JpegEncoderOptions.Default.get -> Zorg.Imaging.JpegEncoderOptions!
 static Zorg.Imaging.L16.operator !=(Zorg.Imaging.L16 left, Zorg.Imaging.L16 right) -> bool
 static Zorg.Imaging.L16.operator ==(Zorg.Imaging.L16 left, Zorg.Imaging.L16 right) -> bool
 static Zorg.Imaging.L8.operator !=(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
