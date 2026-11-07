@@ -1,4 +1,6 @@
 using System;
+using System.Runtime.InteropServices;
+using System.Linq;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -148,38 +150,70 @@ internal static class PngTestFiles
     /// <summary>The 8-bit RGBA each pixel should decode to.</summary>
     public static byte[] ExpectedRgba(int width, int height, int depth, int colourType, int[] samples, byte[]? palette = null, byte[]? trns = null)
     {
+        int[] channels = ExpectedChannels(width, height, depth, colourType, samples, palette, trns, sixteen: false);
+        return [.. channels.Select(c => (byte)c)];
+    }
+
+    /// <summary>The 16-bit RGBA each pixel should decode to, as the bytes of an Rgba64 image.</summary>
+    public static byte[] ExpectedRgba64(int width, int height, int depth, int colourType, int[] samples, byte[]? palette = null, byte[]? trns = null)
+    {
+        int[] channels = ExpectedChannels(width, height, depth, colourType, samples, palette, trns, sixteen: true);
+        return MemoryMarshal.AsBytes(channels.Select(c => (ushort)c).ToArray().AsSpan()).ToArray();
+    }
+
+    /// <summary>Keeps the first <paramref name="channels"/> of every four channels of <paramref name="bytesPerChannel"/> bytes.</summary>
+    public static byte[] Narrow(byte[] rgba, int channels, int bytesPerChannel = 1)
+    {
+        int pixel = 4 * bytesPerChannel;
+        int keep = channels * bytesPerChannel;
+        byte[] narrow = new byte[rgba.Length / pixel * keep];
+        for (int p = 0; p < rgba.Length / pixel; p++)
+        {
+            rgba.AsSpan(p * pixel, keep).CopyTo(narrow.AsSpan(p * keep));
+        }
+
+        return narrow;
+    }
+
+    /// <summary>The 16-bit value: <c>v * 65535 / max</c>, exact for every PNG depth.</summary>
+    public static int Scale16(int value, int depth) => (int)(value * 65535L / ((1 << depth) - 1));
+
+    private static int[] ExpectedChannels(int width, int height, int depth, int colourType, int[] samples, byte[]? palette, byte[]? trns, bool sixteen)
+    {
+        int Fit(int value, int bits) => sixteen ? Scale16(value, bits) : Scale(value, bits);
+        int opaque = sixteen ? 65535 : 255;
         int channels = Channels(colourType);
-        byte[] rgba = new byte[width * height * 4];
+        int[] rgba = new int[width * height * 4];
         for (int p = 0; p < width * height; p++)
         {
             ReadOnlySpan<int> s = samples.AsSpan(p * channels, channels);
-            byte r, g, b, a;
+            int r, g, b, a;
             switch (colourType)
             {
                 case 0:
-                    r = g = b = Scale(s[0], depth);
-                    a = trns is not null && s[0] == BinaryPrimitives.ReadUInt16BigEndian(trns) ? (byte)0 : (byte)255;
+                    r = g = b = Fit(s[0], depth);
+                    a = trns is not null && s[0] == BinaryPrimitives.ReadUInt16BigEndian(trns) ? 0 : opaque;
                     break;
                 case 2:
-                    (r, g, b) = (Scale(s[0], depth), Scale(s[1], depth), Scale(s[2], depth));
+                    (r, g, b) = (Fit(s[0], depth), Fit(s[1], depth), Fit(s[2], depth));
                     a = trns is not null
                         && s[0] == BinaryPrimitives.ReadUInt16BigEndian(trns)
                         && s[1] == BinaryPrimitives.ReadUInt16BigEndian(trns.AsSpan(2))
-                        && s[2] == BinaryPrimitives.ReadUInt16BigEndian(trns.AsSpan(4)) ? (byte)0 : (byte)255;
+                        && s[2] == BinaryPrimitives.ReadUInt16BigEndian(trns.AsSpan(4)) ? 0 : opaque;
                     break;
                 case 3:
                     bool inPalette = s[0] * 3 < palette!.Length;
-                    r = inPalette ? palette[s[0] * 3] : (byte)0;
-                    g = inPalette ? palette[(s[0] * 3) + 1] : (byte)0;
-                    b = inPalette ? palette[(s[0] * 3) + 2] : (byte)0;
-                    a = trns is not null && s[0] < trns.Length ? trns[s[0]] : (byte)255;
+                    r = inPalette ? Fit(palette[s[0] * 3], 8) : 0;
+                    g = inPalette ? Fit(palette[(s[0] * 3) + 1], 8) : 0;
+                    b = inPalette ? Fit(palette[(s[0] * 3) + 2], 8) : 0;
+                    a = trns is not null && s[0] < trns.Length ? Fit(trns[s[0]], 8) : opaque;
                     break;
                 case 4:
-                    r = g = b = Scale(s[0], depth);
-                    a = Scale(s[1], depth);
+                    r = g = b = Fit(s[0], depth);
+                    a = Fit(s[1], depth);
                     break;
                 default:
-                    (r, g, b, a) = (Scale(s[0], depth), Scale(s[1], depth), Scale(s[2], depth), Scale(s[3], depth));
+                    (r, g, b, a) = (Fit(s[0], depth), Fit(s[1], depth), Fit(s[2], depth), Fit(s[3], depth));
                     break;
             }
 

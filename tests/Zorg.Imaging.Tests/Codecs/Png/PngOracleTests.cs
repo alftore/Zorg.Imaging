@@ -1,3 +1,5 @@
+using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -72,6 +74,13 @@ public class PngOracleTests
 
         using Image decoded = Image.Decode(png, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
         Assert.Equal(expected, decoded.GetPixelBytes().ToArray());
+
+        // At 16 bits: ImageMagick scales every depth up the same way, so the values must match exactly.
+        (int read16, byte[] expected16, string read16Errors) = await Oracle.RunAsync(magick, folder.File("out.png"), "-depth", "16", "-endian", "MSB", "rgba:-");
+        Assert.True(read16 == 0, read16Errors);
+
+        using Image wide = Image.Decode(png, new DecodeOptions { PixelFormat = PixelFormat.Rgba64 });
+        Assert.Equal(BigEndian(expected16), wide.GetPixelBytes().ToArray());
     }
 
     [Theory]
@@ -82,6 +91,9 @@ public class PngOracleTests
     [InlineData(PixelFormat.Rgba32, 0)]
     [InlineData(PixelFormat.Rgba32, 6)]
     [InlineData(PixelFormat.Bgra32, 9)]
+    [InlineData(PixelFormat.L16, 6)]
+    [InlineData(PixelFormat.Rgb48, 1)]
+    [InlineData(PixelFormat.Rgba64, 6)]
     public async Task Files_we_write_read_back_in_ImageMagick_without_complaint(PixelFormat format, int level)
     {
         string magick = Oracle.Require("magick");
@@ -95,5 +107,22 @@ public class PngOracleTests
         Assert.Equal("", errors.Trim());
         using Image asRgba = Image.Decode(PngEncoderTests.Save(image), new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
         Assert.Equal(asRgba.GetPixelBytes().ToArray(), rgba);
+
+        (int exit16, byte[] rgba64, string errors16) = await Oracle.RunAsync(magick, folder.File("ours.png"), "-depth", "16", "-endian", "MSB", "rgba:-");
+        Assert.True(exit16 == 0, errors16);
+        using Image asRgba64 = Image.Decode(PngEncoderTests.Save(image), new DecodeOptions { PixelFormat = PixelFormat.Rgba64 });
+        Assert.Equal(asRgba64.GetPixelBytes().ToArray(), BigEndian(rgba64));
+    }
+
+    // ImageMagick's 16-bit samples, big-endian, into the machine's order as an Rgba64 image holds them.
+    private static byte[] BigEndian(byte[] samples)
+    {
+        byte[] native = new byte[samples.Length];
+        for (int i = 0; i + 1 < samples.Length; i += 2)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(native.AsSpan(i), BinaryPrimitives.ReadUInt16BigEndian(samples.AsSpan(i)));
+        }
+
+        return native;
     }
 }

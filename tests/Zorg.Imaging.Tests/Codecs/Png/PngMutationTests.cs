@@ -107,6 +107,13 @@ public class PngMutationTests
         {
             ["palette-trns-adam7"] = Build(17, 13, 4, 3, RandomSamples(17, 13, 4, 3, 1, 16), true, ("PLTE", palette), ("tRNS", [0, 50, 100]), ("eXIf", ExifWithOrientation(6))),
             ["rgba16"] = Build(9, 7, 16, 6, RandomSamples(9, 7, 16, 6, 2)),
+            ["rgb16-colour-chunks"] = Build(
+                11, 6, 16, 2, RandomSamples(11, 6, 16, 2, 4),
+                false,
+                ("cICP", [12, 13, 0, 1]),
+                ("iCCP", PngColourTests.Iccp("Display P3", PngColourTests.FakeProfile(600, seed: 1))),
+                ("gAMA", [0, 0, 0xB1, 0x8F]),
+                ("cHRM", new byte[32])),
             ["grey1-adam7"] = Build(21, 5, 1, 0, RandomSamples(21, 5, 1, 0, 3), true),
             ["encoder-multi-idat"] = PngEncoderTests.Save(encoded, new PngEncoderOptions { CompressionLevel = 0 }),
         };

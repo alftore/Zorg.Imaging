@@ -56,11 +56,28 @@ public sealed partial class Image : IDisposable
     /// <example><code>int height = image.Height;</code></example>
     public int Height { get; }
 
+    /// <summary>
+    /// What the pixel values mean: which red, green and blue, and how values map to brightness. New images are
+    /// <see cref="ColorSpace.Srgb"/>; decoders set the file's. Setting it labels the pixels differently, it doesn't
+    /// change them. Encoders write it into the file, so the image looks the same wherever it's shown.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">The value is <see langword="null"/>.</exception>
+    /// <example><code>bool vivid = image.ColorSpace == ColorSpace.DisplayP3;</code></example>
+    public ColorSpace ColorSpace
+    {
+        get;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            field = value;
+        }
+    } = ColorSpace.Srgb;
+
     /// <summary>How each pixel is laid out.</summary>
-    /// <example><code>bool hasAlpha = image.PixelFormat is PixelFormat.Rgba32 or PixelFormat.Bgra32;</code></example>
+    /// <example><code>bool hasAlpha = image.PixelFormat is PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Rgba64;</code></example>
     public PixelFormat PixelFormat { get; }
 
-    /// <summary>The bytes per pixel: 4, 3 or 1.</summary>
+    /// <summary>The bytes per pixel: 1 to 4 for 8-bit formats, 2 to 8 for 16-bit ones.</summary>
     /// <example><code>int bytesPerPixel = image.BytesPerPixel;</code></example>
     public int BytesPerPixel { get; }
 
@@ -90,7 +107,7 @@ public sealed partial class Image : IDisposable
     /// <summary>Gets one row as pixels of the image's format.</summary>
     /// <typeparam name="T">
     /// The pixel type that matches <see cref="PixelFormat"/>: <see cref="Rgba32"/>, <see cref="Bgra32"/>,
-    /// <see cref="Rgb24"/> or <see cref="L8"/>.
+    /// <see cref="Rgb24"/>, <see cref="L8"/>, <see cref="Rgba64"/>, <see cref="Rgb48"/> or <see cref="L16"/>.
     /// </typeparam>
     /// <param name="y">The row, from 0 at the top.</param>
     /// <returns>The row, <see cref="Width"/> pixels long.</returns>
@@ -112,7 +129,7 @@ public sealed partial class Image : IDisposable
         if (requested != PixelFormat)
         {
             throw new InvalidOperationException(requested == PixelFormat.None
-                ? $"{typeof(T).Name} isn't a pixel type. Use Rgba32, Bgra32, Rgb24 or L8."
+                ? $"{typeof(T).Name} isn't a pixel type. Use Rgba32, Bgra32, Rgb24, L8, Rgba64, Rgb48 or L16."
                 : $"The image is {PixelFormat}, so its rows are {PixelFormat} pixels, not {typeof(T).Name}.");
         }
 
@@ -126,7 +143,7 @@ public sealed partial class Image : IDisposable
     public Image Clone()
     {
         Span<byte> source = GetPixelBytes();
-        var copy = new Image(Width, Height, PixelFormat);
+        var copy = new Image(Width, Height, PixelFormat) { ColorSpace = ColorSpace };
         source.CopyTo(copy.GetPixelBytes());
         return copy;
     }
@@ -150,8 +167,11 @@ public sealed partial class Image : IDisposable
 
     internal static int GetBytesPerPixel(PixelFormat pixelFormat) => pixelFormat switch
     {
+        PixelFormat.Rgba64 => 8,
+        PixelFormat.Rgb48 => 6,
         PixelFormat.Rgba32 or PixelFormat.Bgra32 => 4,
         PixelFormat.Rgb24 => 3,
+        PixelFormat.L16 => 2,
         PixelFormat.L8 => 1,
         _ => throw new ArgumentOutOfRangeException(nameof(pixelFormat), pixelFormat, "Not a pixel format."),
     };
@@ -175,7 +195,22 @@ public sealed partial class Image : IDisposable
             return PixelFormat.Rgb24;
         }
 
-        return typeof(T) == typeof(L8) ? PixelFormat.L8 : PixelFormat.None;
+        if (typeof(T) == typeof(L8))
+        {
+            return PixelFormat.L8;
+        }
+
+        if (typeof(T) == typeof(Rgba64))
+        {
+            return PixelFormat.Rgba64;
+        }
+
+        if (typeof(T) == typeof(Rgb48))
+        {
+            return PixelFormat.Rgb48;
+        }
+
+        return typeof(T) == typeof(L16) ? PixelFormat.L16 : PixelFormat.None;
     }
 
     private byte[] Buffer

@@ -45,16 +45,31 @@ public class PngDecoderTests
             using Image rgba = Image.Decode(png, AsRgba);
             Assert.Equal(ExpectedRgba(width, height, depth, colourType, samples, palette), Pixels(rgba));
 
+            byte[] rgba64 = ExpectedRgba64(width, height, depth, colourType, samples, palette);
+            using Image wide = Image.Decode(png, new DecodeOptions { PixelFormat = PixelFormat.Rgba64 });
+            Assert.Equal(rgba64, Pixels(wide));
+
             using Image natural = Image.Decode(png);
-            PixelFormat expected = colourType switch
+            int channels = colourType switch
             {
-                0 => PixelFormat.L8,
-                2 or 3 => PixelFormat.Rgb24,
-                _ => PixelFormat.Rgba32,
+                0 => 1,
+                2 or 3 => 3,
+                _ => 4,
+            };
+            PixelFormat expected = (channels, depth == 16) switch
+            {
+                (1, false) => PixelFormat.L8,
+                (3, false) => PixelFormat.Rgb24,
+                (4, false) => PixelFormat.Rgba32,
+                (1, true) => PixelFormat.L16,
+                (3, true) => PixelFormat.Rgb48,
+                _ => PixelFormat.Rgba64,
             };
             Assert.Equal(expected, natural.PixelFormat);
             Assert.Equal((width, height), (natural.Width, natural.Height));
-            Assert.Equal(Narrow(ExpectedRgba(width, height, depth, colourType, samples, palette), natural.BytesPerPixel), Pixels(natural));
+            Assert.Equal(
+                depth == 16 ? Narrow(rgba64, channels, 2) : Narrow(ExpectedRgba(width, height, depth, colourType, samples, palette), channels),
+                Pixels(natural));
         }
     }
 
@@ -76,10 +91,18 @@ public class PngDecoderTests
 
         using Image image = Image.Decode(png);
 
-        Assert.Equal(PixelFormat.Rgba32, image.PixelFormat);
-        byte[] expected = ExpectedRgba(8, 8, depth, colourType, samples, trns: trns);
-        Assert.Equal(expected, Pixels(image));
-        Assert.Equal(0, image.GetRow<Rgba32>(0)[0].A);
+        if (depth == 16)
+        {
+            Assert.Equal(PixelFormat.Rgba64, image.PixelFormat);
+            Assert.Equal(ExpectedRgba64(8, 8, depth, colourType, samples, trns: trns), Pixels(image));
+            Assert.Equal(0, image.GetRow<Rgba64>(0)[0].A);
+        }
+        else
+        {
+            Assert.Equal(PixelFormat.Rgba32, image.PixelFormat);
+            Assert.Equal(ExpectedRgba(8, 8, depth, colourType, samples, trns: trns), Pixels(image));
+            Assert.Equal(0, image.GetRow<Rgba32>(0)[0].A);
+        }
     }
 
     [Fact]
@@ -103,9 +126,9 @@ public class PngDecoderTests
         int[] samples = [0, 128, 129, 385, 386, 32767, 32768, 65406, 65407, 65535];
         byte[] png = Build(samples.Length, 1, 16, 0, samples);
 
-        using Image image = Image.Decode(png);
+        using Image image = Image.Decode(png, AsRgba);
 
-        Assert.Equal([0, 0, 1, 1, 2, 127, 128, 254, 255, 255], Pixels(image));
+        Assert.Equal([0, 0, 1, 1, 2, 127, 128, 254, 255, 255], Narrow(Pixels(image), 1));
     }
 
     [Fact]
@@ -238,7 +261,7 @@ public class PngDecoderTests
     {
         int[] samples = RandomSamples(40, 30, 16, 6, seed: 12);
         byte[] png = Build(40, 30, 16, 6, samples, interlaced: true);
-        byte[] expected = ExpectedRgba(40, 30, 16, 6, samples);
+        byte[] expected = ExpectedRgba64(40, 30, 16, 6, samples);
 
         using var seekable = new MemoryStream(png);
         using Image fromSeekable = await Image.DecodeAsync(seekable, cancellationToken: TestContext.Current.CancellationToken);
@@ -430,22 +453,6 @@ public class PngDecoderTests
 
     private static void AssertCorrupt(byte[] png, string what) =>
         Assert.True(Record.Exception(() => Image.Decode(png)) is ImageFormatException, what);
-
-    private static byte[] Narrow(byte[] rgba, int bytesPerPixel)
-    {
-        if (bytesPerPixel == 4)
-        {
-            return rgba;
-        }
-
-        byte[] narrow = new byte[rgba.Length / 4 * bytesPerPixel];
-        for (int p = 0; p < rgba.Length / 4; p++)
-        {
-            rgba.AsSpan(p * 4, bytesPerPixel).CopyTo(narrow.AsSpan(p * bytesPerPixel));
-        }
-
-        return narrow;
-    }
 
     private static int ChunkEnd(byte[] png, string type)
     {

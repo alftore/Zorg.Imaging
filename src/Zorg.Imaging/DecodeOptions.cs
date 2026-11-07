@@ -29,14 +29,16 @@ public sealed class DecodeOptions
     } = ImageLimits.Default;
 
     /// <summary>
-    /// The layout of the decoded image. <see cref="PixelFormat.None"/>, the default, picks the layout closest to the
-    /// file: <see cref="PixelFormat.L8"/> for grey, <see cref="PixelFormat.Rgb24"/> for colour, and
-    /// <see cref="PixelFormat.Rgba32"/> when the file has any transparency. <see cref="PixelFormat.Rgba32"/> and
-    /// <see cref="PixelFormat.Bgra32"/> can be asked for and hold any file exactly.
+    /// The layout of the decoded image. <see cref="PixelFormat.None"/>, the default, picks the layout that holds the
+    /// file without loss: <see cref="PixelFormat.L8"/> for grey, <see cref="PixelFormat.Rgb24"/> for colour, and
+    /// <see cref="PixelFormat.Rgba32"/> when the file has any transparency, or <see cref="PixelFormat.L16"/>,
+    /// <see cref="PixelFormat.Rgb48"/> and <see cref="PixelFormat.Rgba64"/> for 16-bit files.
+    /// <see cref="PixelFormat.Rgba64"/> holds any file exactly. <see cref="PixelFormat.Rgba32"/> and
+    /// <see cref="PixelFormat.Bgra32"/> hold any 8-bit file exactly, and round 16-bit samples to the nearest 8-bit value.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// The value is <see cref="PixelFormat.Rgb24"/> or <see cref="PixelFormat.L8"/>, which would drop alpha or colour,
-    /// or isn't a format.
+    /// The value is <see cref="PixelFormat.Rgb24"/>, <see cref="PixelFormat.L8"/>, <see cref="PixelFormat.Rgb48"/> or
+    /// <see cref="PixelFormat.L16"/>, which would drop alpha or colour, or isn't a format.
     /// </exception>
     /// <example><code>var options = new DecodeOptions { PixelFormat = PixelFormat.Bgra32 };</code></example>
     public PixelFormat PixelFormat
@@ -44,12 +46,12 @@ public sealed class DecodeOptions
         get;
         init
         {
-            if (value is not (PixelFormat.None or PixelFormat.Rgba32 or PixelFormat.Bgra32))
+            if (value is not (PixelFormat.None or PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Rgba64))
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(value),
                     value,
-                    "Decoding can ask for None, Rgba32 or Bgra32. Rgb24 and L8 would drop alpha or colour.");
+                    "Decoding can ask for None, Rgba32, Bgra32 or Rgba64. The formats without alpha, or without colour, would drop it.");
             }
 
             field = value;

@@ -66,8 +66,9 @@ internal readonly record struct PngHeader(int Width, int Height, int BitDepth, i
 
     /// <summary>Checks the size against the limits, and against what memory can hold, before anything is allocated.</summary>
     /// <param name="limits">The limits.</param>
+    /// <param name="requested">The layout asked for, or <see cref="PixelFormat.None"/>.</param>
     /// <exception cref="ImageLimitException">The image is too large.</exception>
-    public void CheckLimits(ImageLimits limits)
+    public void CheckLimits(ImageLimits limits, PixelFormat requested)
     {
         long pixels = (long)Width * Height;
         if (pixels > limits.MaxPixels)
@@ -77,8 +78,9 @@ internal readonly record struct PngHeader(int Width, int Height, int BitDepth, i
                 $"The PNG image is {Width} x {Height}, {pixels} pixels, more than the {limits.MaxPixels}-pixel limit (ImageLimits.MaxPixels)."));
         }
 
-        // Four bytes a pixel is the most any decoded layout takes; a raw row may take eight (16-bit RGBA).
-        if (pixels * 4 > Array.MaxLength || ((long)Width * BitsPerPixel / 8) + 1 > Array.MaxLength)
+        // Eight bytes a pixel for the 16-bit layouts, at most four for the rest; a raw row may take eight (16-bit RGBA).
+        int bytesPerPixel = BitDepth == 16 || requested == PixelFormat.Rgba64 ? 8 : 4;
+        if (pixels * bytesPerPixel > Array.MaxLength || ((long)Width * BitsPerPixel / 8) + 1 > Array.MaxLength)
         {
             throw ImageErrors.ExceedsLimits(string.Create(
                 CultureInfo.InvariantCulture,

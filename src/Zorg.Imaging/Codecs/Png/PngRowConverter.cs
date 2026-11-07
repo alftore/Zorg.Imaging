@@ -1,23 +1,25 @@
 using System;
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 
 namespace Zorg.Imaging.Codecs.Png;
 
 /// <summary>Turns a PNG row's raw samples into pixels of the decoded layout.</summary>
 /// <remarks>
-/// 16-bit samples round to 8 bits as <c>(v + 128) / 257</c>, the nearest value, which is what libpng's scale-16 and
-/// ImageMagick give. Grey below 8 bits is scaled up exactly (a 1-bit 1 becomes 255). A <c>tRNS</c> colour is matched
-/// against the raw sample at full depth, before scaling.
+/// Samples go through 16-bit RGBA: 8-bit values times 257, lower depths scaled up exactly (a 1-bit 1 becomes 65535).
+/// For an 8-bit target, 16-bit samples round as <c>(v + 128) / 257</c>, the nearest value, which is what libpng's
+/// scale-16 and ImageMagick give; 8-bit and lower depths come back exactly. A <c>tRNS</c> colour is matched against the
+/// raw sample at full depth, before scaling.
 /// </remarks>
 internal sealed class PngRowConverter
 {
     private readonly PngHeader _header;
-    private readonly byte[] _palette = [];
+    private readonly ushort[] _palette = [];
     private readonly int _transparentGrey = -1;
     private readonly int _transparentRed = -1;
     private readonly int _transparentGreen = -1;
     private readonly int _transparentBlue = -1;
-    private byte[] _rgba = [];
+    private ushort[] _rgba = [];
 
     /// <summary>Prepares a converter.</summary>
     /// <param name="header">The image header.</param>
@@ -27,30 +29,27 @@ internal sealed class PngRowConverter
     public PngRowConverter(PngHeader header, byte[]? palette, byte[]? transparency, PixelFormat requested)
     {
         _header = header;
-        bool alpha = header.ColourType is 4 or 6 || transparency is not null;
-        bool grey = header.ColourType is 0 or 4;
-        Target = requested != PixelFormat.None ? requested
-            : alpha ? PixelFormat.Rgba32
-            : grey ? PixelFormat.L8
-            : PixelFormat.Rgb24;
+        Target = requested != PixelFormat.None ? requested : NaturalFormat(header, transparency is not null);
 
         if (header.ColourType == 3)
         {
             // Every index gets an entry: past the end of the palette is opaque black, as browsers show it.
-            _palette = new byte[256 * 4];
+            _palette = new ushort[256 * 4];
             for (int i = 0; i < 256; i++)
             {
-                _palette[(i * 4) + 3] = 255;
+                _palette[(i * 4) + 3] = 65535;
             }
 
             for (int i = 0; i < palette!.Length / 3; i++)
             {
-                palette.AsSpan(i * 3, 3).CopyTo(_palette.AsSpan(i * 4));
+                _palette[i * 4] = (ushort)(palette[i * 3] * 257);
+                _palette[(i * 4) + 1] = (ushort)(palette[(i * 3) + 1] * 257);
+                _palette[(i * 4) + 2] = (ushort)(palette[(i * 3) + 2] * 257);
             }
 
             for (int i = 0; transparency is not null && i < transparency.Length; i++)
             {
-                _palette[(i * 4) + 3] = transparency[i];
+                _palette[(i * 4) + 3] = (ushort)(transparency[i] * 257);
             }
         }
         else if (transparency is not null && header.ColourType == 0)
@@ -68,6 +67,20 @@ internal sealed class PngRowConverter
     /// <summary>The layout the rows are converted to.</summary>
     public PixelFormat Target { get; }
 
+    /// <summary>The layout that holds the file without loss.</summary>
+    /// <param name="header">The image header.</param>
+    /// <param name="transparency">Whether there's a <c>tRNS</c> chunk.</param>
+    /// <returns>The layout.</returns>
+    public static PixelFormat NaturalFormat(PngHeader header, bool transparency)
+    {
+        bool alpha = header.ColourType is 4 or 6 || transparency;
+        bool grey = header.ColourType is 0 or 4;
+        bool wide = header.BitDepth == 16;
+        return alpha ? (wide ? PixelFormat.Rgba64 : PixelFormat.Rgba32)
+            : grey ? (wide ? PixelFormat.L16 : PixelFormat.L8)
+            : wide ? PixelFormat.Rgb48 : PixelFormat.Rgb24;
+    }
+
     /// <summary>Converts one row.</summary>
     /// <param name="raw">The unfiltered row.</param>
     /// <param name="destination">The pixels, <paramref name="width"/> times the target's bytes per pixel.</param>
@@ -84,59 +97,86 @@ internal sealed class PngRowConverter
             return;
         }
 
-        if (Target == PixelFormat.Rgba32)
-        {
-            ToRgba(raw, destination, width);
-            return;
-        }
-
         if (_rgba.Length < width * 4)
         {
-            _rgba = new byte[width * 4];
+            _rgba = new ushort[width * 4];
         }
 
-        Span<byte> rgba = _rgba.AsSpan(0, width * 4);
+        Span<ushort> rgba = _rgba.AsSpan(0, width * 4);
         ToRgba(raw, rgba, width);
         Pack(rgba, destination, Target);
     }
 
-    private static void Pack(ReadOnlySpan<byte> rgba, Span<byte> destination, PixelFormat target)
+    private static void Pack(ReadOnlySpan<ushort> rgba, Span<byte> destination, PixelFormat target)
     {
         int pixels = rgba.Length / 4;
         switch (target)
         {
+            case PixelFormat.Rgba64:
+                MemoryMarshal.AsBytes(rgba).CopyTo(destination);
+                break;
+
+            case PixelFormat.Rgb48:
+                // Chosen only when the file has no transparency, so alpha is always opaque here.
+                Span<ushort> rgb48 = MemoryMarshal.Cast<byte, ushort>(destination);
+                for (int i = 0; i < pixels; i++)
+                {
+                    rgba.Slice(i * 4, 3).CopyTo(rgb48[(i * 3)..]);
+                }
+
+                break;
+
+            case PixelFormat.L16:
+                // Grey without transparency: red holds the grey value.
+                Span<ushort> l16 = MemoryMarshal.Cast<byte, ushort>(destination);
+                for (int i = 0; i < pixels; i++)
+                {
+                    l16[i] = rgba[i * 4];
+                }
+
+                break;
+
+            case PixelFormat.Rgba32:
+                for (int i = 0; i < rgba.Length; i++)
+                {
+                    destination[i] = To8(rgba[i]);
+                }
+
+                break;
+
             case PixelFormat.Bgra32:
                 for (int i = 0; i < pixels; i++)
                 {
-                    destination[i * 4] = rgba[(i * 4) + 2];
-                    destination[(i * 4) + 1] = rgba[(i * 4) + 1];
-                    destination[(i * 4) + 2] = rgba[i * 4];
-                    destination[(i * 4) + 3] = rgba[(i * 4) + 3];
+                    destination[i * 4] = To8(rgba[(i * 4) + 2]);
+                    destination[(i * 4) + 1] = To8(rgba[(i * 4) + 1]);
+                    destination[(i * 4) + 2] = To8(rgba[i * 4]);
+                    destination[(i * 4) + 3] = To8(rgba[(i * 4) + 3]);
                 }
 
                 break;
 
             case PixelFormat.Rgb24:
-                // Chosen only when the file has no transparency, so alpha is always 255 here.
                 for (int i = 0; i < pixels; i++)
                 {
-                    rgba.Slice(i * 4, 3).CopyTo(destination[(i * 3)..]);
+                    destination[i * 3] = To8(rgba[i * 4]);
+                    destination[(i * 3) + 1] = To8(rgba[(i * 4) + 1]);
+                    destination[(i * 3) + 2] = To8(rgba[(i * 4) + 2]);
                 }
 
                 break;
 
             default:
-                // L8: chosen only for grey without transparency, so red holds the grey value.
+                // L8.
                 for (int i = 0; i < pixels; i++)
                 {
-                    destination[i] = rgba[i * 4];
+                    destination[i] = To8(rgba[i * 4]);
                 }
 
                 break;
         }
     }
 
-    private void ToRgba(ReadOnlySpan<byte> raw, Span<byte> rgba, int width)
+    private void ToRgba(ReadOnlySpan<byte> raw, Span<ushort> rgba, int width)
     {
         int depth = _header.BitDepth;
         switch (_header.ColourType)
@@ -145,8 +185,8 @@ internal sealed class PngRowConverter
                 for (int i = 0; i < width; i++)
                 {
                     int v = Sample(raw, i, depth);
-                    byte g = Scale(v, depth);
-                    Set(rgba, i, g, g, g, v == _transparentGrey ? (byte)0 : (byte)255);
+                    ushort g = Scale(v, depth);
+                    Set(rgba, i, g, g, g, v == _transparentGrey ? (ushort)0 : (ushort)65535);
                 }
 
                 break;
@@ -158,7 +198,7 @@ internal sealed class PngRowConverter
                     int g = Sample(raw, (i * 3) + 1, depth);
                     int b = Sample(raw, (i * 3) + 2, depth);
                     bool clear = r == _transparentRed && g == _transparentGreen && b == _transparentBlue;
-                    Set(rgba, i, Scale(r, depth), Scale(g, depth), Scale(b, depth), clear ? (byte)0 : (byte)255);
+                    Set(rgba, i, Scale(r, depth), Scale(g, depth), Scale(b, depth), clear ? (ushort)0 : (ushort)65535);
                 }
 
                 break;
@@ -174,29 +214,23 @@ internal sealed class PngRowConverter
             case 4:
                 for (int i = 0; i < width; i++)
                 {
-                    byte g = Scale(Sample(raw, i * 2, depth), depth);
+                    ushort g = Scale(Sample(raw, i * 2, depth), depth);
                     Set(rgba, i, g, g, g, Scale(Sample(raw, (i * 2) + 1, depth), depth));
                 }
 
                 break;
 
             default:
-                for (int i = 0; i < width; i++)
+                for (int i = 0; i < width * 4; i++)
                 {
-                    Set(
-                        rgba,
-                        i,
-                        Scale(Sample(raw, i * 4, depth), depth),
-                        Scale(Sample(raw, (i * 4) + 1, depth), depth),
-                        Scale(Sample(raw, (i * 4) + 2, depth), depth),
-                        Scale(Sample(raw, (i * 4) + 3, depth), depth));
+                    rgba[i] = Scale(Sample(raw, i, depth), depth);
                 }
 
                 break;
         }
     }
 
-    private static void Set(Span<byte> rgba, int pixel, byte r, byte g, byte b, byte a)
+    private static void Set(Span<ushort> rgba, int pixel, ushort r, ushort g, ushort b, ushort a)
     {
         int at = pixel * 4;
         rgba[at] = r;
@@ -213,10 +247,8 @@ internal sealed class PngRowConverter
         _ => (raw[n * depth / 8] >> (8 - depth - (n * depth % 8))) & ((1 << depth) - 1),
     };
 
-    private static byte Scale(int value, int depth) => depth switch
-    {
-        8 => (byte)value,
-        16 => (byte)((value + 128) / 257),
-        _ => (byte)(value * 255 / ((1 << depth) - 1)),
-    };
+    // To 16 bits: exact for every depth, since 65535 is a multiple of 1, 3, 15 and 255.
+    private static ushort Scale(int value, int depth) => depth == 16 ? (ushort)value : (ushort)(value * (65535 / ((1 << depth) - 1)));
+
+    private static byte To8(ushort value) => (byte)((value + 128) / 257);
 }

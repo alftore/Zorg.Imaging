@@ -106,6 +106,21 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     Check("png damage refused", refused);
 }
 
+// Colour: a 16-bit Display P3 image keeps its samples and its colour space through PNG.
+{
+    using var wide = new Image(5, 4, PixelFormat.Rgba64) { ColorSpace = ColorSpace.DisplayP3 };
+    wide.GetRow<Rgba64>(3)[4] = new Rgba64(65535, 1234, 7, 40000);
+    using var encoded = new MemoryStream();
+    wide.SaveAsPng(encoded);
+    using Image decoded = Image.Decode(encoded.ToArray());
+    Check(
+        "png 16-bit display p3 round trip",
+        decoded.PixelFormat == PixelFormat.Rgba64
+            && decoded.ColorSpace == ColorSpace.DisplayP3
+            && decoded.GetRow<Rgba64>(3)[4] == new Rgba64(65535, 1234, 7, 40000));
+    Check("colour space from cicp", ColorSpace.FromCicp(9, 16) == ColorSpace.Rec2020Pq && ColorSpace.Rec2020Pq.IsHdr);
+}
+
 return failures == 0 ? 0 : 1;
 
 static byte[] TinyPng(int width, int height)

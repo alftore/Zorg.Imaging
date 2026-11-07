@@ -23,9 +23,21 @@ internal static class Orientation
         ArgumentOutOfRangeException.ThrowIfGreaterThan(orientation, 8);
 
         bool swap = orientation >= 5;
-        var result = new Image(swap ? source.Height : source.Width, swap ? source.Width : source.Height, source.PixelFormat);
+        var result = new Image(swap ? source.Height : source.Width, swap ? source.Width : source.Height, source.PixelFormat)
+        {
+            ColorSpace = source.ColorSpace,
+        };
         switch (source.BytesPerPixel)
         {
+            case 8:
+                Transform<ulong>(source, result, orientation);
+                break;
+            case 6:
+                Transform<Rgb48>(source, result, orientation);
+                break;
+            case 2:
+                Transform<ushort>(source, result, orientation);
+                break;
             case 4:
                 Transform<uint>(source, result, orientation);
                 break;

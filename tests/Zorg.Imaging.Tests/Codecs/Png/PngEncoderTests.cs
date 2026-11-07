@@ -12,7 +12,7 @@ public class PngEncoderTests
     public static TheoryData<PixelFormat, int> Cases()
     {
         var data = new TheoryData<PixelFormat, int>();
-        foreach (PixelFormat format in new[] { PixelFormat.L8, PixelFormat.Rgb24, PixelFormat.Rgba32, PixelFormat.Bgra32 })
+        foreach (PixelFormat format in new[] { PixelFormat.L8, PixelFormat.Rgb24, PixelFormat.Rgba32, PixelFormat.Bgra32, PixelFormat.L16, PixelFormat.Rgb48, PixelFormat.Rgba64 })
         {
             foreach (int level in new[] { 0, 1, 6, 9 })
             {
@@ -48,6 +48,26 @@ public class PngEncoderTests
             Assert.Equal(colourType, png[25]);
             Assert.Equal(0, png[28]);
             Assert.Equal(["IHDR", "IDAT", "IEND"], Chunks(png).Select(c => c.Type));
+        }
+    }
+
+    [Fact]
+    public void Sixteen_bit_images_are_written_as_16_bit_big_endian_samples()
+    {
+        foreach ((PixelFormat format, byte colourType) in new[] { (PixelFormat.L16, (byte)0), (PixelFormat.Rgb48, (byte)2), (PixelFormat.Rgba64, (byte)6) })
+        {
+            using var image = new Image(3, 2, format);
+            image.GetPixelBytes()[0] = 0x34;
+            image.GetPixelBytes()[1] = 0x12;
+            byte[] png = Save(image, new PngEncoderOptions { CompressionLevel = 0 });
+
+            Assert.Equal(16, png[24]);
+            Assert.Equal(colourType, png[25]);
+            Assert.Equal(["IHDR", "IDAT", "IEND"], Chunks(png).Select(c => c.Type));
+
+            // Stored deflate: zlib header (2), block header (5), filter byte, then the first sample, big-endian.
+            int data = Chunks(png).Single(c => c.Type == "IDAT").Offset + 8;
+            Assert.Equal([0, 0x12, 0x34], png[(data + 7)..(data + 10)]);
         }
     }
 

@@ -14,6 +14,9 @@ public class ImageBufferTests
         { PixelFormat.Bgra32, 4 },
         { PixelFormat.Rgb24, 3 },
         { PixelFormat.L8, 1 },
+        { PixelFormat.Rgba64, 8 },
+        { PixelFormat.Rgb48, 6 },
+        { PixelFormat.L16, 2 },
     };
 
     [Theory]
@@ -78,6 +81,27 @@ public class ImageBufferTests
         Assert.Equal(4, Unsafe.SizeOf<Bgra32>());
         Assert.Equal(3, Unsafe.SizeOf<Rgb24>());
         Assert.Equal(1, Unsafe.SizeOf<L8>());
+        Assert.Equal(8, Unsafe.SizeOf<Rgba64>());
+        Assert.Equal(6, Unsafe.SizeOf<Rgb48>());
+        Assert.Equal(2, Unsafe.SizeOf<L16>());
+    }
+
+    [Fact]
+    public void Sixteen_bit_channels_are_in_the_machine_byte_order()
+    {
+        using var rgba = new Image(1, 1, PixelFormat.Rgba64);
+        using var rgb = new Image(2, 1, PixelFormat.Rgb48);
+        using var grey = new Image(1, 1, PixelFormat.L16);
+
+        rgba.GetRow<Rgba64>(0)[0] = new Rgba64(0x0102, 0x0304, 0x0506, 0x0708);
+        rgb.GetRow<Rgb48>(0)[1] = new Rgb48(1, 2, 65535);
+        grey.GetRow<L16>(0)[0] = new L16(0xABCD);
+
+        Assert.True(BitConverter.IsLittleEndian);
+        Assert.Equal([2, 1, 4, 3, 6, 5, 8, 7], rgba.GetPixelBytes().ToArray());
+        Assert.Equal([0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 255, 255], rgb.GetPixelBytes().ToArray());
+        Assert.Equal([0xCD, 0xAB], grey.GetPixelBytes().ToArray());
+        Assert.Equal(new Rgba64(0x0102, 0x0304, 0x0506, 0x0708), rgba.Clone().GetRow<Rgba64>(0)[0]);
     }
 
     [Fact]
@@ -151,6 +175,13 @@ public class ImageBufferTests
         Assert.Equal(new L8(5).GetHashCode(), new L8(5).GetHashCode());
         Assert.Equal("Rgba32(1, 2, 3, 255)", new Rgba32(1, 2, 3).ToString());
         Assert.Equal("L8(7)", new L8(7).ToString());
+        Assert.Equal(new Rgba64(1, 2, 3, 65535), new Rgba64(1, 2, 3));
+        Assert.True(new Rgb48(1, 2, 3) != new Rgb48(1, 2, 4));
+        Assert.True(new L16(500) == new L16(500));
+        Assert.Equal(new Rgb48(9, 8, 7).GetHashCode(), new Rgb48(9, 8, 7).GetHashCode());
+        Assert.Equal("Rgba64(1, 2, 3, 65535)", new Rgba64(1, 2, 3).ToString());
+        Assert.Equal("Rgb48(1, 2, 3)", new Rgb48(1, 2, 3).ToString());
+        Assert.Equal("L16(700)", new L16(700).ToString());
     }
 
     public static TheoryData<ImageException, IdentifyStatus> Statuses { get; } = new()

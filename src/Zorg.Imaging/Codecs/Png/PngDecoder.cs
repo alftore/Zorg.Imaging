@@ -33,6 +33,11 @@ internal static class PngDecoder
     private const uint Trns = 0x74524E53;
     private const uint Exif = 0x65584966;
     private const uint CgBI = 0x43674249;
+    private const uint Cicp = 0x63494350;
+    private const uint Iccp = 0x69434350;
+    private const uint SrgbChunk = 0x73524742;
+    private const uint Gama = 0x67414D41;
+    private const uint Chrm = 0x6348524D;
 
     private const int IhdrLength = 13;
     private const int CrcLength = 4;
@@ -83,12 +88,13 @@ internal static class PngDecoder
 
         byte[] ihdr = await ReadChunkDataAsync(reader, type, IhdrLength, cancellationToken).ConfigureAwait(false);
         PngHeader header = PngHeader.Parse(ihdr);
-        header.CheckLimits(options.Limits);
+        header.CheckLimits(options.Limits, options.PixelFormat);
 
         byte[]? palette = null;
         byte[]? transparency = null;
         int orientation = 1;
         bool sawExif = false;
+        var colour = new ColourChunks();
 
         while (true)
         {
@@ -126,6 +132,10 @@ internal static class PngDecoder
                     await reader.SkipAsync(length - take + CrcLength, cancellationToken).ConfigureAwait(false);
                     break;
 
+                case Cicp or Iccp or SrgbChunk or Gama or Chrm:
+                    await colour.ReadAsync(reader, type, length, cancellationToken).ConfigureAwait(false);
+                    break;
+
                 default:
                     RefuseUnknownCritical(type);
                     await reader.SkipAsync(length + CrcLength, cancellationToken).ConfigureAwait(false);
@@ -140,6 +150,7 @@ internal static class PngDecoder
 
         var converter = new PngRowConverter(header, palette, transparency, options.PixelFormat);
         Image image = header.CreateImage(converter.Target);
+        image.ColorSpace = colour.Resolve();
         try
         {
             var idat = new IdatStream(reader, length, sync);
@@ -345,6 +356,142 @@ internal static class PngDecoder
         }
 
         return (length, type);
+    }
+
+    /// <summary>
+    /// The colour chunks before the image data. The PNG specification's precedence decides: <c>cICP</c>, then
+    /// <c>iCCP</c>, then <c>sRGB</c>, then <c>gAMA</c> and <c>cHRM</c>. A second chunk of a kind is ignored.
+    /// </summary>
+    private sealed class ColourChunks
+    {
+        private byte[]? _cicp;
+        private byte[]? _iccProfile;
+        private bool _srgb;
+        private int _gamma;
+        private int[]? _chromaticities;
+
+        public async ValueTask ReadAsync(DataReader reader, uint type, long length, CancellationToken cancellationToken)
+        {
+            bool seen = type switch
+            {
+                Cicp => _cicp is not null,
+                Iccp => _iccProfile is not null,
+                SrgbChunk => _srgb,
+                Gama => _gamma != 0,
+                _ => _chromaticities is not null,
+            };
+            if (seen)
+            {
+                await reader.SkipAsync(length + CrcLength, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            long expected = type switch
+            {
+                Cicp => 4,
+                SrgbChunk => 1,
+                Gama => 4,
+                Chrm => 32,
+                _ => -1,
+            };
+            if (expected >= 0 && length != expected)
+            {
+                throw ImageErrors.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The PNG file's {ChunkName(type)} chunk is {length} bytes; it must be {expected}."));
+            }
+
+            if (type == Iccp && length > ColorSpace.MaxIccProfileBytes)
+            {
+                throw ImageErrors.ExceedsLimits(string.Create(CultureInfo.InvariantCulture, $"The PNG file's iCCP chunk is {length} bytes, more than the {ColorSpace.MaxIccProfileBytes}-byte limit for a profile."));
+            }
+
+            byte[] data = await ReadChunkDataAsync(reader, type, length, cancellationToken).ConfigureAwait(false);
+            switch (type)
+            {
+                case Cicp:
+                    _cicp = data;
+                    break;
+
+                case Iccp:
+                    _iccProfile = InflateProfile(data);
+                    break;
+
+                case SrgbChunk:
+                    _srgb = true;
+                    break;
+
+                case Gama:
+                    _gamma = (int)Math.Min(BinaryPrimitives.ReadUInt32BigEndian(data), int.MaxValue);
+                    if (_gamma == 0)
+                    {
+                        throw ImageErrors.Corrupt("The PNG file's gAMA chunk gives a gamma of 0.");
+                    }
+
+                    break;
+
+                default:
+                    _chromaticities = new int[8];
+                    for (int i = 0; i < 8; i++)
+                    {
+                        _chromaticities[i] = (int)Math.Min(BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(i * 4)), int.MaxValue);
+                    }
+
+                    break;
+            }
+        }
+
+        public ColorSpace Resolve()
+        {
+            if (_cicp is not null)
+            {
+                return ColorSpace.FromCicp(_cicp[0], _cicp[1], _cicp[2], _cicp[3] != 0, _iccProfile);
+            }
+
+            if (_iccProfile is not null)
+            {
+                return ColorSpace.FromCheckedIccProfile(_iccProfile);
+            }
+
+            return _srgb || (_gamma == 0 && _chromaticities is null) ? ColorSpace.Srgb : ColorSpace.FromPngGamma(_gamma, _chromaticities);
+        }
+
+        // iCCP: a profile name of 1 to 79 bytes, a zero byte, compression method 0, then the zlib-compressed profile.
+        private static byte[] InflateProfile(byte[] data)
+        {
+            int nameEnd = data.AsSpan(0, Math.Min(data.Length, 80)).IndexOf((byte)0);
+            if (nameEnd < 1 || nameEnd + 1 >= data.Length || data[nameEnd + 1] != 0)
+            {
+                throw ImageErrors.Corrupt("The PNG file's iCCP chunk doesn't start with a profile name and compression method 0.");
+            }
+
+            byte[] profile;
+            try
+            {
+                using var zlib = new ZLibStream(new MemoryStream(data, nameEnd + 2, data.Length - nameEnd - 2), CompressionMode.Decompress);
+                using var inflated = new MemoryStream();
+                byte[] block = new byte[16 * 1024];
+                int read;
+                while ((read = zlib.Read(block)) > 0)
+                {
+                    // Bounded: a small chunk can't inflate into an unbounded profile.
+                    if (inflated.Length + read > ColorSpace.MaxIccProfileBytes)
+                    {
+                        throw ImageErrors.ExceedsLimits(string.Create(CultureInfo.InvariantCulture, $"The PNG file's ICC profile inflates to more than the {ColorSpace.MaxIccProfileBytes}-byte limit."));
+                    }
+
+                    inflated.Write(block, 0, read);
+                }
+
+                profile = inflated.ToArray();
+            }
+            catch (InvalidDataException ex)
+            {
+                throw new ImageFormatException("The PNG file's compressed ICC profile is damaged.", ex);
+            }
+
+            return ColorSpace.CheckIccProfile(profile) is null
+                ? profile
+                : throw ImageErrors.Corrupt("The PNG file's iCCP chunk doesn't hold an ICC profile.");
+        }
     }
 
     // Reads a chunk's data and CRC, checks the CRC, and returns the data.

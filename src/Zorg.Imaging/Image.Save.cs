@@ -18,8 +18,16 @@ public sealed partial class Image
     /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
     /// <exception cref="IOException">The stream itself fails.</exception>
     /// <remarks>
-    /// The file is 8-bit grey (<see cref="PixelFormat.L8"/>), RGB (<see cref="PixelFormat.Rgb24"/>) or RGBA
-    /// (<see cref="PixelFormat.Rgba32"/> and <see cref="PixelFormat.Bgra32"/>), and carries no metadata.
+    /// <para>
+    /// The file is grey (<see cref="PixelFormat.L8"/>, <see cref="PixelFormat.L16"/>), RGB (<see cref="PixelFormat.Rgb24"/>,
+    /// <see cref="PixelFormat.Rgb48"/>) or RGBA (<see cref="PixelFormat.Rgba32"/>, <see cref="PixelFormat.Bgra32"/>,
+    /// <see cref="PixelFormat.Rgba64"/>), 8 or 16 bits as the image holds it.
+    /// </para>
+    /// <para>
+    /// The <see cref="ColorSpace"/> is written so the file shows the same colours: nothing for sRGB, a <c>cICP</c> chunk
+    /// for CICP code points (Display P3, HDR), an <c>iCCP</c> chunk for an ICC profile, or <c>gAMA</c> and <c>cHRM</c> as
+    /// they were read. No other metadata is written.
+    /// </para>
     /// </remarks>
     /// <example>
     /// <code>
