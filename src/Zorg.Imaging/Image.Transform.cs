@@ -304,20 +304,28 @@ public sealed partial class Image
     private static ushort Blend16(int colour, int background, int alpha) =>
         (ushort)((((long)colour * alpha) + ((long)background * (65535 - alpha)) + 32767) / 65535);
 
-    // The largest size inside the box with this image's aspect ratio, never larger than the image.
-    private (int Width, int Height) Inside(int width, int height)
+    /// <summary>The largest size inside a box with an image's aspect ratio, never larger than the image.</summary>
+    internal static (int Width, int Height) Inside(int imageWidth, int imageHeight, int width, int height)
     {
-        if (Width <= width && Height <= height)
+        if (imageWidth <= width && imageHeight <= height)
         {
-            return (Width, Height);
+            return (imageWidth, imageHeight);
         }
 
         // Whichever side is tighter decides; the other is rounded to the nearest pixel and kept inside the box.
-        if ((long)Width * height > (long)Height * width)
+        if ((long)imageWidth * height > (long)imageHeight * width)
         {
-            return (width, (int)Math.Clamp(((2L * Height * width) + Width) / (2L * Width), 1, height));
+            return (width, (int)Math.Clamp(((2L * imageHeight * width) + imageWidth) / (2L * imageWidth), 1, height));
         }
 
-        return ((int)Math.Clamp(((2L * Width * height) + Height) / (2L * Height), 1, width), height);
+        return ((int)Math.Clamp(((2L * imageWidth * height) + imageHeight) / (2L * imageHeight), 1, width), height);
     }
+
+    /// <summary>The smallest size with an image's aspect ratio that covers a box: what <see cref="Fill"/> resizes to before it crops.</summary>
+    internal static (int Width, int Height) Covering(int imageWidth, int imageHeight, int width, int height) =>
+        (long)imageWidth * height > (long)imageHeight * width
+            ? ((int)Math.Min(((2L * imageWidth * height) + imageHeight) / (2L * imageHeight), int.MaxValue), height)
+            : (width, (int)Math.Min(((2L * imageHeight * width) + imageWidth) / (2L * imageWidth), int.MaxValue));
+
+    private (int Width, int Height) Inside(int width, int height) => Inside(Width, Height, width, height);
 }

@@ -185,6 +185,22 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
             && result.ColorSpace == ColorSpace.DisplayP3 && result.GetRow<Rgb24>(11)[15] == new Rgb24(0xC3, 0xC3, 0xC3));
 }
 
+// JPEG: decode a 4:2:0 file as libjpeg-turbo does (within rounding), at full size and shrunk on load by the pipeline.
+{
+    using Stream resource = typeof(ForwardOnlyStream).Assembly.GetManifestResourceStream("s420.jpg")!;
+    using var copy = new MemoryStream();
+    resource.CopyTo(copy);
+    byte[] jpeg = copy.ToArray();
+    using Image decoded = Image.Decode(jpeg);
+    Rgb24 first = decoded.GetRow<Rgb24>(0)[0];
+    Rgb24 last = decoded.GetRow<Rgb24>(44)[66];
+    static bool Near(Rgb24 a, int r, int g, int b) => Math.Abs(a.R - r) <= 4 && Math.Abs(a.G - g) <= 4 && Math.Abs(a.B - b) <= 4;
+    Check("jpeg decode", (decoded.Width, decoded.Height) == (67, 45) && Near(first, 125, 204, 87) && Near(last, 19, 60, 46));
+
+    using Image thumb = ImagePipeline.Load(new ForwardOnlyStream(jpeg)).Fit(16, 16).ToImageAsync().AsTask().GetAwaiter().GetResult();
+    Check("jpeg shrink on load", (thumb.Width, thumb.Height) == (16, 11) && thumb.PixelFormat == PixelFormat.Rgb24);
+}
+
 return failures == 0 ? 0 : 1;
 
 static byte[] TinyPng(int width, int height)

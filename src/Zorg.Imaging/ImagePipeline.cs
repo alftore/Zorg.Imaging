@@ -18,8 +18,9 @@ namespace Zorg.Imaging;
 /// the next step has used them.
 /// </para>
 /// <para>
-/// Knowing every step before decoding is what will let JPEG decode at a fraction of its size when the result is
-/// small (shrink-on-load). PNG has no such shortcut, so for now the pipeline decodes and then runs the steps in order.
+/// Knowing the steps before decoding lets JPEG decode at 1/2, 1/4 or 1/8 of its size when the first step makes it
+/// much smaller (shrink-on-load): a 12-megapixel photo fitted to 400 x 300 decodes at 1/4, still at least twice the
+/// target, and the resampler does the rest. PNG has no such shortcut. The steps then run in order.
 /// </para>
 /// <para>
 /// A pipeline loaded from a stream reads it when run, so it can run once; one loaded from bytes, a file or an
@@ -134,7 +135,11 @@ public sealed class ImagePipeline
             throw new ArgumentException("Give the width, the height or both; 0 for both leaves no size to keep.", nameof(width));
         }
 
-        return Then(Describe($"Resize({width}, {height}", resampler), image => image.Resize(width, height, resampler));
+        return Then(
+            Describe($"Resize({width}, {height}", resampler),
+            image => image.Resize(width, height, resampler),
+            (w, h) => (width == 0 ? Math.Max((int)Math.Min(((2L * w * height) + h) / (2L * h), int.MaxValue), 1) : width,
+                       height == 0 ? Math.Max((int)Math.Min(((2L * h * width) + w) / (2L * w), int.MaxValue), 1) : height));
     }
 
     /// <summary>Adds <see cref="Image.Fit"/>: shrink to fit inside a box, never enlarging.</summary>
@@ -147,7 +152,7 @@ public sealed class ImagePipeline
     public ImagePipeline Fit(int width, int height, Resampler? resampler = null)
     {
         CheckBox(width, height);
-        return Then(Describe($"Fit({width}, {height}", resampler), image => image.Fit(width, height, resampler));
+        return Then(Describe($"Fit({width}, {height}", resampler), image => image.Fit(width, height, resampler), (w, h) => Image.Inside(w, h, width, height));
     }
 
     /// <summary>Adds <see cref="Image.Fill"/>: cover a box exactly, cropping the overhang from the centre.</summary>
@@ -160,7 +165,7 @@ public sealed class ImagePipeline
     public ImagePipeline Fill(int width, int height, Resampler? resampler = null)
     {
         CheckBox(width, height);
-        return Then(Describe($"Fill({width}, {height}", resampler), image => image.Fill(width, height, resampler));
+        return Then(Describe($"Fill({width}, {height}", resampler), image => image.Fill(width, height, resampler), (w, h) => Image.Covering(w, h, width, height));
     }
 
     /// <summary>Adds <see cref="Image.Pad"/>: fit inside a box, then centre on a background colour.</summary>
@@ -174,7 +179,7 @@ public sealed class ImagePipeline
     public ImagePipeline Pad(int width, int height, Rgba32 background, Resampler? resampler = null)
     {
         CheckBox(width, height);
-        return Then(Describe($"Pad({width}, {height}, {background}", resampler), image => image.Pad(width, height, background, resampler));
+        return Then(Describe($"Pad({width}, {height}, {background}", resampler), image => image.Pad(width, height, background, resampler), (w, h) => Image.Inside(w, h, width, height));
     }
 
     /// <summary>Adds <see cref="Image.Crop"/>. Whether the rectangle fits is checked when the pipeline runs.</summary>
@@ -237,7 +242,9 @@ public sealed class ImagePipeline
     /// <example><code>using Image thumb = await ImagePipeline.Load(bytes).Fit(320, 320).ToImageAsync();</code></example>
     public async ValueTask<Image> ToImageAsync(CancellationToken cancellationToken = default)
     {
-        (Image image, bool owned) = await _source.OpenAsync(_options, cancellationToken).ConfigureAwait(false);
+        // When the first step resizes, the decoder learns its target and may decode smaller (JPEG shrink-on-load).
+        DecodeOptions options = _steps is [{ Size: { } size }, ..] ? _options.WithShrinkTarget(size) : _options;
+        (Image image, bool owned) = await _source.OpenAsync(options, cancellationToken).ConfigureAwait(false);
         try
         {
             foreach (Step step in _steps)
@@ -328,15 +335,16 @@ public sealed class ImagePipeline
     private static string Describe(string start, Resampler? resampler) =>
         resampler is null ? start + ")" : start + ", " + resampler.Name + ")";
 
-    private ImagePipeline Then(string name, Func<Image, Image> apply)
+    private ImagePipeline Then(string name, Func<Image, Image> apply, Func<int, int, (int Width, int Height)>? size = null)
     {
         var steps = new Step[_steps.Length + 1];
         _steps.CopyTo(steps, 0);
-        steps[^1] = new Step(name, apply);
+        steps[^1] = new Step(name, apply, size);
         return new ImagePipeline(_source, steps, _options);
     }
 
-    private sealed record Step(string Name, Func<Image, Image> Apply);
+    /// <summary>One step. <c>Size</c>, for steps that resize, gives the size the step makes from an upright source size.</summary>
+    private sealed record Step(string Name, Func<Image, Image> Apply, Func<int, int, (int Width, int Height)>? Size);
 
     /// <summary>Where the pixels come from. <c>Owned</c> says whether the pipeline must dispose the image it gets.</summary>
     private abstract class Source(string name)

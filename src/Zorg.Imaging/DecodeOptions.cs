@@ -65,4 +65,18 @@ public sealed class DecodeOptions
     /// </summary>
     /// <example><code>var options = new DecodeOptions { ApplyOrientation = false }; // pixels as stored</code></example>
     public bool ApplyOrientation { get; init; } = true;
+
+    /// <summary>
+    /// For shrink-on-load: given the upright size, the size the first step will make. A decoder that can decode
+    /// smaller (JPEG) then does, staying at least twice that size. Set only by <see cref="ImagePipeline"/>.
+    /// </summary>
+    internal Func<int, int, (int Width, int Height)>? ShrinkTarget { get; init; }
+
+    internal DecodeOptions WithShrinkTarget(Func<int, int, (int Width, int Height)>? target) => new()
+    {
+        Limits = Limits,
+        PixelFormat = PixelFormat,
+        ApplyOrientation = ApplyOrientation,
+        ShrinkTarget = target,
+    };
 }

@@ -10,6 +10,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Codecs\Jpeg\Files\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Zorg.Imaging\Zorg.Imaging.csproj" />
   </ItemGroup>
 

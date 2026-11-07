@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Zorg.Imaging.Codecs.Jpeg;
 using Zorg.Imaging.Codecs.Png;
 using Zorg.Imaging.Formats;
 
@@ -18,7 +19,7 @@ public sealed partial class Image
     /// <returns>The image, which the caller disposes.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="data"/> is <see langword="null"/>.</exception>
     /// <exception cref="UnsupportedImageFormatException">
-    /// The data isn't an image format this version can decode. So far that is PNG (and an APNG's still image).
+    /// The data isn't an image format this version can decode. So far that is PNG (and an APNG's still image) and JPEG.
     /// </exception>
     /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
     /// <exception cref="ImageLimitException">The image is larger than <see cref="ImageLimits"/> allows.</exception>
@@ -85,6 +86,11 @@ public sealed partial class Image
         if (format == ImageFormat.Png)
         {
             return await PngDecoder.DecodeAsync(reader, options, sync, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (format == ImageFormat.Jpeg)
+        {
+            return await JpegDecoder.DecodeAsync(reader, options, cancellationToken).ConfigureAwait(false);
         }
 
         throw format is null

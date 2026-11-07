@@ -29,6 +29,10 @@ The containers use `--network host`, as in Zorg.Ssh: on the Podman machine used 
 
 `ZORG_REQUIRE_ORACLES=1` turns every "tool isn't installed" skip into a failure. The Alpine gate sets it, and so does the CI oracle job. A run that passes by skipping the oracle tests proves nothing.
 
+### Test files
+
+The JPEG tests use small files in `tests/Zorg.Imaging.Tests/Codecs/Jpeg/Files`, written by `cjpeg` from ImageMagick plasma fractals, with `djpeg`'s decodes beside them as references, so they run on any machine. `scripts/make-jpeg-fixtures.sh` makes them again in the gate image. Benchmarks that need large photos read them from a folder named by an environment variable, such as `ZORG_BENCH_JPEG_DIR`; they aren't committed.
+
 ## Clean-room rules
 
 - Write codecs from the specifications: PNG (W3C), JPEG (ITU-T T.81, JFIF), GIF89a, VP8 (RFC 6386), WebP container and lossless (RFC 9649), APNG, EXIF (CIPA DC-008), ICC.

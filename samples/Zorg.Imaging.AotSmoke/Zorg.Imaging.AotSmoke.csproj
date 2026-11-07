@@ -9,6 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- A 67 x 45 4:2:0 JPEG from libjpeg-turbo's cjpeg (tests/Zorg.Imaging.Tests/Codecs/Jpeg/Files/s420.jpg). -->
+    <EmbeddedResource Include="s420.jpg" LogicalName="s420.jpg" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Zorg.Imaging\Zorg.Imaging.csproj" />
   </ItemGroup>
 
