@@ -12,3 +12,6 @@
 *.webp binary
 *.icc binary
 *.bin binary
+*.pnm binary
+*.ppm binary
+*.pgm binary
