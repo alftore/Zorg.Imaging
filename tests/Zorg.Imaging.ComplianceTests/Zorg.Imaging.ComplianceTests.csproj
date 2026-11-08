@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Tests against third-party corpora that scripts/fetch-corpora.sh puts in .cache/corpora, through the public API only. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Zorg.Imaging.Tests\Oracle.cs" Link="Oracle.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Zorg.Imaging\Zorg.Imaging.csproj" />
+  </ItemGroup>
+
+</Project>

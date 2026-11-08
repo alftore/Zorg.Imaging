@@ -12,6 +12,7 @@
     <Project Path="src/Zorg.Imaging/Zorg.Imaging.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Zorg.Imaging.ComplianceTests/Zorg.Imaging.ComplianceTests.csproj" />
     <Project Path="tests/Zorg.Imaging.Tests/Zorg.Imaging.Tests.csproj" />
   </Folder>
   <Folder Name="/benchmarks/">

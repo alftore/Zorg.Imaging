@@ -50,6 +50,10 @@ s=$(date +%s)
 timeout 900 dotnet build Zorg.Imaging.slnx -nologo -v q --no-restore || { echo "BUILD FAILED"; exit 1; }
 echo "build: $(( $(date +%s) - s )) s"
 
+# Fetched once into the zorg-imaging-corpora volume, then only checked; see scripts/fetch-corpora.sh.
+step "Corpora"
+timeout 900 sh scripts/fetch-corpora.sh || { echo "CORPORA FETCH FAILED"; status=1; }
+
 step "Unit tests"
 n=0
 while [ "$n" -lt "${ZORG_GATE_REPEAT:-1}" ]; do
@@ -57,6 +61,11 @@ while [ "$n" -lt "${ZORG_GATE_REPEAT:-1}" ]; do
   [ "${ZORG_GATE_REPEAT:-1}" -gt 1 ] && echo "run $n of ${ZORG_GATE_REPEAT}"
   run_tests tests/Zorg.Imaging.Tests 900 /tmp/unit.log
 done
+
+# PngSuite, the libwebp conformance vectors and the EXIF orientation photos; a missing corpus fails here.
+step "Compliance tests"
+export ZORG_REQUIRE_CORPORA=1
+run_tests tests/Zorg.Imaging.ComplianceTests 900 /tmp/compliance.log
 
 # The SIMD fallbacks: the same tests with AVX-512, then AVX2, then every hardware intrinsic switched off, so each
 # narrower path and the scalar code run too (D13). Results must not change.

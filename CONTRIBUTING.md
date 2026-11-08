@@ -33,6 +33,22 @@ The containers use `--network host`, as in Zorg.Ssh: on the Podman machine used 
 
 The JPEG tests use small files in `tests/Zorg.Imaging.Tests/Codecs/Jpeg/Files`, written by `cjpeg` from ImageMagick plasma fractals, with `djpeg`'s decodes beside them as references, so they run on any machine. `scripts/make-jpeg-fixtures.sh` makes them again in the gate image; the WebP files in `tests/Zorg.Imaging.Tests/Codecs/Webp/Files`, with `dwebp`'s decodes, come from `scripts/make-webp-fixtures.sh` the same way. Benchmarks that need large photos read them from a folder named by an environment variable, such as `ZORG_BENCH_JPEG_DIR`; they aren't committed.
 
+## Test corpora
+
+`scripts/fetch-corpora.sh` fetches PngSuite, the libwebp conformance vectors and recurser's EXIF orientation photos
+into `.cache/corpora` (about 25 MB, gitignored), checking every file against a pinned SHA-256 or git blob id. Nothing
+from them is committed: libwebp-test-data states no licence. `tests/Zorg.Imaging.ComplianceTests` runs against them
+through the public API only, and skips a corpus that isn't there; the Linux gate fetches them into its cached volume
+and sets `ZORG_REQUIRE_CORPORA=1`, so there a missing corpus fails.
+
+```bash
+scripts/fetch-corpora.sh
+```
+
+```bash
+dotnet test --project tests/Zorg.Imaging.ComplianceTests
+```
+
 ## Fuzzing
 
 Every decoder has mutation tests (`*MutationTests`): every truncation, every byte set to edge values, corrupted length

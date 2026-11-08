@@ -150,7 +150,23 @@ internal static class WebpDecoder
                 await reader.SkipAsync(1, cancellationToken).ConfigureAwait(false);
             }
 
-            return new Picture(width, height, Vp8lDecoder.Decode(data, width, height), alpha);
+            // The header's alpha bit is only a hint (the specification's word): libwebp keeps whatever alpha the pixels
+            // have, so a file that says "no alpha" but has transparent pixels decodes with them.
+            uint[] pixels = Vp8lDecoder.Decode(data, width, height);
+            return new Picture(width, height, pixels, alpha || !AllOpaque(pixels));
+        }
+
+        private static bool AllOpaque(ReadOnlySpan<uint> pixels)
+        {
+            foreach (uint pixel in pixels)
+            {
+                if (pixel < 0xFF000000u)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         public async ValueTask<Picture> ReadLossyAsync(uint size, byte[]? alpha, int expectedWidth, int expectedHeight, CancellationToken cancellationToken)

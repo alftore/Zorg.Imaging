@@ -67,6 +67,20 @@ public class WebpDecoderTests
     }
 
     [Fact]
+    public void A_lossless_file_that_says_no_alpha_keeps_the_alpha_its_pixels_have()
+    {
+        // The header bit is a hint; libwebp keeps transparent pixels whatever it says (libwebp-test-data's
+        // bad_palette_index.webp relies on it), so clearing the bit must not make them opaque.
+        byte[] webp = Sample("lossless-alpha");
+        Assert.Equal((byte)'L', webp[15]);
+        webp[24] &= 0xEF; // bit 28 of the 32 bits after the signature byte
+        using Image hinted = Image.Decode(webp);
+        using Image original = Image.Decode(Sample("lossless-alpha"));
+        Assert.Equal(PixelFormat.Rgba32, hinted.PixelFormat);
+        Assert.Equal(original.GetPixelBytes().ToArray(), hinted.GetPixelBytes().ToArray());
+    }
+
+    [Fact]
     public void An_animation_gives_its_first_frame_on_a_transparent_canvas()
     {
         // webpmux placed the 33 x 17 first frame at (6, 4) on a 40 x 24 canvas.
