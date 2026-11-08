@@ -1,5 +1,8 @@
 using System;
 using System.Buffers.Binary;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using static Zorg.Imaging.Codecs.Webp.Vp8Decoder;
@@ -40,6 +43,11 @@ internal sealed class Vp8Encoder
     private readonly Plane _v;
     private readonly byte[] _probabilities = Vp8Tables.DefaultCoefficientProbabilities.ToArray();
     private readonly Macroblock[] _macroblocks;
+
+    // Every macroblock's 25 blocks of levels and 16 subblock modes, in one array each rather than two small ones a
+    // macroblock (about 40 MB of garbage for a 12-megapixel picture).
+    private readonly short[] _levels;
+    private readonly byte[] _subModes;
     private readonly byte[] _aboveNonZero;
     private readonly byte[] _aboveModes;
     private readonly int _quantiser;
@@ -76,6 +84,8 @@ internal sealed class Vp8Encoder
         _u = new Plane(_mbWide * 8, _mbHigh * 8, extra: 0);
         _v = new Plane(_mbWide * 8, _mbHigh * 8, extra: 0);
         _macroblocks = new Macroblock[_mbWide * _mbHigh];
+        _levels = new short[(long)_mbWide * _mbHigh * 25 * 16];
+        _subModes = new byte[(long)_mbWide * _mbHigh * 16];
         _aboveNonZero = new byte[_mbWide * 9];
         _aboveModes = new byte[_mbWide * 4];
 
@@ -216,8 +226,7 @@ internal sealed class Vp8Encoder
             }
 
             ref Macroblock mb = ref _macroblocks[(my * _mbWide) + mx];
-            mb.Levels = new short[25 * 16];
-            mb.SubModes = new byte[16];
+            mb.Index = (my * _mbWide) + mx;
             Span<byte> aboveNonZero = _aboveNonZero.AsSpan(mx * 9, 9);
             Span<byte> aboveModes = _aboveModes.AsSpan(mx * 4, 4);
             ChooseLuma(ref mb, mx, my, edge, leftNonZero, aboveNonZero, leftModes, aboveModes);
@@ -280,6 +289,8 @@ internal sealed class Vp8Encoder
         Span<byte> reconstruction = stackalloc byte[16];
         Span<short> blockLevels = stackalloc short[16];
         Span<long> subRank = stackalloc long[10];
+        Span<byte> original = stackalloc byte[16];
+        Span<byte> predictions = stackalloc byte[10 * 16];
         long subTotal = _subblocks ? _lambda * ModeCost(BPred) : long.MaxValue;
         for (int i = 0; i < 16 && subTotal < best; i++)
         {
@@ -287,25 +298,30 @@ internal sealed class Vp8Encoder
             int by = y0 + ((i >> 2) * 4);
             int above = i < 4 ? aboveModes[i] : subModes[i - 4];
             int left = (i & 3) == 0 ? leftModes[i >> 2] : subModes[i - 1];
-            ReadOnlySpan<byte> modeProbabilities = Vp8Tables.KeyFrameSubblockModeProbabilities.Slice(((above * 10) + left) * 9, 9);
+            ReadOnlySpan<int> modeCosts = SubblockModeCosts.AsSpan(((above * 10) + left) * 10, 10);
             int context = subLeft[i >> 2] + subAbove[i & 3];
             long bestSub = long.MaxValue;
             int bestSubMode = BDcPred;
             bool bestNonZero = false;
+            // The edge is the same for every mode, so it is read once; each mode predicts into its own 16 bytes, which the
+            // full trials below copy into the plane instead of predicting again.
+            FillSubblockEdge(_y, edge, bx, by, (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
+            Gather4x4(_sourceY, (by * _strideY) + bx, _strideY, original);
             for (int mode = BDcPred; mode <= BHuPred; mode++)
             {
-                PredictSubblock(_y, edge, bx, by, mode, (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
-                long error = PredictionError(_sourceY, (by * _strideY) + bx, _strideY, _y, bx, by, 4);
-                subRank[mode] = Rank(error + (_lambdaSubblock * TreeCost(SubblockModeTree, modeProbabilities, mode)), mode);
+                Span<byte> prediction = predictions.Slice(mode * 16, 16);
+                PredictSubblock(edge, mode, prediction);
+                long error = (long)SquaredError(Vector128.Create<byte>(original), Vector128.Create<byte>(prediction)) << 8;
+                subRank[mode] = Rank(error + (_lambdaSubblock * modeCosts[mode]), mode);
             }
 
             subRank.Sort();
             for (int k = 0; k < _subblockCandidates; k++)
             {
                 int mode = (int)(subRank[k] & 0xF);
-                PredictSubblock(_y, edge, bx, by, mode, (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
+                WriteSubblock(_y, bx, by, predictions.Slice(mode * 16, 16));
                 (long distortion, int bits, bool nonZero) = Subblock(bx, by, 3, 0, context, _y1Dc, _y1Ac, blockLevels);
-                bits += TreeCost(SubblockModeTree, modeProbabilities, mode);
+                bits += modeCosts[mode];
                 long score = distortion + (_lambdaSubblock * bits);
                 if (score < bestSub)
                 {
@@ -326,11 +342,11 @@ internal sealed class Vp8Encoder
         if (subTotal < best)
         {
             mb.YMode = BPred;
-            subModes.CopyTo(mb.SubModes);
-            subLevels.CopyTo(mb.Levels.AsSpan(0, 16 * 16));
+            subModes.CopyTo(SubModes(mb));
+            subLevels.CopyTo(Levels(mb).Slice(0, 16 * 16));
             for (int i = 0; i < 16; i++)
             {
-                if (HasLevels(mb.Levels.AsSpan(i * 16, 16), 0))
+                if (HasLevels(Levels(mb).Slice(i * 16, 16), 0))
                 {
                     mb.NonZero |= 1u << i;
                 }
@@ -351,8 +367,8 @@ internal sealed class Vp8Encoder
         mb.YMode = bestMode;
         PredictBlock(_y, x0, y0, 16, bestMode, mx == 0, my == 0);
         WholeLuma(x0, y0, levels, leftNonZero, aboveNonZero, out uint nonZeroBits);
-        levels[..(16 * 16)].CopyTo(mb.Levels.AsSpan(0, 16 * 16));
-        levels.Slice(16 * 16, 16).CopyTo(mb.Levels.AsSpan(24 * 16, 16));
+        levels[..(16 * 16)].CopyTo(Levels(mb).Slice(0, 16 * 16));
+        levels.Slice(16 * 16, 16).CopyTo(Levels(mb).Slice(24 * 16, 16));
         mb.NonZero = nonZeroBits;
         byte implied = bestMode switch { VPred => BVePred, HPred => BHePred, TmPred => BTmPred, _ => BDcPred };
         aboveModes.Fill(implied);
@@ -440,7 +456,7 @@ internal sealed class Vp8Encoder
             PredictBlock(_v, cx, cy, 8, mode, mx == 0, my == 0);
             long error = PredictionError(_sourceU, (cy * _strideUv) + cx, _strideUv, _u, cx, cy, 8)
                 + PredictionError(_sourceV, (cy * _strideUv) + cx, _strideUv, _v, cx, cy, 8);
-            rank[mode] = Rank(error + (_lambda * TreeCost(UvModeTree, UvModeProbabilities, mode)), mode);
+            rank[mode] = Rank(error + (_lambda * ChromaModeCosts[mode]), mode);
         }
 
         rank.Sort();
@@ -453,7 +469,7 @@ internal sealed class Vp8Encoder
             PredictBlock(_v, cx, cy, 8, mode, mx == 0, my == 0);
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
-            long score = WholeChroma(cx, cy, levels, contextLeft, contextAbove, out _) + (_lambda * TreeCost(UvModeTree, UvModeProbabilities, mode));
+            long score = WholeChroma(cx, cy, levels, contextLeft, contextAbove, out _) + (_lambda * ChromaModeCosts[mode]);
             if (score < best)
             {
                 best = score;
@@ -465,7 +481,7 @@ internal sealed class Vp8Encoder
         PredictBlock(_u, cx, cy, 8, bestMode, mx == 0, my == 0);
         PredictBlock(_v, cx, cy, 8, bestMode, mx == 0, my == 0);
         WholeChroma(cx, cy, levels, leftNonZero, aboveNonZero, out uint nonZeroBits);
-        levels.CopyTo(mb.Levels.AsSpan(16 * 16, 8 * 16));
+        levels.CopyTo(Levels(mb).Slice(16 * 16, 8 * 16));
         mb.NonZero |= nonZeroBits << 16;
     }
 
@@ -504,7 +520,12 @@ internal sealed class Vp8Encoder
         return distortion + (_lambda * bits);
     }
 
-    private static int ModeCost(int yMode) => TreeCost(YModeTree, YModeProbabilities, yMode);
+    // The whole-block luma and chroma mode costs, fixed for key frames like the subblock ones.
+    private static readonly int[] LumaModeCosts = [.. Enumerable.Range(0, 5).Select(mode => TreeCost(YModeTree, YModeProbabilities, mode))];
+
+    private static readonly int[] ChromaModeCosts = [.. Enumerable.Range(0, 4).Select(mode => TreeCost(UvModeTree, UvModeProbabilities, mode))];
+
+    private static int ModeCost(int yMode) => LumaModeCosts[yMode];
 
     private static void Save(Plane plane, int x0, int y0, int size, Span<byte> into)
     {
@@ -529,15 +550,34 @@ internal sealed class Vp8Encoder
     private static long PredictionError(byte[] source, int at, int stride, Plane plane, int x0, int y0, int size)
     {
         long sum = 0;
-        for (int r = 0; r < size; r++)
+        if (size == 16)
         {
-            ReadOnlySpan<byte> predicted = plane.Row(y0 + r).Slice(x0, size);
-            ReadOnlySpan<byte> original = source.AsSpan(at + (r * stride), size);
-            for (int c = 0; c < size; c++)
+            for (int r = 0; r < 16; r++)
             {
-                int d = original[c] - predicted[c];
-                sum += d * d;
+                sum += SquaredError(Vector128.Create<byte>(source.AsSpan(at + (r * stride), 16)), Vector128.Create<byte>(plane.Row(y0 + r).Slice(x0, 16)));
             }
+        }
+        else if (size == 8)
+        {
+            // Two rows of 8 in each vector.
+            for (int r = 0; r < 8; r += 2)
+            {
+                Vector128<byte> original = Vector128.Create(
+                    MemoryMarshal.Read<ulong>(source.AsSpan(at + (r * stride), 8)),
+                    MemoryMarshal.Read<ulong>(source.AsSpan(at + ((r + 1) * stride), 8))).AsByte();
+                Vector128<byte> predicted = Vector128.Create(
+                    MemoryMarshal.Read<ulong>(plane.Row(y0 + r).Slice(x0, 8)),
+                    MemoryMarshal.Read<ulong>(plane.Row(y0 + r + 1).Slice(x0, 8))).AsByte();
+                sum += SquaredError(original, predicted);
+            }
+        }
+        else
+        {
+            Span<byte> original = stackalloc byte[16];
+            Span<byte> predicted = stackalloc byte[16];
+            Gather4x4(source, at, stride, original);
+            Gather4x4(plane, x0, y0, predicted);
+            sum = SquaredError(Vector128.Create<byte>(original), Vector128.Create<byte>(predicted));
         }
 
         return sum << 8;
@@ -545,18 +585,39 @@ internal sealed class Vp8Encoder
 
     private static long Distortion(byte[] source, int at, int stride, Plane plane, int x0, int y0)
     {
-        long sum = 0;
+        Span<byte> original = stackalloc byte[16];
+        Span<byte> reconstructed = stackalloc byte[16];
+        Gather4x4(source, at, stride, original);
+        Gather4x4(plane, x0, y0, reconstructed);
+        return (long)SquaredError(Vector128.Create<byte>(original), Vector128.Create<byte>(reconstructed)) << 8;
+    }
+
+    // A 4 x 4 block into 16 bytes, row by row.
+    private static void Gather4x4(byte[] source, int at, int stride, Span<byte> into)
+    {
         for (int r = 0; r < 4; r++)
         {
-            ReadOnlySpan<byte> reconstructed = plane.Row(y0 + r).Slice(x0, 4);
-            for (int c = 0; c < 4; c++)
-            {
-                int d = source[at + (r * stride) + c] - reconstructed[c];
-                sum += d * d;
-            }
+            source.AsSpan(at + (r * stride), 4).CopyTo(into.Slice(r * 4, 4));
         }
+    }
 
-        return sum << 8;
+    private static void Gather4x4(Plane plane, int x0, int y0, Span<byte> into)
+    {
+        for (int r = 0; r < 4; r++)
+        {
+            plane.Row(y0 + r).Slice(x0, 4).CopyTo(into.Slice(r * 4, 4));
+        }
+    }
+
+    // The sum of squared differences of 16 bytes: widened to 16 bits, where the difference of two bytes fits, then
+    // squared and summed at 32 bits.
+    private static int SquaredError(Vector128<byte> a, Vector128<byte> b)
+    {
+        Vector128<short> low = (Vector128.WidenLower(a) - Vector128.WidenLower(b)).AsInt16();
+        Vector128<short> high = (Vector128.WidenUpper(a) - Vector128.WidenUpper(b)).AsInt16();
+        Vector128<int> sum = (Vector128.WidenLower(low) * Vector128.WidenLower(low)) + (Vector128.WidenUpper(low) * Vector128.WidenUpper(low))
+            + (Vector128.WidenLower(high) * Vector128.WidenLower(high)) + (Vector128.WidenUpper(high) * Vector128.WidenUpper(high));
+        return Vector128.Sum(sum);
     }
 
     // ---- Transforms and quantisation ----
@@ -806,6 +867,25 @@ internal sealed class Vp8Encoder
     }
 
     // The bits to code a value with a tree (section 8.1); the path is found by walking the tree.
+    // The bits of each subblock mode in each context of the modes above and to the left: the probabilities are fixed for
+    // key frames, so the tree walks are done once.
+    private static readonly int[] SubblockModeCosts = BuildSubblockModeCosts();
+
+    private static int[] BuildSubblockModeCosts()
+    {
+        int[] costs = new int[10 * 10 * 10];
+        for (int context = 0; context < 100; context++)
+        {
+            ReadOnlySpan<byte> probabilities = Vp8Tables.KeyFrameSubblockModeProbabilities.Slice(context * 9, 9);
+            for (int mode = 0; mode < 10; mode++)
+            {
+                costs[(context * 10) + mode] = TreeCost(SubblockModeTree, probabilities, mode);
+            }
+        }
+
+        return costs;
+    }
+
     private static int TreeCost(ReadOnlySpan<sbyte> tree, ReadOnlySpan<byte> probabilities, int value)
     {
         var sink = new CostSink();
@@ -927,15 +1007,15 @@ internal sealed class Vp8Encoder
                 {
                     for (int i = 0; i < 16; i++)
                     {
-                        int a = i < 4 ? above[i] : mb.SubModes[i - 4];
-                        int l = (i & 3) == 0 ? leftModes[i >> 2] : mb.SubModes[i - 1];
-                        WriteTree(ref modes, SubblockModeTree, Vp8Tables.KeyFrameSubblockModeProbabilities.Slice(((a * 10) + l) * 9, 9), mb.SubModes[i], 0);
+                        int a = i < 4 ? above[i] : SubModes(mb)[i - 4];
+                        int l = (i & 3) == 0 ? leftModes[i >> 2] : SubModes(mb)[i - 1];
+                        WriteTree(ref modes, SubblockModeTree, Vp8Tables.KeyFrameSubblockModeProbabilities.Slice(((a * 10) + l) * 9, 9), SubModes(mb)[i], 0);
                     }
 
-                    mb.SubModes.AsSpan(12, 4).CopyTo(above);
+                    SubModes(mb).Slice(12, 4).CopyTo(above);
                     for (int r = 0; r < 4; r++)
                     {
-                        leftModes[r] = mb.SubModes[(r * 4) + 3];
+                        leftModes[r] = SubModes(mb)[(r * 4) + 3];
                     }
                 }
                 else
@@ -1004,7 +1084,7 @@ internal sealed class Vp8Encoder
                 int firstY = 0;
                 if (mb.YMode != BPred)
                 {
-                    ReadOnlySpan<short> y2 = mb.Levels.AsSpan(24 * 16, 16);
+                    ReadOnlySpan<short> y2 = Levels(mb).Slice(24 * 16, 16);
                     Tokens(ref sink, y2, 1, 0, left[8] + top[8]);
                     left[8] = top[8] = (byte)(HasLevels(y2, 0) ? 1 : 0);
                     firstY = 1;
@@ -1013,7 +1093,7 @@ internal sealed class Vp8Encoder
                 int yType = firstY == 1 ? 0 : 3;
                 for (int i = 0; i < 16; i++)
                 {
-                    ReadOnlySpan<short> block = mb.Levels.AsSpan(i * 16, 16);
+                    ReadOnlySpan<short> block = Levels(mb).Slice(i * 16, 16);
                     Tokens(ref sink, block, yType, firstY, left[i >> 2] + top[i & 3]);
                     left[i >> 2] = top[i & 3] = (byte)(HasLevels(block, firstY) ? 1 : 0);
                 }
@@ -1023,7 +1103,7 @@ internal sealed class Vp8Encoder
                     int slot = i < 20 ? 4 : 6;
                     int x = (i - 16) & 1;
                     int y = ((i - 16) >> 1) & 1;
-                    ReadOnlySpan<short> block = mb.Levels.AsSpan(i * 16, 16);
+                    ReadOnlySpan<short> block = Levels(mb).Slice(i * 16, 16);
                     Tokens(ref sink, block, 2, 0, left[slot + y] + top[slot + x]);
                     left[slot + y] = top[slot + x] = (byte)(HasLevels(block, 0) ? 1 : 0);
                 }
@@ -1034,12 +1114,15 @@ internal sealed class Vp8Encoder
     // A loop filter level for the quantiser: stronger as the steps grow, as blocking grows with them.
     private int FilterLevel() => Math.Clamp((_y1Ac * 3 / 8) + 2, 0, 63);
 
+    private Span<short> Levels(in Macroblock mb) => _levels.AsSpan(mb.Index * 25 * 16, 25 * 16);
+
+    private Span<byte> SubModes(in Macroblock mb) => _subModes.AsSpan(mb.Index * 16, 16);
+
     private struct Macroblock
     {
         public int YMode;
         public int UvMode;
-        public byte[] SubModes;
-        public short[] Levels;
+        public int Index;
         public uint NonZero;
         public bool Skip;
     }

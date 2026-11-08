@@ -167,6 +167,22 @@ where it was measured. `docs/performance.md` has the current numbers.
   where that was and how long: each code becomes one span copy. With decoding straight into the image rows, this
   halved GIF decoding.
 
+## Small things in hot loops
+
+- **`params ReadOnlySpan<T>` in a hot helper is not free.** The lossy WebP subblock predictor wrote its pixels through
+  `Set(block, value, params ReadOnlySpan<int> positions)`, one call per distinct value. Each call builds the span on the
+  stack and loops over it. Replacing the calls with plain stores (`b[1] = b[4] = value`) took a 400 x 300 lossy encode
+  from 29 to 20 ms on one core, and sped up lossy decoding, which uses the same predictor.
+- **Don't recompute what a search loop shares.** The encoder predicted each of the ten subblock modes into the plane
+  and read the edge pixels again for each. Reading the edge once, predicting into a 16-byte buffer per mode, comparing
+  with vector squared errors, and copying the chosen prediction back for the full trials took the same encode from 41
+  to 29 ms. Mode costs from fixed probabilities became tables built once.
+- **Hoisting can make a loop slower.** Moving two divisions that depend only on DC or AC out of the quantiser's loop
+  took that encode from 20 to 30 ms, most likely by changing the JIT's register use in the loop. Measure even the
+  changes that can only remove work.
+- **Check that a speed change leaves the output alone.** Hashing the encoder's output for a set of images, qualities and
+  efforts before and after showed every one of these changes produced the same bytes.
+
 ## Memory
 
 - **Small tables beat direct ones when they fit in cache.** The GIF encoder's LZW table started as a direct array,

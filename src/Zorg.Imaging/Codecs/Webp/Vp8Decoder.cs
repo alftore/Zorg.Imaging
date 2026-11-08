@@ -675,6 +675,24 @@ internal sealed class Vp8Decoder
     // Section 12.3: the ten subblock modes. A is the 8 pixels above (4 above, 4 above-right), L the 4 to the left.
     internal static void PredictSubblock(Plane plane, int[] edge, int x0, int y0, int mode, bool useMacroblockAboveRight, int aboveRightX, int aboveRightY)
     {
+        FillSubblockEdge(plane, edge, x0, y0, useMacroblockAboveRight, aboveRightX, aboveRightY);
+        Span<byte> b = stackalloc byte[16];
+        PredictSubblock(edge, mode, b);
+        WriteSubblock(plane, x0, y0, b);
+    }
+
+    /// <summary>Copies a 4 x 4 block of samples into the plane.</summary>
+    internal static void WriteSubblock(Plane plane, int x0, int y0, ReadOnlySpan<byte> b)
+    {
+        for (int r = 0; r < 4; r++)
+        {
+            b.Slice(r * 4, 4).CopyTo(plane.Row(y0 + r).Slice(x0, 4));
+        }
+    }
+
+    /// <summary>Reads the 13 pixels a subblock's prediction uses into <paramref name="edge"/>; the same for every mode.</summary>
+    internal static void FillSubblockEdge(Plane plane, int[] edge, int x0, int y0, bool useMacroblockAboveRight, int aboveRightX, int aboveRightY)
+    {
 
         // edge[0..3] = L[3], L[2], L[1], L[0]; edge[4] = P; edge[5..12] = A[0..7] (the RFC's E, extended by A[4..7]).
         for (int i = 0; i < 4; i++)
@@ -695,8 +713,11 @@ internal sealed class Vp8Decoder
         {
             edge[9 + i] = aboveRight[i];
         }
+    }
 
-        Span<byte> b = stackalloc byte[16];
+    /// <summary>A subblock's prediction in <paramref name="mode"/> from its edge, into 16 bytes, row by row.</summary>
+    internal static void PredictSubblock(int[] edge, int mode, Span<byte> b)
+    {
         static int Avg3(int x, int y, int z) => (x + y + y + z + 2) >> 2;
         static int Avg2(int x, int y) => (x + y + 1) >> 1;
         int A(int i) => edge[5 + i];        // A[i], A[-1] = P
@@ -749,86 +770,217 @@ internal sealed class Vp8Decoder
             }
 
             case BLdPred:
-                Set(b, (byte)Avg3(A(0), A(1), A(2)), 0);
-                Set(b, (byte)Avg3(A(1), A(2), A(3)), 1, 4);
-                Set(b, (byte)Avg3(A(2), A(3), A(4)), 2, 5, 8);
-                Set(b, (byte)Avg3(A(3), A(4), A(5)), 3, 6, 9, 12);
-                Set(b, (byte)Avg3(A(4), A(5), A(6)), 7, 10, 13);
-                Set(b, (byte)Avg3(A(5), A(6), A(7)), 11, 14);
-                Set(b, (byte)Avg3(A(6), A(7), A(7)), 15);
+                b[0] = (byte)Avg3(A(0), A(1), A(2));
+                {
+                    byte value = (byte)Avg3(A(1), A(2), A(3));
+                    b[1] = value;
+                    b[4] = value;
+                }
+                {
+                    byte value = (byte)Avg3(A(2), A(3), A(4));
+                    b[2] = value;
+                    b[5] = value;
+                    b[8] = value;
+                }
+                {
+                    byte value = (byte)Avg3(A(3), A(4), A(5));
+                    b[3] = value;
+                    b[6] = value;
+                    b[9] = value;
+                    b[12] = value;
+                }
+                {
+                    byte value = (byte)Avg3(A(4), A(5), A(6));
+                    b[7] = value;
+                    b[10] = value;
+                    b[13] = value;
+                }
+                {
+                    byte value = (byte)Avg3(A(5), A(6), A(7));
+                    b[11] = value;
+                    b[14] = value;
+                }
+                b[15] = (byte)Avg3(A(6), A(7), A(7));
                 break;
 
             case BRdPred:
-                Set(b, (byte)Avg3(E(0), E(1), E(2)), 12);
-                Set(b, (byte)Avg3(E(1), E(2), E(3)), 13, 8);
-                Set(b, (byte)Avg3(E(2), E(3), E(4)), 14, 9, 4);
-                Set(b, (byte)Avg3(E(3), E(4), E(5)), 15, 10, 5, 0);
-                Set(b, (byte)Avg3(E(4), E(5), E(6)), 11, 6, 1);
-                Set(b, (byte)Avg3(E(5), E(6), E(7)), 7, 2);
-                Set(b, (byte)Avg3(E(6), E(7), E(8)), 3);
+                b[12] = (byte)Avg3(E(0), E(1), E(2));
+                {
+                    byte value = (byte)Avg3(E(1), E(2), E(3));
+                    b[13] = value;
+                    b[8] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(2), E(3), E(4));
+                    b[14] = value;
+                    b[9] = value;
+                    b[4] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(3), E(4), E(5));
+                    b[15] = value;
+                    b[10] = value;
+                    b[5] = value;
+                    b[0] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(4), E(5), E(6));
+                    b[11] = value;
+                    b[6] = value;
+                    b[1] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(5), E(6), E(7));
+                    b[7] = value;
+                    b[2] = value;
+                }
+                b[3] = (byte)Avg3(E(6), E(7), E(8));
                 break;
 
             case BVrPred:
-                Set(b, (byte)Avg3(E(1), E(2), E(3)), 12);
-                Set(b, (byte)Avg3(E(2), E(3), E(4)), 8);
-                Set(b, (byte)Avg3(E(3), E(4), E(5)), 13, 4);
-                Set(b, (byte)Avg2(E(4), E(5)), 9, 0);
-                Set(b, (byte)Avg3(E(4), E(5), E(6)), 14, 5);
-                Set(b, (byte)Avg2(E(5), E(6)), 10, 1);
-                Set(b, (byte)Avg3(E(5), E(6), E(7)), 15, 6);
-                Set(b, (byte)Avg2(E(6), E(7)), 11, 2);
-                Set(b, (byte)Avg3(E(6), E(7), E(8)), 7);
-                Set(b, (byte)Avg2(E(7), E(8)), 3);
+                b[12] = (byte)Avg3(E(1), E(2), E(3));
+                b[8] = (byte)Avg3(E(2), E(3), E(4));
+                {
+                    byte value = (byte)Avg3(E(3), E(4), E(5));
+                    b[13] = value;
+                    b[4] = value;
+                }
+                {
+                    byte value = (byte)Avg2(E(4), E(5));
+                    b[9] = value;
+                    b[0] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(4), E(5), E(6));
+                    b[14] = value;
+                    b[5] = value;
+                }
+                {
+                    byte value = (byte)Avg2(E(5), E(6));
+                    b[10] = value;
+                    b[1] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(5), E(6), E(7));
+                    b[15] = value;
+                    b[6] = value;
+                }
+                {
+                    byte value = (byte)Avg2(E(6), E(7));
+                    b[11] = value;
+                    b[2] = value;
+                }
+                b[7] = (byte)Avg3(E(6), E(7), E(8));
+                b[3] = (byte)Avg2(E(7), E(8));
                 break;
 
             case BVlPred:
-                Set(b, (byte)Avg2(A(0), A(1)), 0);
-                Set(b, (byte)Avg3(A(0), A(1), A(2)), 4);
-                Set(b, (byte)Avg2(A(1), A(2)), 8, 1);
-                Set(b, (byte)Avg3(A(1), A(2), A(3)), 5, 12);
-                Set(b, (byte)Avg2(A(2), A(3)), 9, 2);
-                Set(b, (byte)Avg3(A(2), A(3), A(4)), 13, 6);
-                Set(b, (byte)Avg2(A(3), A(4)), 10, 3);
-                Set(b, (byte)Avg3(A(3), A(4), A(5)), 14, 7);
-                Set(b, (byte)Avg3(A(4), A(5), A(6)), 11);
-                Set(b, (byte)Avg3(A(5), A(6), A(7)), 15);
+                b[0] = (byte)Avg2(A(0), A(1));
+                b[4] = (byte)Avg3(A(0), A(1), A(2));
+                {
+                    byte value = (byte)Avg2(A(1), A(2));
+                    b[8] = value;
+                    b[1] = value;
+                }
+                {
+                    byte value = (byte)Avg3(A(1), A(2), A(3));
+                    b[5] = value;
+                    b[12] = value;
+                }
+                {
+                    byte value = (byte)Avg2(A(2), A(3));
+                    b[9] = value;
+                    b[2] = value;
+                }
+                {
+                    byte value = (byte)Avg3(A(2), A(3), A(4));
+                    b[13] = value;
+                    b[6] = value;
+                }
+                {
+                    byte value = (byte)Avg2(A(3), A(4));
+                    b[10] = value;
+                    b[3] = value;
+                }
+                {
+                    byte value = (byte)Avg3(A(3), A(4), A(5));
+                    b[14] = value;
+                    b[7] = value;
+                }
+                b[11] = (byte)Avg3(A(4), A(5), A(6));
+                b[15] = (byte)Avg3(A(5), A(6), A(7));
                 break;
 
             case BHdPred:
-                Set(b, (byte)Avg2(E(0), E(1)), 12);
-                Set(b, (byte)Avg3(E(0), E(1), E(2)), 13);
-                Set(b, (byte)Avg2(E(1), E(2)), 8, 14);
-                Set(b, (byte)Avg3(E(1), E(2), E(3)), 9, 15);
-                Set(b, (byte)Avg2(E(2), E(3)), 10, 4);
-                Set(b, (byte)Avg3(E(2), E(3), E(4)), 11, 5);
-                Set(b, (byte)Avg2(E(3), E(4)), 6, 0);
-                Set(b, (byte)Avg3(E(3), E(4), E(5)), 7, 1);
-                Set(b, (byte)Avg3(E(4), E(5), E(6)), 2);
-                Set(b, (byte)Avg3(E(5), E(6), E(7)), 3);
+                b[12] = (byte)Avg2(E(0), E(1));
+                b[13] = (byte)Avg3(E(0), E(1), E(2));
+                {
+                    byte value = (byte)Avg2(E(1), E(2));
+                    b[8] = value;
+                    b[14] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(1), E(2), E(3));
+                    b[9] = value;
+                    b[15] = value;
+                }
+                {
+                    byte value = (byte)Avg2(E(2), E(3));
+                    b[10] = value;
+                    b[4] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(2), E(3), E(4));
+                    b[11] = value;
+                    b[5] = value;
+                }
+                {
+                    byte value = (byte)Avg2(E(3), E(4));
+                    b[6] = value;
+                    b[0] = value;
+                }
+                {
+                    byte value = (byte)Avg3(E(3), E(4), E(5));
+                    b[7] = value;
+                    b[1] = value;
+                }
+                b[2] = (byte)Avg3(E(4), E(5), E(6));
+                b[3] = (byte)Avg3(E(5), E(6), E(7));
                 break;
 
             default:
-                Set(b, (byte)Avg2(L(0), L(1)), 0);
-                Set(b, (byte)Avg3(L(0), L(1), L(2)), 1);
-                Set(b, (byte)Avg2(L(1), L(2)), 2, 4);
-                Set(b, (byte)Avg3(L(1), L(2), L(3)), 3, 5);
-                Set(b, (byte)Avg2(L(2), L(3)), 6, 8);
-                Set(b, (byte)Avg3(L(2), L(3), L(3)), 7, 9);
-                Set(b, (byte)L(3), 10, 11, 12, 13, 14, 15);
+                b[0] = (byte)Avg2(L(0), L(1));
+                b[1] = (byte)Avg3(L(0), L(1), L(2));
+                {
+                    byte value = (byte)Avg2(L(1), L(2));
+                    b[2] = value;
+                    b[4] = value;
+                }
+                {
+                    byte value = (byte)Avg3(L(1), L(2), L(3));
+                    b[3] = value;
+                    b[5] = value;
+                }
+                {
+                    byte value = (byte)Avg2(L(2), L(3));
+                    b[6] = value;
+                    b[8] = value;
+                }
+                {
+                    byte value = (byte)Avg3(L(2), L(3), L(3));
+                    b[7] = value;
+                    b[9] = value;
+                }
+                {
+                    byte value = (byte)L(3);
+                    b[10] = value;
+                    b[11] = value;
+                    b[12] = value;
+                    b[13] = value;
+                    b[14] = value;
+                    b[15] = value;
+                }
                 break;
-        }
-
-        for (int r = 0; r < 4; r++)
-        {
-            b.Slice(r * 4, 4).CopyTo(plane.Row(y0 + r).Slice(x0, 4));
-        }
-    }
-
-    private static void Set(Span<byte> block, byte value, params ReadOnlySpan<int> positions)
-    {
-        foreach (int position in positions)
-        {
-            block[position] = value;
         }
     }
 

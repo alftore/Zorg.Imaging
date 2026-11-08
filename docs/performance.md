@@ -8,6 +8,22 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: lossy WebP encoder search
+
+The subblock mode search took 25 of the 41 ms a 400 x 300 lossy encode needed on one core. It now reads the edge
+pixels once per subblock, predicts each of the ten modes into a 16-byte buffer, compares with vector squared errors,
+and copies the winner back for the full trials; mode costs are tables; the shared predictor stores pixels directly
+instead of through a `params` helper. Every change leaves the output byte for byte the same (hashes of 36 encodings
+compared before and after).
+
+| BenchmarkDotNet short job | Before, one core | After, one core | Before, 16 cores | After, 16 cores |
+|---|---:|---:|---:|---:|
+| 12 MP lossy encode, quality 80 | 3.60 s | 2.14 s | 667 ms | 539 ms |
+| 12 MP lossy decode | 403 ms | 343 ms | 183 ms | 177 ms |
+| JPEG to a 400 px WebP thumbnail | 86 ms | 72 ms | 59 ms | 50 ms |
+
+cwebp takes 1.4 s for the 12 MP encode on one core; Skia makes the WebP thumbnail in 49 ms.
+
 ## 2026-11-08: streaming baseline JPEG decode
 
 A baseline JPEG with one scan for every component (most photos) now decodes in bands of about 512 KiB of
