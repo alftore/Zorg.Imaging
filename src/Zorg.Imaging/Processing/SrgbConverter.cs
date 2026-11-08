@@ -40,9 +40,10 @@ internal static class SrgbConverter
     {
         IccProfileReader.Model? model = Model(image.ColorSpace);
         bool grey = image.PixelFormat is PixelFormat.L8 or PixelFormat.L16;
-        if (model is null || (model.IsGrey && !grey))
+        if (model is null || (model.IsGrey && !grey) || (model.Lut is not null && (grey || model.LutChannels != 3)))
         {
-            // Not understood, or a grey profile on a colour image, which doesn't say what its colours mean.
+            // Not understood; a grey profile on a colour image, which doesn't say what its colours mean; or a lookup
+            // table that isn't for RGB pixels.
             return null;
         }
 
@@ -54,7 +55,9 @@ internal static class SrgbConverter
         {
             bool inside = grey
                 ? ConvertGrey(image, result, model, sixteen, max, encode)
-                : ConvertColour(image, result, model, sixteen, max, encode, onlyIfInside);
+                : model.Lut is { } lut
+                    ? ConvertLookup(image, result, IccLookup.Build(lut, FromPcs), sixteen, max, encode, onlyIfInside)
+                    : ConvertColour(image, result, model, sixteen, max, encode, onlyIfInside);
             if (onlyIfInside && !inside)
             {
                 result.Dispose();
@@ -238,6 +241,68 @@ internal static class SrgbConverter
 
         return inside;
     }
+
+    // RGB through a lookup-table profile, interpolated in its precalculated grid.
+    private static bool ConvertLookup(Image image, Image result, IccLookup lookup, bool sixteen, int max, Quantizer encode, bool stopOutside)
+    {
+        (int channels, int red, int blue, int alpha) = image.PixelFormat switch
+        {
+            PixelFormat.Rgb24 or PixelFormat.Rgb48 => (3, 0, 2, -1),
+            PixelFormat.Bgra32 => (4, 2, 0, 3),
+            _ => (4, 0, 2, 3),
+        };
+        int width = image.Width;
+        float scale = 1f / max;
+        return Rows(image.Height, width, stopOutside, y =>
+        {
+            Span<float> device = stackalloc float[3];
+            bool inside = true;
+            if (sixteen)
+            {
+                ReadOnlySpan<ushort> source = MemoryMarshal.Cast<byte, ushort>(image.GetRowBytes(y));
+                Span<ushort> target = MemoryMarshal.Cast<byte, ushort>(result.GetRowBytes(y));
+                for (int at = 0; at < width * channels; at += channels)
+                {
+                    device[0] = source[at + red] * scale;
+                    device[1] = source[at + 1] * scale;
+                    device[2] = source[at + blue] * scale;
+                    (float r, float g, float b) = lookup.Lookup(device);
+                    inside &= Inside(r, g, b);
+                    target[at + red] = (ushort)encode.Encode(r);
+                    target[at + 1] = (ushort)encode.Encode(g);
+                    target[at + blue] = (ushort)encode.Encode(b);
+                    if (alpha >= 0)
+                    {
+                        target[at + alpha] = source[at + alpha];
+                    }
+                }
+            }
+            else
+            {
+                ReadOnlySpan<byte> source = image.GetRowBytes(y);
+                Span<byte> target = result.GetRowBytes(y);
+                for (int at = 0; at < width * channels; at += channels)
+                {
+                    device[0] = source[at + red] * scale;
+                    device[1] = source[at + 1] * scale;
+                    device[2] = source[at + blue] * scale;
+                    (float r, float g, float b) = lookup.Lookup(device);
+                    inside &= Inside(r, g, b);
+                    target[at + red] = (byte)encode.Encode(r);
+                    target[at + 1] = (byte)encode.Encode(g);
+                    target[at + blue] = (byte)encode.Encode(b);
+                    if (alpha >= 0)
+                    {
+                        target[at + alpha] = source[at + alpha];
+                    }
+                }
+            }
+
+            return inside;
+        });
+    }
+
+    private static bool Inside(float r, float g, float b) => r >= Low && g >= Low && b >= Low && r <= High && g <= High && b <= High;
 
     private readonly record struct Matrix(float M0, float M1, float M2, float M3, float M4, float M5, float M6, float M7, float M8);
 

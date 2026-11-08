@@ -8,8 +8,9 @@ namespace Zorg.Imaging.Metadata;
 /// profile's colorants and curves, or a grey profile's curve.
 /// </summary>
 /// <remarks>
-/// Every offset, size and count is checked against the profile's length before it's used; anything malformed, or a
-/// profile that isn't matrix/TRC (LUT-based, CMYK, Lab connection space), gives <see langword="null"/>: it can't be
+/// Every offset, size and count is checked against the profile's length before it's used. An RGB profile without a
+/// matrix and curves, a CMYK profile, or one with a Lab connection space is read through its A2B lookup table
+/// (<see cref="IccLut"/>). Anything malformed or otherwise unsupported gives <see langword="null"/>: it can't be
 /// converted, and is carried through as it is.
 /// </remarks>
 internal static class IccProfileReader
@@ -19,10 +20,14 @@ internal static class IccProfileReader
 
     /// <summary>A profile's model: linear RGB to the D50 connection space, and each channel's curve; or grey.</summary>
     /// <param name="ToPcs">The colorant matrix, row by row (X, Y, Z from linear R, G, B); for grey, null.</param>
-    /// <param name="Curves">Encoded value to linear light for R, G and B, or the one grey curve.</param>
-    public sealed record Model(double[]? ToPcs, Func<double, double>[] Curves)
+    /// <param name="Curves">Encoded value to linear light for R, G and B, or the one grey curve; empty for a lookup table.</param>
+    /// <param name="Lut">The device-to-PCS lookup table, when the profile is read through one; then the others are unused.</param>
+    public sealed record Model(double[]? ToPcs, Func<double, double>[] Curves, IccLut? Lut = null)
     {
-        public bool IsGrey => ToPcs is null;
+        public bool IsGrey => ToPcs is null && Lut is null;
+
+        /// <summary>The device channels a lookup-table model takes: 3 for RGB, 4 for CMYK; 0 for the others.</summary>
+        public int LutChannels => Lut?.Inputs ?? 0;
     }
 
     public static Model? Read(ReadOnlySpan<byte> profile)
@@ -40,7 +45,8 @@ internal static class IccProfileReader
 
         profile = profile[..(int)declared];
         ReadOnlySpan<byte> space = profile.Slice(16, 4);
-        if (!profile.Slice(20, 4).SequenceEqual("XYZ "u8))
+        bool labPcs = profile.Slice(20, 4).SequenceEqual("Lab "u8);
+        if (!labPcs && !profile.Slice(20, 4).SequenceEqual("XYZ "u8))
         {
             return null;
         }
@@ -54,12 +60,20 @@ internal static class IccProfileReader
         var tags = new Tags(profile, (int)count);
         if (space.SequenceEqual("GRAY"u8))
         {
-            return Curve(tags.Find("kTRC"u8)) is { } grey ? new Model(null, [grey]) : null;
+            return !labPcs && Curve(tags.Find("kTRC"u8)) is { } grey ? new Model(null, [grey]) : null;
         }
 
-        if (!space.SequenceEqual("RGB "u8))
+        // CMYK has only lookup tables; RGB uses them when it has no matrix and curves, which it otherwise prefers, as
+        // the shaper the profile's colorimetry is defined by.
+        bool cmyk = space.SequenceEqual("CMYK"u8);
+        if (!cmyk && !space.SequenceEqual("RGB "u8))
         {
             return null;
+        }
+
+        if (cmyk || labPcs || tags.Find("rXYZ"u8).IsEmpty)
+        {
+            return Lookup(tags, labPcs, cmyk ? 4 : 3, version4: profile[8] >= 4);
         }
 
         double[]? r = Xyz(tags.Find("rXYZ"u8));
@@ -80,6 +94,16 @@ internal static class IccProfileReader
         return Math.Abs(determinant) < 1e-6 ? null : new Model(toPcs, [rc, gc, bc]);
     }
 
+    // The perceptual A2B table, else the colorimetric one, else saturation, as LittleCMS falls back for the default
+    // intent. A version 4 perceptual or saturation table has the reference medium's black (see IccLut.ScalesBlack).
+    private static Model? Lookup(Tags tags, bool labPcs, int channels, bool version4)
+    {
+        IccLut? lut = IccLut.Read(tags.Find("A2B0"u8), labPcs, version4)
+            ?? IccLut.Read(tags.Find("A2B1"u8), labPcs, scalesBlack: false)
+            ?? IccLut.Read(tags.Find("A2B2"u8), labPcs, version4);
+        return lut is { } found && found.Inputs == channels ? new Model(null, [], found) : null;
+    }
+
     private static double[]? Xyz(ReadOnlySpan<byte> tag)
     {
         if (tag.Length < 20 || !tag[..4].SequenceEqual("XYZ "u8))
@@ -90,8 +114,32 @@ internal static class IccProfileReader
         return [Fixed(tag[8..]), Fixed(tag[12..]), Fixed(tag[16..])];
     }
 
+    /// <summary>The bytes a curv or para element takes, before padding; 0 when it isn't one or its header is cut short.</summary>
+    internal static int CurveSize(ReadOnlySpan<byte> element)
+    {
+        if (element.Length < 12)
+        {
+            return 0;
+        }
+
+        if (element[..4].SequenceEqual("curv"u8))
+        {
+            uint entries = BinaryPrimitives.ReadUInt32BigEndian(element[8..]);
+            return entries > MaxCurveEntries ? 0 : 12 + (2 * (int)entries);
+        }
+
+        if (element[..4].SequenceEqual("para"u8))
+        {
+            int function = BinaryPrimitives.ReadUInt16BigEndian(element[8..]);
+            int parameters = function switch { 0 => 1, 1 => 3, 2 => 4, 3 => 5, 4 => 7, _ => -1 };
+            return parameters < 0 ? 0 : 12 + (4 * parameters);
+        }
+
+        return 0;
+    }
+
     // A curv or para tag as a function from encoded value to linear light, both 0 to 1.
-    private static Func<double, double>? Curve(ReadOnlySpan<byte> tag)
+    internal static Func<double, double>? Curve(ReadOnlySpan<byte> tag)
     {
         if (tag.Length < 12)
         {
