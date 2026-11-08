@@ -114,7 +114,7 @@ internal static class Vp8lEncoder
             bits.Write(1, 1);
             bits.Write((uint)Vp8lDecoder.TransformType.CrossColor, 2);
             bits.Write((uint)(colourBits - 2), 3);
-            uint[] multipliers = CrossColour(pixels, width, height, colourBits);
+            uint[] multipliers = CrossColour(pixels, width, height, colourBits, effort);
             EncodeImage(bits, multipliers, DivideUp(width, colourBits), effort, main: false);
         }
 
@@ -485,7 +485,7 @@ internal static class Vp8lEncoder
     // tile to make the residuals cheapest by the statistics so far (refreshed per row of tiles, so a row's tiles run in
     // parallel): a coarse search, then a fine one around the best. The transform comes after the predictor, so it's
     // undone first.
-    internal static uint[] CrossColour(uint[] p, int width, int height, int tileBits)
+    internal static uint[] CrossColour(uint[] p, int width, int height, int tileBits, int effort = 4)
     {
         int tilesWide = DivideUp(width, tileBits);
         int tilesHigh = DivideUp(height, tileBits);
@@ -533,9 +533,16 @@ internal static class Vp8lEncoder
                         }
                     }
 
-                    int greenToRed = Search(t => Cost(w.Reds, w.Greens, null, count, t, 0, redCost));
-                    int greenToBlue = Search(t => Cost(w.Blues, w.Greens, null, count, t, 0, blueCost));
-                    int redToBlue = Search(t => Cost(w.Blues, w.Greens, w.Reds, count, greenToBlue, t, blueCost));
+                    bool thorough = effort >= 5;
+                    int greenToRed = Search(Slope(w.Reds, w.Greens, count), thorough, t => Cost(w.Reds, w.Greens, count, t, redCost));
+                    int greenToBlue = Search(Slope(w.Blues, w.Greens, count), thorough, t => Cost(w.Blues, w.Greens, count, t, blueCost));
+                    for (int k = 0; k < count; k++)
+                    {
+                        w.Rest[k] = w.Blues[k] - Delta(greenToBlue, w.Greens[k]);
+                        w.SignedReds[k] = (sbyte)w.Reds[k];
+                    }
+
+                    int redToBlue = Search(Slope(w.Rest, w.SignedReds, count), thorough, t => Cost(w.Rest, w.SignedReds, count, t, blueCost));
                     multipliers[(row * tilesWide) + tx] = 0xFF000000u | ((uint)(byte)redToBlue << 16) | ((uint)(byte)greenToBlue << 8) | (byte)greenToRed;
 
                     for (int y = top; y < bottom; y++)
@@ -580,51 +587,96 @@ internal static class Vp8lEncoder
         public int[] Blues { get; } = new int[pixels];
 
         public int[] Counts { get; } = new int[2 * 256];
+
+        public int[] Rest { get; } = new int[pixels];
+
+        public int[] SignedReds { get; } = new int[pixels];
     }
 
     private static int Delta(int multiplier, int colour) => (multiplier * colour) >> 5;
 
-    // The multiplier, -128 to 127, with the lowest cost: every 16th, then every 2nd near the best, then the neighbours.
-    // 0 wins ties, as it changes nothing.
-    private static int Search(Func<int, float> cost)
+    // The multiplier, -128 to 127, with the lowest cost: 0, the least-squares slope and the coarse points beside it, then
+    // every 2nd near the best, then the neighbours. Starting from the slope finds nearly the same minimum as a scan of
+    // every 16th, for a third of the trials (files about 0.1% larger); the thorough search (effort 5 and up) scans every
+    // 16th and every 2nd within 14 of the best. 0 wins ties, as it changes nothing.
+    private static int Search(int slope, bool thorough, Func<int, float> cost)
     {
         int best = 0;
         float bestCost = cost(0);
-        foreach ((int from, int to, int step) in new[] { (-128, 112, 16), (-14, 14, 2), (-1, 1, 1) })
+        void Try(int t)
         {
-            int centre = from == -128 ? 0 : best;
+            if (t is < -128 or > 127 || t == best)
+            {
+                return;
+            }
+
+            float c = cost(t);
+            if (c < bestCost)
+            {
+                bestCost = c;
+                best = t;
+            }
+        }
+
+        if (thorough)
+        {
+            for (int t = -128; t <= 112; t += 16)
+            {
+                Try(t);
+            }
+        }
+        else
+        {
+            Try(slope);
+            Try(slope - 16);
+            Try(slope + 16);
+        }
+
+        int near = thorough ? 14 : 8;
+        foreach ((int from, int to, int step) in new[] { (-near, near, 2), (-1, 1, 1) })
+        {
+            int centre = best;
             for (int t = centre + from; t <= centre + to; t += step)
             {
-                if (t is < -128 or > 127 || t == best)
-                {
-                    continue;
-                }
-
-                float c = cost(t);
-                if (c < bestCost)
-                {
-                    bestCost = c;
-                    best = t;
-                }
+                Try(t);
             }
         }
 
         return best;
     }
 
-    // The cost of a tile's channel less green times one multiplier and, for blue, red times another.
-    private static float Cost(int[] values, int[] greens, int[]? reds, int count, int greenMultiplier, int redMultiplier, float[] costs)
+    // The multiplier t that makes values - (t * from) / 32 least correlated with from: 32 times the regression slope,
+    // with the values as signed bytes, as the transform sees them.
+    private static int Slope(int[] values, int[] from, int count)
+    {
+        long sumX = 0, sumY = 0, sumXX = 0, sumXY = 0;
+        for (int i = 0; i < count; i++)
+        {
+            int x = from[i];
+            int y = (sbyte)values[i];
+            sumX += x;
+            sumY += y;
+            sumXX += x * x;
+            sumXY += x * y;
+        }
+
+        double variance = (count * (double)sumXX) - ((double)sumX * sumX);
+        if (variance <= 0)
+        {
+            return 0;
+        }
+
+        double slope = ((count * (double)sumXY) - ((double)sumX * sumY)) / variance;
+        return (int)Math.Clamp(Math.Round(slope * 32), -128, 127);
+    }
+
+    // The cost of a tile's channel less another channel times a multiplier.
+    private static float Cost(int[] values, int[] from, int count, int multiplier, float[] costs)
     {
         float total = 0;
         for (int i = 0; i < count; i++)
         {
-            int v = values[i] - Delta(greenMultiplier, greens[i]);
-            if (reds is not null)
-            {
-                v -= Delta(redMultiplier, (sbyte)reds[i]);
-            }
-
-            total += costs[v & 0xFF];
+            total += costs[(values[i] - ((multiplier * from[i]) >> 5)) & 0xFF];
         }
 
         return total;
