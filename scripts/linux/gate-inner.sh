@@ -87,6 +87,10 @@ if [ "${ZORG_GATE_AOT:-0}" = 1 ]; then
     grep '^FAIL' /tmp/aot-run.log
     [ "$code" -eq 0 ] || { echo "AOT RUN FAILED (exit $code)"; status=1; }
   fi
+
+  step "Size limits (D3)"
+  sh scripts/check-size.sh src/Zorg.Imaging/bin/Release/net10.0/Zorg.Imaging.dll 3072 "Zorg.Imaging.dll" || status=1
+  sh scripts/check-size.sh /tmp/aot/Zorg.Imaging.AotSmoke 6144 "AOT smoke binary ($rid)" || status=1
 fi
 
 step "Done"
