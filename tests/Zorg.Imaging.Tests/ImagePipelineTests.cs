@@ -50,6 +50,7 @@ public class ImagePipelineTests
             (p => p.Rotate(-90), i => i.Rotate(-90)),
             (p => p.FlipVertical(), i => i.FlipVertical()),
             (p => p.Flatten(default), i => i.Flatten(default)),
+            (p => p.ToSrgb(), i => i.ToSrgb()),
         ];
         foreach ((Func<ImagePipeline, ImagePipeline> step, Func<Image, Image> direct) in cases)
         {
@@ -207,6 +208,88 @@ public class ImagePipelineTests
         await Assert.ThrowsAsync<ArgumentNullException>(async () => await pipeline.SaveAsPngAsync(null!, cancellationToken: Token));
         using var readOnly = new MemoryStream([], writable: false);
         await Assert.ThrowsAsync<NotSupportedException>(async () => await pipeline.SaveAsPngAsync(readOnly, cancellationToken: Token));
+    }
+
+    [Fact]
+    public async Task ToSrgb_converts_a_wide_gamut_source()
+    {
+        using var wide = new Image(8, 8, PixelFormat.Rgba32) { ColorSpace = ColorSpace.DisplayP3 };
+        wide.GetPixelBytes().Fill(0xC0);
+        using Image piped = await ImagePipeline.From(wide).ToSrgb().ToImageAsync(Token);
+        using Image direct = wide.ToSrgb();
+        Assert.True(piped.ColorSpace.IsSrgb);
+        Assert.Equal(direct.GetPixelBytes().ToArray(), piped.GetPixelBytes().ToArray());
+        Assert.Equal("image → ToSrgb()", ImagePipeline.From(wide).ToSrgb().ToString());
+    }
+
+    [Fact]
+    public async Task SaveAsAsync_writes_the_format_it_is_given()
+    {
+        byte[] png = PngEncoderTests.Save(PngEncoderTests.Smooth(40, 30, PixelFormat.Rgb24, seed: 2));
+        foreach (ImageFormat format in (ImageFormat[])[ImageFormat.Png, ImageFormat.Jpeg, ImageFormat.Webp, ImageFormat.Gif])
+        {
+            using var output = new MemoryStream();
+            await ImagePipeline.Load(png).Fit(20, 20).SaveAsAsync(output, format, Token);
+            Assert.Same(format, ImageFormats.Detect(output.ToArray()));
+            using Image decoded = Image.Decode(output.ToArray());
+            Assert.Equal((20, 15), (decoded.Width, decoded.Height));
+        }
+
+        using var unused = new MemoryStream();
+        ImagePipeline pipeline = ImagePipeline.Load(png);
+        Assert.Throws<ArgumentException>(() => { _ = pipeline.SaveAsAsync(unused, ImageFormat.Tiff, Token).AsTask(); });
+        Assert.Throws<ArgumentNullException>(() => { _ = pipeline.SaveAsAsync(unused, null!, Token).AsTask(); });
+        Assert.Throws<ArgumentNullException>(() => { _ = pipeline.SaveAsAsync(null!, ImageFormat.Png, Token).AsTask(); });
+        Assert.Equal(0, unused.Length);
+    }
+
+    [Fact]
+    public async Task SaveAsync_picks_the_format_from_the_extension_and_replaces_the_file_only_when_done()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "zorg-pipeline-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            byte[] png = PngEncoderTests.Save(PngEncoderTests.Smooth(40, 30, PixelFormat.Rgb24, seed: 3));
+            foreach ((string name, ImageFormat format) in ((string, ImageFormat)[])
+                [("a.png", ImageFormat.Png), ("b.JPG", ImageFormat.Jpeg), ("c.jpeg", ImageFormat.Jpeg), ("d.webp", ImageFormat.Webp), ("e.Gif", ImageFormat.Gif)])
+            {
+                string path = Path.Combine(folder, name);
+                await ImagePipeline.Load(png).Fit(10, 10).SaveAsync(path, Token);
+                Assert.Same(format, ImageFormats.DetectFile(path));
+            }
+
+            // A failing run leaves the earlier file as it was, and no temporary file behind.
+            string kept = Path.Combine(folder, "a.png");
+            byte[] before = await File.ReadAllBytesAsync(kept, Token);
+            await Assert.ThrowsAsync<UnsupportedImageFormatException>(async () => await ImagePipeline.Load("not an image"u8.ToArray()).SaveAsync(kept, Token));
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await ImagePipeline.Load(png).Crop(30, 0, 20, 20).SaveAsync(kept, Token));
+            Assert.Equal(before, await File.ReadAllBytesAsync(kept, Token));
+            Assert.Equal(5, Directory.GetFiles(folder).Length);
+
+            // An extension it can't write is refused before anything runs or is created.
+            ImagePipeline pipeline = ImagePipeline.Load(png);
+            await Assert.ThrowsAsync<ArgumentException>(async () => await pipeline.SaveAsync(Path.Combine(folder, "f.tiff"), Token));
+            await Assert.ThrowsAsync<ArgumentException>(async () => await pipeline.SaveAsync(Path.Combine(folder, "noextension"), Token));
+            await Assert.ThrowsAsync<ArgumentException>(async () => await pipeline.SaveAsync("", Token));
+            Assert.Equal(5, Directory.GetFiles(folder).Length);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Saving_an_unchanged_image_writes_it_directly_in_every_format()
+    {
+        using Image source = PngEncoderTests.Smooth(16, 12, PixelFormat.Rgba32, seed: 9);
+        using var piped = new MemoryStream();
+        using var direct = new MemoryStream();
+        await ImagePipeline.From(source).SaveAsWebpAsync(piped, cancellationToken: Token);
+        await source.SaveAsWebpAsync(direct, cancellationToken: Token);
+        Assert.Equal(direct.ToArray(), piped.ToArray());
+        Assert.Equal(16, source.Width);
     }
 
     private sealed class WriteOnlyStream : MemoryStream

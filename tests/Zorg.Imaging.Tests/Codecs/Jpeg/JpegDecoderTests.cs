@@ -284,8 +284,34 @@ public class JpegDecoderTests
         Assert.Equal((16, 11), (piped.Width, piped.Height));
         Assert.Equal(expected.GetPixelBytes().ToArray(), piped.GetPixelBytes().ToArray());
 
-        // A first step that doesn't resize decodes at full size.
+        // With no resize, or a crop before it, the decode is at full size.
         using Image turned = await ImagePipeline.Load(jpeg).Rotate(90).ToImageAsync(TestContext.Current.CancellationToken);
         Assert.Equal((45, 67), (turned.Width, turned.Height));
+        using Image full = Image.Decode(jpeg);
+        using Image cropped = full.Crop(0, 0, 60, 40);
+        using Image cropFit = cropped.Fit(16, 16);
+        using Image pipedCrop = await ImagePipeline.Load(jpeg).Crop(0, 0, 60, 40).Fit(16, 16).ToImageAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(cropFit.GetPixelBytes().ToArray(), pipedCrop.GetPixelBytes().ToArray());
+    }
+
+    [Fact]
+    public async Task The_pipeline_shrinks_on_load_through_turns_flips_and_flattening()
+    {
+        byte[] jpeg = Sample("s420");
+        using Image piped = await ImagePipeline.Load(jpeg)
+            .Rotate(90)
+            .FlipHorizontal()
+            .Flatten(new Rgba32(255, 255, 255))
+            .Fit(16, 16)
+            .ToImageAsync(TestContext.Current.CancellationToken);
+
+        // Turned, 45 x 67 fits to 11 x 16, which is 16 x 11 in the file's own orientation: 1/2 scale again.
+        using Image half = Image.Decode(jpeg, DecodeOptions.Default.WithShrinkTarget((w, h) => (16, 11)));
+        using Image turned = half.Rotate(90);
+        using Image mirrored = turned.FlipHorizontal();
+        using Image flat = mirrored.Flatten(new Rgba32(255, 255, 255));
+        using Image expected = flat.Fit(16, 16);
+        Assert.Equal((11, 16), (piped.Width, piped.Height));
+        Assert.Equal(expected.GetPixelBytes().ToArray(), piped.GetPixelBytes().ToArray());
     }
 }

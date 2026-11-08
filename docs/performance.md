@@ -8,6 +8,21 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: the pipeline end to end
+
+The 12-megapixel photo to a 400 x 300 thumbnail, from the JPEG to the encoded file, BenchmarkDotNet short job:
+
+| JPEG to a 400 px WebP, quality 80 | One core | 16 cores |
+|---|---:|---:|
+| Zorg.Imaging (`Fit(400, 400).SaveAsWebpAsync`) | 128 ms | 68 ms |
+| SkiaSharp (scaled decode, Mitchell, libwebp) | 46 ms | 48 ms |
+| ImageSharp 2.1 (full decode, Mitchell) | 385 ms | 122 ms |
+
+The pipeline itself costs nothing measurable; the thumbnail without the encode is 105 ms on one core (Skia 37 ms).
+What is left is in the codecs: the scalar reduced inverse DCT, the whole-frame coefficient buffer (35 MB allocated
+for a thumbnail), and lossy WebP encoding at about twice libwebp's time per pixel (23 against 10 ms for 400 x 300).
+NetVips is not yet measured: it needs the NetVips packages added to the benchmarks.
+
 ## 2026-11-08: PNG optimiser and banded compression
 
 The 12-megapixel photo (`photo.png`, RGB), BenchmarkDotNet short job, same busy machine for both columns:

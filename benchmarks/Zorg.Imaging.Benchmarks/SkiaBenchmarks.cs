@@ -99,6 +99,20 @@ public class SkiaBenchmarks
         return thumb.Width;
     }
 
+    /// <summary>The thumbnail above, encoded by libwebp at quality 80.</summary>
+    [Benchmark]
+    public int Skia_Thumbnail_JpegToWebp()
+    {
+        using var codec = SKCodec.Create(new MemoryStream(_jpeg));
+        SKSizeI scaled = codec.GetScaledDimensions(0.25f);
+        var info = new SKImageInfo(scaled.Width, scaled.Height);
+        using var bitmap = new SKBitmap(info);
+        codec.GetPixels(info, bitmap.GetPixels());
+        using SKBitmap thumb = bitmap.Resize(new SKImageInfo(400, 300), new SKSamplingOptions(SKCubicResampler.Mitchell));
+        using SKData data = thumb.Encode(SKEncodedImageFormat.Webp, 80);
+        return (int)data.Size;
+    }
+
     /// <summary>A 1600-pixel web size from the full decode, Mitchell, re-encoded as JPEG 80.</summary>
     [Benchmark]
     public int Skia_Web_JpegToJpeg()

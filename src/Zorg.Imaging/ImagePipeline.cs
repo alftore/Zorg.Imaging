@@ -152,7 +152,7 @@ public sealed class ImagePipeline
             throw new ArgumentException("Give the width, the height or both; 0 for both leaves no size to keep.", nameof(width));
         }
 
-        return Then(
+        return Sized(
             Describe($"Resize({width}, {height}", resampler),
             image => image.Resize(width, height, resampler),
             (w, h) => (width == 0 ? Math.Max((int)Math.Min(((2L * w * height) + h) / (2L * h), int.MaxValue), 1) : width,
@@ -169,7 +169,7 @@ public sealed class ImagePipeline
     public ImagePipeline Fit(int width, int height, Resampler? resampler = null)
     {
         CheckBox(width, height);
-        return Then(Describe($"Fit({width}, {height}", resampler), image => image.Fit(width, height, resampler), (w, h) => Image.Inside(w, h, width, height));
+        return Sized(Describe($"Fit({width}, {height}", resampler), image => image.Fit(width, height, resampler), (w, h) => Image.Inside(w, h, width, height));
     }
 
     /// <summary>Adds <see cref="Image.Fill"/>: cover a box exactly, cropping the overhang from the centre.</summary>
@@ -182,7 +182,7 @@ public sealed class ImagePipeline
     public ImagePipeline Fill(int width, int height, Resampler? resampler = null)
     {
         CheckBox(width, height);
-        return Then(Describe($"Fill({width}, {height}", resampler), image => image.Fill(width, height, resampler), (w, h) => Image.Covering(w, h, width, height));
+        return Sized(Describe($"Fill({width}, {height}", resampler), image => image.Fill(width, height, resampler), (w, h) => Image.Covering(w, h, width, height));
     }
 
     /// <summary>Adds <see cref="Image.Pad"/>: fit inside a box, then centre on a background colour.</summary>
@@ -196,7 +196,7 @@ public sealed class ImagePipeline
     public ImagePipeline Pad(int width, int height, Rgba32 background, Resampler? resampler = null)
     {
         CheckBox(width, height);
-        return Then(Describe($"Pad({width}, {height}, {background}", resampler), image => image.Pad(width, height, background, resampler), (w, h) => Image.Inside(w, h, width, height));
+        return Sized(Describe($"Pad({width}, {height}, {background}", resampler), image => image.Pad(width, height, background, resampler), (w, h) => Image.Inside(w, h, width, height));
     }
 
     /// <summary>Adds <see cref="Image.Crop"/>. Whether the rectangle fits is checked when the pipeline runs.</summary>
@@ -212,7 +212,7 @@ public sealed class ImagePipeline
         ArgumentOutOfRangeException.ThrowIfNegative(x);
         ArgumentOutOfRangeException.ThrowIfNegative(y);
         CheckBox(width, height);
-        return Then(string.Create(CultureInfo.InvariantCulture, $"Crop({x}, {y}, {width}, {height})"), image => image.Crop(x, y, width, height));
+        return Then(string.Create(CultureInfo.InvariantCulture, $"Crop({x}, {y}, {width}, {height})"), image => image.Crop(x, y, width, height), Shape.Other);
     }
 
     /// <summary>Adds <see cref="Image.Rotate"/>: a clockwise turn by a multiple of 90°.</summary>
@@ -227,24 +227,38 @@ public sealed class ImagePipeline
             throw new ArgumentOutOfRangeException(nameof(degrees), degrees, "Only multiples of 90 degrees turn an image without resampling it.");
         }
 
-        return Then(string.Create(CultureInfo.InvariantCulture, $"Rotate({degrees})"), image => image.Rotate(degrees));
+        return Then(
+            string.Create(CultureInfo.InvariantCulture, $"Rotate({degrees})"),
+            image => image.Rotate(degrees),
+            degrees % 180 == 0 ? Shape.Same : Shape.Swapped);
     }
 
     /// <summary>Adds <see cref="Image.FlipHorizontal"/>: mirror left to right.</summary>
     /// <returns>A new pipeline with the step added.</returns>
     /// <example><code>ImagePipeline mirrored = ImagePipeline.Load(bytes).FlipHorizontal();</code></example>
-    public ImagePipeline FlipHorizontal() => Then("FlipHorizontal()", image => image.FlipHorizontal());
+    public ImagePipeline FlipHorizontal() => Then("FlipHorizontal()", image => image.FlipHorizontal(), Shape.Same);
 
     /// <summary>Adds <see cref="Image.FlipVertical"/>: mirror top to bottom.</summary>
     /// <returns>A new pipeline with the step added.</returns>
     /// <example><code>ImagePipeline reflected = ImagePipeline.Load(bytes).FlipVertical();</code></example>
-    public ImagePipeline FlipVertical() => Then("FlipVertical()", image => image.FlipVertical());
+    public ImagePipeline FlipVertical() => Then("FlipVertical()", image => image.FlipVertical(), Shape.Same);
 
     /// <summary>Adds <see cref="Image.Flatten"/>: draw over a solid colour, removing alpha.</summary>
     /// <param name="background">The colour behind the image.</param>
     /// <returns>A new pipeline with the step added.</returns>
     /// <example><code>ImagePipeline opaque = ImagePipeline.Load(bytes).Flatten(new Rgba32(255, 255, 255));</code></example>
-    public ImagePipeline Flatten(Rgba32 background) => Then(string.Create(CultureInfo.InvariantCulture, $"Flatten({background})"), image => image.Flatten(background));
+    public ImagePipeline Flatten(Rgba32 background) =>
+        Then(string.Create(CultureInfo.InvariantCulture, $"Flatten({background})"), image => image.Flatten(background), Shape.Same);
+
+    /// <summary>
+    /// Adds <see cref="Image.ToSrgb"/>: convert the pixels to sRGB, clipping colours outside it. Saving doesn't need
+    /// this step, since the encoders follow their <see cref="ColorSpaceHandling"/>; add it when the pixels themselves
+    /// must be sRGB, such as before <see cref="ToImageAsync"/>.
+    /// </summary>
+    /// <returns>A new pipeline with the step added.</returns>
+    /// <remarks>An HDR source, or an ICC profile that isn't matrix/TRC, fails with <see cref="NotSupportedException"/> when the pipeline runs.</remarks>
+    /// <example><code>using Image srgb = await ImagePipeline.Load(bytes).Fit(800, 800).ToSrgb().ToImageAsync();</code></example>
+    public ImagePipeline ToSrgb() => Then("ToSrgb()", image => image.ToSrgb(), Shape.Same);
 
     /// <summary>Runs the pipeline and returns the result.</summary>
     /// <param name="cancellationToken">Cancels reading and stops between steps.</param>
@@ -260,8 +274,9 @@ public sealed class ImagePipeline
     public async ValueTask<Image> ToImageAsync(CancellationToken cancellationToken = default)
     {
         using Parallelism.Scope scope = Parallelism.Use(_parallelism);
-        // When the first step resizes, the decoder learns its target and may decode smaller (JPEG shrink-on-load).
-        DecodeOptions options = _steps is [{ Size: { } size }, ..] ? _options.WithShrinkTarget(size) : _options;
+        // When a resize comes before anything that needs every pixel (a crop), the decoder learns its target and may
+        // decode smaller (JPEG shrink-on-load).
+        DecodeOptions options = ShrinkTarget(_steps) is { } target ? _options.WithShrinkTarget(target) : _options;
         (Image image, bool owned) = await _source.OpenAsync(options, cancellationToken).ConfigureAwait(false);
         try
         {
@@ -312,23 +327,8 @@ public sealed class ImagePipeline
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     /// <remarks>See <see cref="Image.SaveAsPng"/> for what is written.</remarks>
     /// <example><code>await ImagePipeline.Load(upload).Fit(1600, 1600).SaveAsPngAsync(output, cancellationToken: cancellationToken);</code></example>
-    public async ValueTask SaveAsPngAsync(Stream stream, PngEncoderOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(stream);
-        if (!stream.CanWrite)
-        {
-            throw new NotSupportedException("SaveAsPngAsync needs a writable stream.");
-        }
-
-        if (_steps.Length == 0 && _source is ImageSource { Image: Image unchanged })
-        {
-            await unchanged.SaveAsPngAsync(stream, options, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        using Image image = await ToImageAsync(cancellationToken).ConfigureAwait(false);
-        await image.SaveAsPngAsync(stream, options, cancellationToken).ConfigureAwait(false);
-    }
+    public ValueTask SaveAsPngAsync(Stream stream, PngEncoderOptions? options = null, CancellationToken cancellationToken = default) =>
+        SaveCoreAsync(stream, "SaveAsPngAsync", (image, output, token) => image.SaveAsPngAsync(output, options, token), cancellationToken);
 
     /// <summary>Runs the pipeline and writes the result as a JPEG file.</summary>
     /// <param name="stream">A writable stream; it stays open.</param>
@@ -347,18 +347,8 @@ public sealed class ImagePipeline
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     /// <remarks>See <see cref="Image.SaveAsJpeg"/> for what is written.</remarks>
     /// <example><code>await ImagePipeline.Load(upload).Fit(1600, 1600).SaveAsJpegAsync(output, cancellationToken: cancellationToken);</code></example>
-    public async ValueTask SaveAsJpegAsync(Stream stream, JpegEncoderOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(stream);
-        if (!stream.CanWrite)
-        {
-            throw new NotSupportedException("SaveAsJpegAsync needs a writable stream.");
-        }
-
-        using Parallelism.Scope scope = Parallelism.Use(_parallelism);
-        using Image image = await ToImageAsync(cancellationToken).ConfigureAwait(false);
-        await image.SaveAsJpegAsync(stream, options, cancellationToken).ConfigureAwait(false);
-    }
+    public ValueTask SaveAsJpegAsync(Stream stream, JpegEncoderOptions? options = null, CancellationToken cancellationToken = default) =>
+        SaveCoreAsync(stream, "SaveAsJpegAsync", (image, output, token) => image.SaveAsJpegAsync(output, options, token), cancellationToken);
 
     /// <summary>Runs the pipeline and writes the result as a WebP file.</summary>
     /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
@@ -377,18 +367,8 @@ public sealed class ImagePipeline
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     /// <remarks>See <see cref="Image.SaveAsWebp"/> for what is written.</remarks>
     /// <example><code>await ImagePipeline.Load(upload).Fit(1600, 1600).SaveAsWebpAsync(output, cancellationToken: cancellationToken);</code></example>
-    public async ValueTask SaveAsWebpAsync(Stream stream, WebpEncoderOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(stream);
-        if (!stream.CanWrite)
-        {
-            throw new NotSupportedException("SaveAsWebpAsync needs a writable stream.");
-        }
-
-        using Parallelism.Scope scope = Parallelism.Use(_parallelism);
-        using Image image = await ToImageAsync(cancellationToken).ConfigureAwait(false);
-        await image.SaveAsWebpAsync(stream, options, cancellationToken).ConfigureAwait(false);
-    }
+    public ValueTask SaveAsWebpAsync(Stream stream, WebpEncoderOptions? options = null, CancellationToken cancellationToken = default) =>
+        SaveCoreAsync(stream, "SaveAsWebpAsync", (image, output, token) => image.SaveAsWebpAsync(output, options, token), cancellationToken);
 
     /// <summary>Runs the pipeline and writes the result as a GIF file.</summary>
     /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
@@ -407,17 +387,95 @@ public sealed class ImagePipeline
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     /// <remarks>See <see cref="Image.SaveAsGif"/> for what is written.</remarks>
     /// <example><code>await ImagePipeline.Load(upload).Fit(64, 64).SaveAsGifAsync(output, cancellationToken: cancellationToken);</code></example>
-    public async ValueTask SaveAsGifAsync(Stream stream, GifEncoderOptions? options = null, CancellationToken cancellationToken = default)
+    public ValueTask SaveAsGifAsync(Stream stream, GifEncoderOptions? options = null, CancellationToken cancellationToken = default) =>
+        SaveCoreAsync(stream, "SaveAsGifAsync", (image, output, token) => image.SaveAsGifAsync(output, options, token), cancellationToken);
+
+    /// <summary>
+    /// Runs the pipeline and writes the result in the given format with that format's default options, for when the
+    /// format is chosen at run time, such as from a request's <c>Accept</c> header.
+    /// </summary>
+    /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
+    /// <param name="format">
+    /// <see cref="ImageFormat.Png"/>, <see cref="ImageFormat.Jpeg"/>, <see cref="ImageFormat.Webp"/> or
+    /// <see cref="ImageFormat.Gif"/>. For options, call <see cref="SaveAsPngAsync"/> and the others instead.
+    /// </param>
+    /// <param name="cancellationToken">Cancels reading, stops between steps, and cancels the write.</param>
+    /// <returns>A task that completes when the file is written.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> or <paramref name="format"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">This version can't write <paramref name="format"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="stream"/> can't write, the result is too large for the format, or its colour space can't be written.
+    /// </exception>
+    /// <exception cref="UnsupportedImageFormatException">The source isn't an image format this version can decode.</exception>
+    /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
+    /// <exception cref="ImageLimitException">The image is larger than the decode limits allow.</exception>
+    /// <exception cref="InvalidOperationException">The pipeline was loaded from a stream and has already run.</exception>
+    /// <exception cref="IOException">Reading or writing fails.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    /// <example>
+    /// <code>
+    /// ImageFormat format = accept.Contains("image/webp") ? ImageFormat.Webp : ImageFormat.Jpeg;
+    /// response.ContentType = format.MimeType;
+    /// await ImagePipeline.Load(path).Fit(800, 800).SaveAsAsync(response.Body, format, cancellationToken);
+    /// </code>
+    /// </example>
+    public ValueTask SaveAsAsync(Stream stream, ImageFormat format, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        if (!stream.CanWrite)
-        {
-            throw new NotSupportedException("SaveAsGifAsync needs a writable stream.");
-        }
+        ArgumentNullException.ThrowIfNull(format);
+        Func<Image, Stream, CancellationToken, ValueTask> save = Saver(format)
+            ?? throw new ArgumentException($"This version can't write {format.Name} files; it writes PNG, JPEG, WebP and GIF.", nameof(format));
+        return SaveCoreAsync(stream, "SaveAsAsync", save, cancellationToken);
+    }
 
-        using Parallelism.Scope scope = Parallelism.Use(_parallelism);
-        using Image image = await ToImageAsync(cancellationToken).ConfigureAwait(false);
-        await image.SaveAsGifAsync(stream, options, cancellationToken).ConfigureAwait(false);
+    /// <summary>
+    /// Runs the pipeline and writes the result to a file, in the format its extension names, with that format's default
+    /// options. The file is replaced only once the whole result is written, so a failure leaves any earlier file as it was.
+    /// </summary>
+    /// <param name="path">
+    /// The file to write, ending in <c>.png</c>, <c>.jpg</c>, <c>.jpeg</c>, <c>.webp</c> or <c>.gif</c> (any case).
+    /// </param>
+    /// <param name="cancellationToken">Cancels reading, stops between steps, and cancels the write.</param>
+    /// <returns>A task that completes when the file is written.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is empty, or its extension isn't a format this version writes.</exception>
+    /// <exception cref="NotSupportedException">The result is too large for the format, or its colour space can't be written.</exception>
+    /// <exception cref="UnsupportedImageFormatException">The source isn't an image format this version can decode.</exception>
+    /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
+    /// <exception cref="ImageLimitException">The image is larger than the decode limits allow.</exception>
+    /// <exception cref="InvalidOperationException">The pipeline was loaded from a stream and has already run.</exception>
+    /// <exception cref="IOException">Reading or writing fails.</exception>
+    /// <exception cref="UnauthorizedAccessException">The file or its folder can't be written.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    /// <example><code>await ImagePipeline.Load("photo.jpg").Fit(1200, 1200).SaveAsync("photo.webp");</code></example>
+    public async ValueTask SaveAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        string extension = Path.GetExtension(path);
+        Func<Image, Stream, CancellationToken, ValueTask> save = Saver(FormatOf(extension))
+            ?? throw new ArgumentException(
+                $"The extension '{extension}' doesn't name a format this version writes: use .png, .jpg, .jpeg, .webp or .gif.",
+                nameof(path));
+
+        string full = Path.GetFullPath(path);
+        string temporary = Path.Combine(
+            Path.GetDirectoryName(full) ?? ".",
+            "." + Path.GetFileName(full) + "." + Guid.NewGuid().ToString("N")[..8] + ".tmp");
+        try
+        {
+            FileStream file = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous);
+            await using (file.ConfigureAwait(false))
+            {
+                await SaveCoreAsync(file, "SaveAsync", save, cancellationToken).ConfigureAwait(false);
+            }
+
+            File.Move(temporary, full, overwrite: true);
+        }
+        catch
+        {
+            File.Delete(temporary);
+            throw;
+        }
     }
 
     /// <summary>Describes the source and the steps, such as <c>bytes → Fit(320, 320) → Flatten(Rgba32(255, 255, 255, 255))</c>.</summary>
@@ -434,6 +492,82 @@ public sealed class ImagePipeline
         return text.ToString();
     }
 
+    private static ImageFormat? FormatOf(string extension)
+    {
+        foreach (ImageFormat format in (ReadOnlySpan<ImageFormat>)[ImageFormat.Png, ImageFormat.Jpeg, ImageFormat.Webp, ImageFormat.Gif])
+        {
+            foreach (string known in format.FileExtensions)
+            {
+                if (string.Equals(known, extension, StringComparison.OrdinalIgnoreCase))
+                {
+                    return format;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static Func<Image, Stream, CancellationToken, ValueTask>? Saver(ImageFormat? format) =>
+        format == ImageFormat.Png ? (image, stream, token) => image.SaveAsPngAsync(stream, null, token)
+        : format == ImageFormat.Jpeg ? (image, stream, token) => image.SaveAsJpegAsync(stream, null, token)
+        : format == ImageFormat.Webp ? (image, stream, token) => image.SaveAsWebpAsync(stream, null, token)
+        : format == ImageFormat.Gif ? (image, stream, token) => image.SaveAsGifAsync(stream, null, token)
+        : null;
+
+    /// <summary>
+    /// The size the first resize makes, seen from the decoded (upright) size, when only steps that keep every pixel
+    /// (turns, flips, flattening, colour conversion) come before it; <see langword="null"/> when a crop or nothing
+    /// resizes first.
+    /// </summary>
+    private static Func<int, int, (int Width, int Height)>? ShrinkTarget(Step[] steps)
+    {
+        bool swapped = false;
+        foreach (Step step in steps)
+        {
+            switch (step.Shape)
+            {
+                case Shape.Same:
+                    continue;
+                case Shape.Swapped:
+                    swapped = !swapped;
+                    continue;
+                case Shape.Sized when step.Size is { } size:
+                    return swapped
+                        ? (width, height) =>
+                        {
+                            (int w, int h) = size(height, width);
+                            return (h, w);
+                        }
+                    : size;
+                default:
+                    return null;
+            }
+        }
+
+        return null;
+    }
+
+    private async ValueTask SaveCoreAsync(Stream stream, string method, Func<Image, Stream, CancellationToken, ValueTask> save, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanWrite)
+        {
+            throw new NotSupportedException(method + " needs a writable stream.");
+        }
+
+        using Parallelism.Scope scope = Parallelism.Use(_parallelism);
+        if (_steps.Length == 0 && _source is ImageSource { Image: Image unchanged })
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await save(unchanged, stream, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        using Image image = await ToImageAsync(cancellationToken).ConfigureAwait(false);
+        await save(image, stream, cancellationToken).ConfigureAwait(false);
+    }
+
     private static void CheckBox(int width, int height)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
@@ -443,16 +577,35 @@ public sealed class ImagePipeline
     private static string Describe(string start, Resampler? resampler) =>
         resampler is null ? start + ")" : start + ", " + resampler.Name + ")";
 
-    private ImagePipeline Then(string name, Func<Image, Image> apply, Func<int, int, (int Width, int Height)>? size = null)
+    private ImagePipeline Sized(string name, Func<Image, Image> apply, Func<int, int, (int Width, int Height)> size) =>
+        Then(name, apply, Shape.Sized, size);
+
+    private ImagePipeline Then(string name, Func<Image, Image> apply, Shape shape, Func<int, int, (int Width, int Height)>? size = null)
     {
         var steps = new Step[_steps.Length + 1];
         _steps.CopyTo(steps, 0);
-        steps[^1] = new Step(name, apply, size);
+        steps[^1] = new Step(name, apply, shape, size);
         return new ImagePipeline(_source, steps, _options, _parallelism);
     }
 
-    /// <summary>One step. <c>Size</c>, for steps that resize, gives the size the step makes from an upright source size.</summary>
-    private sealed record Step(string Name, Func<Image, Image> Apply, Func<int, int, (int Width, int Height)>? Size);
+    /// <summary>What a step does to the image's size, which decides whether the decoder may shrink before it.</summary>
+    private enum Shape
+    {
+        /// <summary>Needs every source pixel where it is, such as a crop.</summary>
+        Other,
+
+        /// <summary>Keeps the size and treats every pixel alike.</summary>
+        Same,
+
+        /// <summary>Swaps width and height, a quarter turn.</summary>
+        Swapped,
+
+        /// <summary>Resizes; <c>Size</c> gives the size it makes from the size it gets.</summary>
+        Sized,
+    }
+
+    /// <summary>One step. <c>Size</c>, for steps that resize, gives the size the step makes from the size it gets.</summary>
+    private sealed record Step(string Name, Func<Image, Image> Apply, Shape Shape, Func<int, int, (int Width, int Height)>? Size);
 
     /// <summary>Where the pixels come from. <c>Owned</c> says whether the pipeline must dispose the image it gets.</summary>
     private abstract class Source(string name)

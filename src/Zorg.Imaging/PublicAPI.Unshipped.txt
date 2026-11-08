@@ -405,3 +405,6 @@ Zorg.Imaging.PngFilter.None = 1 -> Zorg.Imaging.PngFilter
 Zorg.Imaging.PngFilter.Paeth = 5 -> Zorg.Imaging.PngFilter
 Zorg.Imaging.PngFilter.Sub = 2 -> Zorg.Imaging.PngFilter
 Zorg.Imaging.PngFilter.Up = 3 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.ImagePipeline.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.SaveAsAsync(System.IO.Stream! stream, Zorg.Imaging.ImageFormat! format, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.ToSrgb() -> Zorg.Imaging.ImagePipeline!

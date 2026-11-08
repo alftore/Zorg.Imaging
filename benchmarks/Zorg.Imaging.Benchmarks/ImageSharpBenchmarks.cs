@@ -110,6 +110,17 @@ public class ImageSharpBenchmarks
         return image.Width;
     }
 
+    /// <summary>The thumbnail above, encoded as lossy WebP at quality 80.</summary>
+    [Benchmark]
+    public long Sharp_Thumbnail_JpegToWebp()
+    {
+        using Sharp.Image<SharpRgb24> image = Sharp.Image.Load<SharpRgb24>(_jpeg);
+        image.Mutate(x => x.Resize(400, 300, KnownResamplers.MitchellNetravali));
+        using var output = new MemoryStream();
+        image.Save(output, new WebpEncoder { FileFormat = WebpFileFormatType.Lossy, Quality = 80 });
+        return output.Length;
+    }
+
     /// <summary>A 1600-pixel web size from the full decode, Mitchell, re-encoded as JPEG 80.</summary>
     [Benchmark]
     public long Sharp_Web_JpegToJpeg()

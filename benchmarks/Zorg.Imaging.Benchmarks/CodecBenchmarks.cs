@@ -187,6 +187,15 @@ public class CodecBenchmarks
         return image.Width;
     }
 
+    /// <summary>The main use end to end: a 12 MP JPEG to a 400 px WebP thumbnail at quality 80.</summary>
+    [Benchmark]
+    public async Task<int> Thumbnail_JpegToWebp()
+    {
+        using var output = new MemoryStream();
+        await ImagePipeline.Load(_baseline).Fit(400, 400).SaveAsWebpAsync(output);
+        return (int)output.Length;
+    }
+
     [Benchmark]
     public async Task<int> Web_Baseline()
     {
