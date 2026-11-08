@@ -10,16 +10,16 @@ namespace Zorg.Imaging.Codecs.Webp;
 /// <remarks>
 /// <para>
 /// Images of up to 256 colours become a colour table and indexes (section 4.4), packed several to a pixel when the
-/// table is small; above effort 0 they are also coded as below and the smaller kept. Other images get the predictor
-/// (4.1), each tile's mode chosen for the fewest bits by the statistics of the residuals chosen so far, then from effort
-/// 2 the cross-colour transform (4.2), else subtract-green (4.3).
+/// table is small; above effort 0 they are also coded as below and the smaller kept. Other images get subtract-green
+/// (4.3) where it helps, the predictor (4.1), each tile's mode chosen for the fewest bits by the statistics of the
+/// residuals chosen so far, and from effort 1 the cross-colour transform (4.2).
 /// </para>
 /// <para>
 /// The pixels are then coded with backward references (5.2.2) and a colour cache (5.2.3) whose size is chosen by the
-/// entropy it gives. From effort 3, each pixel's longest match is found and the cheapest path through literals, cache
-/// hits and copies taken, and the main image gets an entropy image (5.2.1): tiles clustered into groups, each with its
-/// own five prefix codes. Effort (0 to 6) also sets how far the hash chains are searched. The tuning was measured
-/// against cwebp; see docs/performance.md.
+/// entropy it gives. From effort 1 the main image gets an entropy image (5.2.1): tiles clustered into groups, each with
+/// its own five prefix codes. From effort 2, each pixel's longest match is found and the cheapest path through
+/// literals, cache hits and copies taken. Effort (0 to 6) also sets how far the hash chains are searched. The tuning
+/// was measured against cwebp; see docs/performance.md.
 /// </para>
 /// </remarks>
 internal static class Vp8lEncoder
@@ -88,9 +88,8 @@ internal static class Vp8lEncoder
         return bits.Finish();
     }
 
-    // Sections 4.1 to 4.3 then the main image. From effort 2, the predictor on the pixels as they are, then cross-colour,
-    // whose multipliers take out as much green as helps (32 is all of it): subtracting green before predicting mixes
-    // the channels' noise and costs about 5% on photos. Below effort 2, subtract-green and the predictor alone.
+    // Sections 4.1 to 4.3 then the main image: subtract-green where the analysis favours it, the predictor (on tiles of
+    // 32 at effort 0 and 1, 16 above, which saves about 0.3% on photos), then from effort 1 cross-colour.
     private static ReadOnlySpan<byte> Predicted(uint[] argb, int width, int height, int effort)
     {
         var bits = new Vp8lBitWriter((argb.Length / 2) + 1024);
@@ -102,7 +101,7 @@ internal static class Vp8lEncoder
             SubtractGreen(pixels);
         }
 
-        int tileBits = effort <= 2 ? 5 : 4;
+        int tileBits = effort <= 1 ? 5 : 4;
         bits.Write(1, 1);
         bits.Write((uint)Vp8lDecoder.TransformType.Predictor, 2);
         bits.Write((uint)(tileBits - 2), 3);
@@ -533,16 +532,16 @@ internal static class Vp8lEncoder
                         }
                     }
 
-                    bool thorough = effort >= 5;
-                    int greenToRed = Search(Slope(w.Reds, w.Greens, count), thorough, t => Cost(w.Reds, w.Greens, count, t, redCost));
-                    int greenToBlue = Search(Slope(w.Blues, w.Greens, count), thorough, t => Cost(w.Blues, w.Greens, count, t, blueCost));
+                    int reach = effort >= 5 ? 2 : effort >= 3 ? 1 : 0;
+                    int greenToRed = Search(Slope(w.Reds, w.Greens, count), reach, t => Cost(w.Reds, w.Greens, count, t, redCost));
+                    int greenToBlue = Search(Slope(w.Blues, w.Greens, count), reach, t => Cost(w.Blues, w.Greens, count, t, blueCost));
                     for (int k = 0; k < count; k++)
                     {
                         w.Rest[k] = w.Blues[k] - Delta(greenToBlue, w.Greens[k]);
                         w.SignedReds[k] = (sbyte)w.Reds[k];
                     }
 
-                    int redToBlue = Search(Slope(w.Rest, w.SignedReds, count), thorough, t => Cost(w.Rest, w.SignedReds, count, t, blueCost));
+                    int redToBlue = Search(Slope(w.Rest, w.SignedReds, count), reach, t => Cost(w.Rest, w.SignedReds, count, t, blueCost));
                     multipliers[(row * tilesWide) + tx] = 0xFF000000u | ((uint)(byte)redToBlue << 16) | ((uint)(byte)greenToBlue << 8) | (byte)greenToRed;
 
                     for (int y = top; y < bottom; y++)
@@ -597,9 +596,11 @@ internal static class Vp8lEncoder
 
     // The multiplier, -128 to 127, with the lowest cost: 0, the least-squares slope and the coarse points beside it, then
     // every 2nd near the best, then the neighbours. Starting from the slope finds nearly the same minimum as a scan of
-    // every 16th, for a third of the trials (files about 0.1% larger); the thorough search (effort 5 and up) scans every
-    // 16th and every 2nd within 14 of the best. 0 wins ties, as it changes nothing.
-    private static int Search(int slope, bool thorough, Func<int, float> cost)
+    // every 16th, for a third of the trials (files about 0.1% larger). Reach 0 (effort 0 to 2) tries the slope and
+    // every 2nd within 4 of the best, as good on photos for half the trials; reach 1 (effort 3 and 4) also the slope
+    // plus and minus 16, then within 8; reach 2 (effort 5 and up) scans every 16th, then within 14. 0 wins ties, as it
+    // changes nothing.
+    private static int Search(int slope, int reach, Func<int, float> cost)
     {
         int best = 0;
         float bestCost = cost(0);
@@ -618,7 +619,7 @@ internal static class Vp8lEncoder
             }
         }
 
-        if (thorough)
+        if (reach == 2)
         {
             for (int t = -128; t <= 112; t += 16)
             {
@@ -628,11 +629,14 @@ internal static class Vp8lEncoder
         else
         {
             Try(slope);
-            Try(slope - 16);
-            Try(slope + 16);
+            if (reach == 1)
+            {
+                Try(slope - 16);
+                Try(slope + 16);
+            }
         }
 
-        int near = thorough ? 14 : 8;
+        int near = reach switch { 2 => 14, 1 => 8, _ => 4 };
         foreach ((int from, int to, int step) in new[] { (-near, near, 2), (-1, 1, 1) })
         {
             int centre = best;
@@ -1294,7 +1298,7 @@ internal static class Vp8lEncoder
         return codes;
     }
 
-    // The tokens and the cache size. Effort 0 to 2: greedy, the longest match at each token. Above that: the longest
+    // The tokens and the cache size. Effort 0 and 1: greedy, the longest match at each token. Above that: the longest
     // match at every pixel, a greedy parse of those to choose the cache size and price the symbols, then the cheapest
     // path through literals, cache hits and copies (twice at effort 5 and 6, priced the second time by the first).
     // Lengths of 0 are literals.
@@ -1305,7 +1309,7 @@ internal static class Vp8lEncoder
         int[] lengths = new int[n];
         int[] distances = new int[n];
         int count = 0;
-        if (effort <= 2)
+        if (effort <= 1)
         {
             for (int i = 0; i < n;)
             {
