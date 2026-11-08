@@ -33,6 +33,22 @@ The containers use `--network host`, as in Zorg.Ssh: on the Podman machine used 
 
 The JPEG tests use small files in `tests/Zorg.Imaging.Tests/Codecs/Jpeg/Files`, written by `cjpeg` from ImageMagick plasma fractals, with `djpeg`'s decodes beside them as references, so they run on any machine. `scripts/make-jpeg-fixtures.sh` makes them again in the gate image; the WebP files in `tests/Zorg.Imaging.Tests/Codecs/Webp/Files`, with `dwebp`'s decodes, come from `scripts/make-webp-fixtures.sh` the same way. Benchmarks that need large photos read them from a folder named by an environment variable, such as `ZORG_BENCH_JPEG_DIR`; they aren't committed.
 
+## Fuzzing
+
+Every decoder has mutation tests (`*MutationTests`): every truncation, every byte set to edge values, corrupted length
+and size fields, random damage, and damage read through a stream that can't seek. Each damaged file must decode or
+throw an `ImageException`, quickly, and `Image.Identify` must never throw. A failure names the case, such as
+`s420 round 17`, and the seeds are fixed, so it reproduces.
+
+For a longer hunt, `ZORG_FUZZ_SCALE` multiplies the random rounds and changes the seeds:
+
+```bash
+ZORG_FUZZ_SCALE=50 dotnet test --project tests/Zorg.Imaging.Tests --filter-class "*MutationTests"
+```
+
+A new decoder gets its mutation tests in the same change. A bug they find gets fixed in the decoder, and the damaged
+file becomes a regression test when the round number alone isn't clear.
+
 ## Clean-room rules
 
 - Write codecs from the specifications: PNG (W3C), JPEG (ITU-T T.81, JFIF), GIF89a, VP8 (RFC 6386), WebP container and lossless (RFC 9649), APNG, EXIF (CIPA DC-008), ICC.

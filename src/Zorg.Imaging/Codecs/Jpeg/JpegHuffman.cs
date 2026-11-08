@@ -47,6 +47,13 @@ internal sealed class JpegHuffman
         for (int length = 1; length <= 16; length++)
         {
             int count = counts[length - 1];
+
+            // Checked before the codes are placed, since too many would write past the end of the lookup table.
+            if (code + count > (1 << length))
+            {
+                throw ImageErrors.Corrupt("A JPEG Huffman table has more codes than fit in their lengths.");
+            }
+
             table._valueOffset[length] = k - code;
             for (int i = 0; i < count; i++, k++, code++)
             {
@@ -59,11 +66,6 @@ internal sealed class JpegHuffman
             }
 
             table._maxCode[length] = count > 0 ? code - 1 : -1;
-            if (code > (1 << length))
-            {
-                throw ImageErrors.Corrupt("A JPEG Huffman table has more codes than fit in their lengths.");
-            }
-
             code <<= 1;
         }
 
