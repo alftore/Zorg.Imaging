@@ -27,7 +27,7 @@ internal static class Resizer
         bool shrinking = width < source.Width || height < source.Height;
         Resampler filterX = resampler ?? (width < source.Width ? Resampler.Lanczos3 : Resampler.Mitchell);
         Resampler filterY = resampler ?? (height < source.Height ? Resampler.Lanczos3 : Resampler.Mitchell);
-        var result = new Image(width, height, source.PixelFormat) { ColorSpace = source.ColorSpace };
+        var result = new Image(width, height, source.PixelFormat) { ColorSpace = source.ColorSpace, Metadata = source.Metadata };
         if (filterX.IsNearest && filterY.IsNearest)
         {
             Nearest(source, result);

@@ -26,6 +26,7 @@ internal static class WebpDecoder
     private const byte IccFlag = 0x20;
     private const byte ExifFlag = 0x08;
     private const byte AnimationFlag = 0x02;
+    private const byte XmpFlag = 0x04;
 
     public static async ValueTask<Image> DecodeAsync(DataReader reader, DecodeOptions options, CancellationToken cancellationToken)
     {
@@ -52,6 +53,7 @@ internal static class WebpDecoder
         PixelFormat format = options.PixelFormat != PixelFormat.None ? options.PixelFormat : picture.HasAlpha ? PixelFormat.Rgba32 : PixelFormat.Rgb24;
         Image image = Argb.ToImage(picture.Pixels, picture.Width, picture.Height, picture.HasAlpha, format);
         image.ColorSpace = file.ColorSpace;
+        image.Metadata = Metadata.ImageMetadata.From(file.Exif, file.Xmp);
         if (options.ApplyOrientation && file.Orientation != 1)
         {
             try
@@ -90,6 +92,12 @@ internal static class WebpDecoder
         public ColorSpace ColorSpace { get; private set; } = ColorSpace.Srgb;
 
         public int Orientation { get; private set; } = 1;
+
+        /// <summary>The EXIF block, a TIFF structure, when the chunk is no larger than the header limit.</summary>
+        public byte[]? Exif { get; private set; }
+
+        /// <summary>The XMP packet, when no larger than the header limit.</summary>
+        public byte[]? Xmp { get; private set; }
 
         public async ValueTask<(string FourCc, uint Size)> NextChunkAsync(CancellationToken cancellationToken)
         {
@@ -198,7 +206,8 @@ internal static class WebpDecoder
             Picture? picture = null;
             byte[]? alpha = null;
             bool wantExif = (flags & ExifFlag) != 0;
-            while (reader.Position + 8 <= end && (picture is null || wantExif))
+            bool wantXmp = (flags & XmpFlag) != 0;
+            while (reader.Position + 8 <= end && (picture is null || wantExif || wantXmp))
             {
                 (string fourCc, uint chunkSize) = await NextChunkAsync(cancellationToken).ConfigureAwait(false);
                 switch (fourCc)
@@ -209,13 +218,34 @@ internal static class WebpDecoder
 
                     case "EXIF" when wantExif:
                         wantExif = false;
-                        int take = (int)Math.Min(chunkSize, ExifOrientation.MaxBytesNeeded);
+                        int take = (int)(chunkSize <= options.Limits.MaxHeaderBytes ? chunkSize : Math.Min(chunkSize, ExifOrientation.MaxBytesNeeded));
                         byte[] exif = new byte[take];
                         await reader.ReadExactlyAsync(exif, cancellationToken).ConfigureAwait(false);
                         Orientation = ExifOrientation.Read(exif);
+                        if (take == chunkSize)
+                        {
+                            // Some writers put JPEG's "Exif\0\0" before the TIFF header; it isn't part of the block.
+                            Exif = exif.AsSpan().StartsWith("Exif\0\0"u8) ? exif[6..] : exif;
+                        }
 
                         // The rest of the chunk, and its pad byte when its size is odd.
                         await reader.SkipAsync(chunkSize - take + (chunkSize & 1), cancellationToken).ConfigureAwait(false);
+                        break;
+
+                    case "XMP " when wantXmp:
+                        wantXmp = false;
+                        if (chunkSize <= options.Limits.MaxHeaderBytes)
+                        {
+                            byte[] xmp = new byte[chunkSize];
+                            await reader.ReadExactlyAsync(xmp, cancellationToken).ConfigureAwait(false);
+                            Xmp = xmp;
+                            await reader.SkipAsync(chunkSize & 1, cancellationToken).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            await SkipChunkAsync(chunkSize, cancellationToken).ConfigureAwait(false);
+                        }
+
                         break;
 
                     case "VP8L" when picture is null:

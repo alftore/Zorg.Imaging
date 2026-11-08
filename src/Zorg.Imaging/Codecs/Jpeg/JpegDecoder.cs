@@ -45,6 +45,8 @@ internal static class JpegDecoder
     private const byte Dnl = 0xDC;
     private const byte Dri = 0xDD;
     private const byte App1 = 0xE1;
+
+    private static ReadOnlySpan<byte> XmpPrefix => "http://ns.adobe.com/xap/1.0/\0"u8;
     private const byte App2 = 0xE2;
     private const byte App14 = 0xEE;
 
@@ -131,6 +133,11 @@ internal static class JpegDecoder
                 case App1 when !state.SawExif && data.AsSpan().StartsWith("Exif\0\0"u8):
                     state.SawExif = true;
                     state.Orientation = ExifOrientation.Read(data);
+                    state.Exif = data[6..];
+                    break;
+
+                case App1 when state.Xmp is null && data.AsSpan().StartsWith(XmpPrefix):
+                    state.Xmp = data[XmpPrefix.Length..];
                     break;
 
                 case App2 when data.AsSpan().StartsWith(IccPrefix):
@@ -161,6 +168,7 @@ internal static class JpegDecoder
         int scale = ChooseScale(state.Frame, options, state.Orientation);
         Image image = JpegOutput.Build(state.Frame, scale, state.IsRgb, options.PixelFormat);
         image.ColorSpace = colorSpace;
+        image.Metadata = Metadata.ImageMetadata.From(state.Exif, state.Xmp);
         if (options.ApplyOrientation && state.Orientation != 1)
         {
             try
@@ -276,6 +284,12 @@ internal static class JpegDecoder
         public int Scans { get; set; }
 
         public bool SawExif { get; set; }
+
+        /// <summary>The EXIF block, a TIFF structure, kept for an encoder asked to keep metadata.</summary>
+        public byte[]? Exif { get; set; }
+
+        /// <summary>The standard XMP packet.</summary>
+        public byte[]? Xmp { get; set; }
 
         public int Orientation { get; set; } = 1;
 

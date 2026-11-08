@@ -49,7 +49,7 @@ internal static class SrgbConverter
         bool sixteen = image.PixelFormat is PixelFormat.L16 or PixelFormat.Rgb48 or PixelFormat.Rgba64;
         int max = sixteen ? 65535 : 255;
         Quantizer encode = TransferFunction.For(ColorSpace.Srgb).Encoder(sixteen);
-        var result = new Image(image.Width, image.Height, image.PixelFormat) { ColorSpace = ColorSpace.Srgb };
+        var result = new Image(image.Width, image.Height, image.PixelFormat) { ColorSpace = ColorSpace.Srgb, Metadata = image.Metadata };
         try
         {
             bool inside = grey

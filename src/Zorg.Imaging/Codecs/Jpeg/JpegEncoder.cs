@@ -105,7 +105,8 @@ internal static class JpegEncoder
         JpegHuffmanEncoder? acChroma = grey ? null : JpegHuffmanEncoder.Optimal(counts[3]);
 
         var output = new ArrayBufferWriter<byte>(4096 + profile.Length);
-        WriteHeaders(output, image, profile, grey, factor, luminance, chrominance, dcLuma, acLuma, dcChroma, acChroma);
+        (byte[]? exif, byte[]? xmp) = Metadata.MetadataWriter.Prepare(image, options.Metadata);
+        WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, dcLuma, acLuma, dcChroma, acChroma);
 
         var bits = new BitWriter(Math.Max(4096, image.Width * image.Height / 4));
         Walk(components, mcusWide, mcusHigh, factor, (component, block, previous) =>
@@ -390,6 +391,8 @@ internal static class JpegEncoder
         ArrayBufferWriter<byte> output,
         Image image,
         ReadOnlySpan<byte> profile,
+        byte[]? exif,
+        byte[]? xmp,
         bool grey,
         int factor,
         byte[] luminance,
@@ -403,6 +406,18 @@ internal static class JpegEncoder
 
         // JFIF APP0: version 1.01, no units, aspect ratio 1:1, no thumbnail.
         Segment(output, 0xE0, [.. "JFIF\0"u8, 1, 1, 0, 0, 1, 0, 1, 0, 0]);
+
+        // EXIF and XMP in APP1, each in one segment; one too large for a segment is left out.
+        if (exif is not null && exif.Length + 6 <= 65533)
+        {
+            Segment(output, 0xE1, [.. "Exif\0\0"u8, .. exif]);
+        }
+
+        ReadOnlySpan<byte> xmpPrefix = "http://ns.adobe.com/xap/1.0/\0"u8;
+        if (xmp is not null && xmp.Length + xmpPrefix.Length <= 65533)
+        {
+            Segment(output, 0xE1, [.. xmpPrefix, .. xmp]);
+        }
 
         // The ICC profile in APP2 chunks of at most 65,519 bytes, numbered from 1 (ICC.1, B.4).
         const int Chunk = 65535 - 2 - 14;

@@ -47,6 +47,7 @@ internal static class PngDecoder
     private const uint Actl = 0x6163544C;
     private const uint Fctl = 0x6663544C;
     private const uint Fdat = 0x66644154;
+    private const uint Itxt = 0x69545874;
 
     private const int IhdrLength = 13;
     private const int CrcLength = 4;
@@ -103,6 +104,8 @@ internal static class PngDecoder
         byte[]? transparency = null;
         int orientation = 1;
         bool sawExif = false;
+        byte[]? exifBlock = null;
+        byte[]? xmp = null;
         bool animated = false;
         bool defaultIsFrame = false;
         var colour = new ColourChunks();
@@ -136,11 +139,20 @@ internal static class PngDecoder
                 case Exif when !sawExif:
                     // The same rule as Identify: only an eXIf before the image data counts.
                     sawExif = true;
-                    int take = (int)Math.Min(length, ExifOrientation.MaxBytesNeeded);
+
+                    // The whole block is kept for an encoder when it's no larger than the header limit; past that,
+                    // only the orientation is read.
+                    int take = (int)(length <= options.Limits.MaxHeaderBytes ? length : Math.Min(length, ExifOrientation.MaxBytesNeeded));
                     byte[] exif = new byte[take];
                     await reader.ReadExactlyAsync(exif, cancellationToken).ConfigureAwait(false);
                     orientation = ExifOrientation.Read(exif);
+                    exifBlock = take == length ? exif : null;
                     await reader.SkipAsync(length - take + CrcLength, cancellationToken).ConfigureAwait(false);
+                    break;
+
+                case Itxt when xmp is null && length <= options.Limits.MaxHeaderBytes:
+                    byte[] text = await ReadChunkDataAsync(reader, Itxt, length, cancellationToken).ConfigureAwait(false);
+                    xmp = Xmp(text);
                     break;
 
                 case Actl:
@@ -171,12 +183,13 @@ internal static class PngDecoder
 
         if (animated && !defaultIsFrame)
         {
-            return await DecodeFirstFrameAsync(reader, length, header, palette, transparency, colour.Resolve(), orientation, options, sync, head, cancellationToken).ConfigureAwait(false);
+            return await DecodeFirstFrameAsync(reader, length, header, palette, transparency, colour.Resolve(), Metadata.ImageMetadata.From(exifBlock, xmp), orientation, options, sync, head, cancellationToken).ConfigureAwait(false);
         }
 
         var converter = new PngRowConverter(header, palette, transparency, options.PixelFormat);
         Image image = header.CreateImage(converter.Target);
         image.ColorSpace = colour.Resolve();
+        image.Metadata = Metadata.ImageMetadata.From(exifBlock, xmp);
         try
         {
             var idat = new IdatStream(reader, length, sync);
@@ -209,6 +222,7 @@ internal static class PngDecoder
         byte[]? palette,
         byte[]? transparency,
         ColorSpace colorSpace,
+        Metadata.ImageMetadata? metadata,
         int orientation,
         DecodeOptions options,
         bool sync,
@@ -292,6 +306,7 @@ internal static class PngDecoder
             }
 
             frame.ColorSpace = colorSpace;
+            frame.Metadata = metadata;
             if (options.ApplyOrientation && orientation != 1)
             {
                 Image upright = Orientation.Apply(frame, orientation);
@@ -307,6 +322,28 @@ internal static class PngDecoder
             canvas?.Dispose();
             throw;
         }
+    }
+
+    // The XMP packet of an iTXt chunk with the keyword XML:com.adobe.xmp, when it isn't compressed; otherwise null.
+    private static byte[]? Xmp(byte[] itxt)
+    {
+        ReadOnlySpan<byte> keyword = "XML:com.adobe.xmp\0"u8;
+        ReadOnlySpan<byte> data = itxt;
+        if (!data.StartsWith(keyword) || data.Length < keyword.Length + 2 || data[keyword.Length] != 0)
+        {
+            return null;
+        }
+
+        data = data[(keyword.Length + 2)..];
+        int language = data.IndexOf((byte)0);
+        if (language < 0)
+        {
+            return null;
+        }
+
+        data = data[(language + 1)..];
+        int translated = data.IndexOf((byte)0);
+        return translated < 0 ? null : data[(translated + 1)..].ToArray();
     }
 
     private static async ValueTask DecodeImageDataAsync(

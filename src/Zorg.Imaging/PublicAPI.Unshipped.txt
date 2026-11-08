@@ -365,3 +365,22 @@ Zorg.Imaging.PngEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpace
 Zorg.Imaging.PngEncoderOptions.ColorSpaceHandling.init -> void
 Zorg.Imaging.WebpEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
 Zorg.Imaging.WebpEncoderOptions.ColorSpaceHandling.init -> void
+Zorg.Imaging.ExifGroup
+Zorg.Imaging.ExifGroup.Camera = 2 -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.ExifGroup.Dates = 4 -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.ExifGroup.Location = 1 -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.ExifGroup.None = 0 -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.MetadataOptions
+Zorg.Imaging.MetadataOptions.Excluded.get -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.MetadataOptions.Without(Zorg.Imaging.ExifGroup groups) -> Zorg.Imaging.MetadataOptions!
+override Zorg.Imaging.MetadataOptions.ToString() -> string!
+static Zorg.Imaging.MetadataOptions.CopyrightOnly.get -> Zorg.Imaging.MetadataOptions!
+static Zorg.Imaging.MetadataOptions.Keep.get -> Zorg.Imaging.MetadataOptions!
+static Zorg.Imaging.MetadataOptions.Strip.get -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.JpegEncoderOptions.Metadata.get -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.JpegEncoderOptions.Metadata.init -> void
+Zorg.Imaging.PngEncoderOptions.Metadata.get -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.PngEncoderOptions.Metadata.init -> void
+Zorg.Imaging.WebpEncoderOptions.Metadata.get -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.WebpEncoderOptions.Metadata.init -> void
+static Zorg.Imaging.MetadataOptions.KeepNonPersonal.get -> Zorg.Imaging.MetadataOptions!

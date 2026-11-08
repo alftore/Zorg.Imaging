@@ -56,6 +56,12 @@ internal static class PngEncoder
             await WriteAsync(output, colour, sync, cancellationToken).ConfigureAwait(false);
         }
 
+        byte[] metadata = MetadataChunks(image, options.Metadata);
+        if (metadata.Length > 0)
+        {
+            await WriteAsync(output, metadata, sync, cancellationToken).ConfigureAwait(false);
+        }
+
         int bytesPerPixel = image.PixelFormat == PixelFormat.Bgra32 ? 4 : image.BytesPerPixel;
         int rowBytes = image.Width * bytesPerPixel;
         byte[] raw = ArrayPool<byte>.Shared.Rent(rowBytes);
@@ -210,6 +216,25 @@ internal static class PngEncoder
 
                 WriteChunk(chunks, "cHRM"u8, values);
             }
+        }
+
+        return chunks.ToArray();
+    }
+
+    // eXIf and an uncompressed iTXt chunk with the XMP packet, both before the image data, where readers look.
+    private static byte[] MetadataChunks(Image image, MetadataOptions options)
+    {
+        (byte[]? exif, byte[]? xmp) = Metadata.MetadataWriter.Prepare(image, options);
+        using var chunks = new MemoryStream();
+        if (exif is not null)
+        {
+            WriteChunk(chunks, "eXIf"u8, exif);
+        }
+
+        if (xmp is not null)
+        {
+            // Keyword, no compression, no language, no translated keyword, then the text.
+            WriteChunk(chunks, "iTXt"u8, [.. "XML:com.adobe.xmp\0"u8, 0, 0, 0, 0, .. xmp]);
         }
 
         return chunks.ToArray();

@@ -54,4 +54,20 @@ public sealed class PngEncoderOptions
             field = value;
         }
     } = ColorSpaceHandling.Keep;
+
+    /// <summary>
+    /// Which of the source file's EXIF and XMP to write. Defaults to <see cref="MetadataOptions.Strip"/>: none, the safe
+    /// choice for publishing.
+    /// </summary>
+    /// <exception cref="System.ArgumentNullException">The value is <see langword="null"/>.</exception>
+    /// <example><code>var options = new PngEncoderOptions { Metadata = MetadataOptions.Keep.Without(ExifGroup.Location) };</code></example>
+    public MetadataOptions Metadata
+    {
+        get;
+        init
+        {
+            System.ArgumentNullException.ThrowIfNull(value);
+            field = value;
+        }
+    } = MetadataOptions.Strip;
 }

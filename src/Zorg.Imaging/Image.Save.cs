@@ -31,7 +31,8 @@ public sealed partial class Image
     /// The <see cref="ColorSpace"/> is written so the file shows the same colours: nothing for sRGB, a <c>cICP</c> chunk
     /// for CICP code points (Display P3, HDR), an <c>iCCP</c> chunk for an ICC profile, or <c>gAMA</c> and <c>cHRM</c> as
     /// they were read. PNG keeps the colour space by default; <see cref="PngEncoderOptions.ColorSpaceHandling"/> can
-    /// convert to sRGB first. No other metadata is written.
+    /// convert to sRGB first. EXIF and XMP from the source file are stripped unless
+    /// <see cref="PngEncoderOptions.Metadata"/> keeps them.
     /// </para>
     /// </remarks>
     /// <example>
@@ -97,7 +98,8 @@ public sealed partial class Image
     /// the image's own profile when it has one, or a small generated one (about 600 bytes) for Display P3, Rec.2020 and
     /// other spaces known by their primaries. First, by default (<see cref="ColorSpaceHandling.SrgbWhenLossless"/>), an image in another space whose
     /// colours all fit inside sRGB is converted to sRGB and written with no profile; <see cref="JpegEncoderOptions.ColorSpaceHandling"/>
-    /// changes that. No other metadata is written.
+    /// changes that. EXIF and XMP from the source file are stripped unless
+    /// <see cref="JpegEncoderOptions.Metadata"/> keeps them.
     /// </para>
     /// </remarks>
     /// <example>
@@ -161,7 +163,8 @@ public sealed partial class Image
     /// colours: nothing for sRGB, the image's own profile when it has one, or a small generated one for Display P3,
     /// Rec.2020 and other spaces known by their primaries. First, by default (<see cref="ColorSpaceHandling.SrgbWhenLossless"/>), an image in another space whose
     /// colours all fit inside sRGB is converted to sRGB and written with no profile; <see cref="WebpEncoderOptions.ColorSpaceHandling"/>
-    /// changes that. No other metadata is written.
+    /// changes that. EXIF and XMP from the source file are stripped unless
+    /// <see cref="WebpEncoderOptions.Metadata"/> keeps them.
     /// </para>
     /// </remarks>
     /// <example>

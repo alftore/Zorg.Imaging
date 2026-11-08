@@ -23,6 +23,7 @@ internal static class WebpEncoder
         }
 
         ReadOnlyMemory<byte> profile = IccProfileWriter.For(image.ColorSpace, "WebP");
+        (byte[]? exif, byte[]? xmp) = MetadataWriter.Prepare(image, options.Metadata);
         byte[] file;
         using (Parallelism.Use(options.MaxDegreeOfParallelism))
         {
@@ -30,14 +31,14 @@ internal static class WebpEncoder
             if (options.Lossless)
             {
                 byte[] vp8l = Vp8lEncoder.Encode(argb, image.Width, image.Height, alpha, options.Effort);
-                file = Container("VP8L"u8, vp8l, [], image.Width, image.Height, alpha, profile.Span);
+                file = Container("VP8L"u8, vp8l, [], image.Width, image.Height, alpha, profile.Span, exif, xmp);
             }
             else
             {
                 (byte[] y, byte[] u, byte[] v) = ToYuv(argb, image.Width, image.Height);
                 byte[] vp8 = Vp8Encoder.Encode(y, u, v, image.Width, image.Height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
                 byte[] alphaChunk = alpha ? AlphaChunk(argb, image.Width, image.Height, options.Effort) : [];
-                file = Container("VP8 "u8, vp8, alphaChunk, image.Width, image.Height, alpha, profile.Span);
+                file = Container("VP8 "u8, vp8, alphaChunk, image.Width, image.Height, alpha, profile.Span, exif, xmp);
             }
         }
 
@@ -125,15 +126,18 @@ internal static class WebpEncoder
 
     // RIFF, then VP8X (when there is a profile, or alpha in a lossy file), ICCP and ALPH as needed, then the image chunk.
     // Chunks are padded to an even length.
-    private static byte[] Container(ReadOnlySpan<byte> fourCc, byte[] image, byte[] alphaChunk, int width, int height, bool alpha, ReadOnlySpan<byte> profile)
+    private static byte[] Container(
+        ReadOnlySpan<byte> fourCc, byte[] image, byte[] alphaChunk, int width, int height, bool alpha, ReadOnlySpan<byte> profile, byte[]? exif = null, byte[]? xmp = null)
     {
-        bool extended = !profile.IsEmpty || alphaChunk.Length > 0;
+        bool extended = !profile.IsEmpty || alphaChunk.Length > 0 || exif is not null || xmp is not null;
         int size = 12 + 8 + image.Length + (image.Length & 1);
         if (extended)
         {
             size += 18;
             size += profile.IsEmpty ? 0 : 8 + profile.Length + (profile.Length & 1);
             size += alphaChunk.Length == 0 ? 0 : 8 + alphaChunk.Length + (alphaChunk.Length & 1);
+            size += exif is null ? 0 : 8 + exif.Length + (exif.Length & 1);
+            size += xmp is null ? 0 : 8 + xmp.Length + (xmp.Length & 1);
         }
 
         byte[] file = new byte[size];
@@ -146,7 +150,7 @@ internal static class WebpEncoder
         {
             "VP8X"u8.CopyTo(span[at..]);
             BinaryPrimitives.WriteInt32LittleEndian(span[(at + 4)..], 10);
-            span[at + 8] = (byte)((profile.IsEmpty ? 0 : 0x20) | (alpha ? 0x10 : 0));
+            span[at + 8] = (byte)((profile.IsEmpty ? 0 : 0x20) | (alpha ? 0x10 : 0) | (exif is null ? 0 : 0x08) | (xmp is null ? 0 : 0x04));
             WriteUInt24(span[(at + 12)..], width - 1);
             WriteUInt24(span[(at + 15)..], height - 1);
             at += 18;
@@ -161,7 +165,19 @@ internal static class WebpEncoder
             }
         }
 
-        Chunk(span, at, fourCc, image);
+        at = Chunk(span, at, fourCc, image);
+
+        // EXIF and XMP after the image data, as RFC 9649 orders the chunks.
+        if (exif is not null)
+        {
+            at = Chunk(span, at, "EXIF"u8, exif);
+        }
+
+        if (xmp is not null)
+        {
+            Chunk(span, at, "XMP "u8, xmp);
+        }
+
         return file;
     }
 

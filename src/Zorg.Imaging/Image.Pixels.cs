@@ -73,6 +73,9 @@ public sealed partial class Image : IDisposable
         }
     } = ColorSpace.Srgb;
 
+    /// <summary>The metadata from the file this image was decoded from, carried by operations, for the encoders.</summary>
+    internal Metadata.ImageMetadata? Metadata { get; set; }
+
     /// <summary>How each pixel is laid out.</summary>
     /// <example><code>bool hasAlpha = image.PixelFormat is PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Rgba64;</code></example>
     public PixelFormat PixelFormat { get; }
@@ -143,7 +146,7 @@ public sealed partial class Image : IDisposable
     public Image Clone()
     {
         Span<byte> source = GetPixelBytes();
-        var copy = new Image(Width, Height, PixelFormat) { ColorSpace = ColorSpace };
+        var copy = new Image(Width, Height, PixelFormat) { ColorSpace = ColorSpace, Metadata = Metadata };
         source.CopyTo(copy.GetPixelBytes());
         return copy;
     }
