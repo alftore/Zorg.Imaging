@@ -37,6 +37,12 @@ internal sealed class JpegHuffmanEncoder
     /// <summary>The symbols in code order.</summary>
     public byte[] Values { get; }
 
+    /// <summary>Each symbol's code, by symbol.</summary>
+    public ReadOnlySpan<ushort> Codes => _codes;
+
+    /// <summary>Each symbol's code length, by symbol.</summary>
+    public ReadOnlySpan<byte> Lengths => _lengths;
+
     public ushort Code(int symbol) => _codes[symbol];
 
     public int Length(int symbol) => _lengths[symbol];

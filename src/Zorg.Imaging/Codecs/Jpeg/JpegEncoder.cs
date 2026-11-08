@@ -4,6 +4,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.IO;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Threading;
@@ -90,26 +91,24 @@ internal static class JpegEncoder
             ? new[] { new Plane(mcusWide, mcusHigh, 1) }
             : new[] { new Plane(mcusWide * factor, mcusHigh * factor, factor), new Plane(mcusWide, mcusHigh, 1), new Plane(mcusWide, mcusHigh, 1) };
 
-        Transform(image, options.Background, components, mcusWide, mcusHigh, factor, Reciprocals(luminance), Reciprocals(chrominance));
+        // The AC symbols are counted as the blocks are made, while they are in cache; the DC differences, which cross
+        // the bands, afterwards. Then tables are built that code them in the fewest bits.
+        long[][]? counts = options.Progressive ? null : [new long[256], new long[256], new long[256], new long[256]];
+        Transform(image, options.Background, components, mcusWide, mcusHigh, factor, Reciprocals(luminance), Reciprocals(chrominance), counts);
 
-        if (options.Progressive)
+        if (counts is null)
         {
             return EncodeProgressive(image, options, profile, grey, factor, mcusWide, mcusHigh, luminance, chrominance, components);
         }
 
-        // Count the symbols each table will code, then build tables that code them in the fewest bits.
-        long[][] counts = [new long[256], new long[256], new long[256], new long[256]];
-        Walk(components, mcusWide, mcusHigh, factor, (component, block, previous) =>
-        {
-            int table = component == 0 ? 0 : 2;
-            CountBlock(block, previous, counts[table], counts[table + 1]);
-        });
+        Walk(components, mcusWide, factor, 0, mcusHigh, new int[components.Length], (component, block, previous) =>
+            counts[component == 0 ? 0 : 2][Category(block[0] - previous)]++);
         JpegHuffmanEncoder dcLuma = JpegHuffmanEncoder.Optimal(counts[0]);
         JpegHuffmanEncoder acLuma = JpegHuffmanEncoder.Optimal(counts[1]);
         JpegHuffmanEncoder? dcChroma = grey ? null : JpegHuffmanEncoder.Optimal(counts[2]);
         JpegHuffmanEncoder? acChroma = grey ? null : JpegHuffmanEncoder.Optimal(counts[3]);
 
-        var output = new ArrayBufferWriter<byte>(4096 + profile.Length);
+        var output = new ArrayBufferWriter<byte>(4096 + profile.Length + (int)Math.Min((long)image.Width * image.Height / 4, Array.MaxLength / 2));
         (byte[]? exif, byte[]? xmp) = Metadata.MetadataWriter.Prepare(image, options.Metadata);
         WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, progressive: false, options.Metadata);
         WriteTables(output, dcLuma, acLuma, dcChroma, acChroma);
@@ -117,20 +116,39 @@ internal static class JpegEncoder
         // SOS: every component, full spectrum, no approximation.
         Segment(output, 0xDA, grey ? [1, 1, 0x00, 0, 63, 0] : [3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]);
 
-        var bits = new BitWriter(Math.Max(4096, image.Width * image.Height / 4));
-        Walk(components, mcusWide, mcusHigh, factor, (component, block, previous) =>
+        // The scan in bands of MCU rows, coded in parallel as plain bits (each band starts from the DC values of the
+        // band before, which are all known), then joined with the stuffed zeros added: the same bytes as one pass.
+        int bands = Parallelism.Bands((long)image.Width * image.Height, mcusHigh);
+        var parts = new BitWriter[bands];
+        Parallelism.For(bands, band =>
         {
-            bool luma = component == 0;
-            EncodeBlock(bits, block, previous, luma ? dcLuma : dcChroma!, luma ? acLuma : acChroma!);
-        });
-        bits.Flush();
+            int first = (int)((long)mcusHigh * band / bands);
+            int end = (int)((long)mcusHigh * (band + 1) / bands);
+            int[] start = new int[components.Length];
+            for (int c = 0; c < components.Length && first > 0; c++)
+            {
+                int side = components[c].Factor;
+                start[c] = components[c].Block((mcusWide * side) - 1, (first * side) - 1)[0];
+            }
 
-        byte[] file = new byte[output.WrittenCount + bits.Length + 2];
-        output.WrittenSpan.CopyTo(file);
-        bits.Data.CopyTo(file.AsSpan(output.WrittenCount));
-        file[^2] = 0xFF;
-        file[^1] = 0xD9;
-        return file;
+            var bits = new BitWriter(Math.Max(4096, (int)((long)image.Width * image.Height / 4 / bands)));
+            Walk(components, mcusWide, factor, first, end, start, (component, block, previous) =>
+            {
+                bool luma = component == 0;
+                bits.Block(block, previous, luma ? dcLuma : dcChroma!, luma ? acLuma : acChroma!);
+            });
+            parts[band] = bits;
+        });
+
+        var scan = new StuffingWriter(output);
+        foreach (BitWriter part in parts)
+        {
+            part.CopyTo(scan);
+        }
+
+        scan.Finish();
+        output.Write<byte>([0xFF, 0xD9]);
+        return output.WrittenSpan.ToArray();
     }
 
     // libjpeg's quality scaling (jcparam.c, from the IJG's description): 50 is the table itself.
@@ -157,8 +175,9 @@ internal static class JpegEncoder
         return reciprocals;
     }
 
-    // Converts, centres, transforms and quantises every block, a band of MCU rows per thread.
-    private static void Transform(Image image, Rgba32 background, Plane[] planes, int mcusWide, int mcusHigh, int factor, float[] lumaQ, float[] chromaQ)
+    // Converts, centres, transforms and quantises every block, a band of MCU rows per thread, and adds the AC symbols to
+    // counts[1] (luma) and counts[3] (chroma) when given.
+    private static void Transform(Image image, Rgba32 background, Plane[] planes, int mcusWide, int mcusHigh, int factor, float[] lumaQ, float[] chromaQ, long[][]? counts)
     {
         bool grey = planes.Length == 1;
         int mcuSide = 8 * factor;
@@ -172,6 +191,8 @@ internal static class JpegEncoder
             int halfWidth = width / factor;
             float[] cbHalf = grey || factor == 1 ? cb : new float[halfWidth * 8];
             float[] crHalf = grey || factor == 1 ? cr : new float[halfWidth * 8];
+            long[] lumaAc = new long[256];
+            long[] chromaAc = new long[256];
             int end = (int)((long)mcusHigh * (band + 1) / bands);
             for (int row = (int)((long)mcusHigh * band / bands); row < end; row++)
             {
@@ -186,7 +207,12 @@ internal static class JpegEncoder
                 {
                     for (int bx = 0; bx < mcusWide * factor; bx++)
                     {
-                        JpegFdct.Transform(y.AsSpan((by * 8 * width) + (bx * 8)), width, lumaQ, planes[0].Block(bx, (row * factor) + by));
+                        Span<short> block = planes[0].Block(bx, (row * factor) + by);
+                        JpegFdct.Transform(y.AsSpan((by * 8 * width) + (bx * 8)), width, lumaQ, block);
+                        if (counts is not null)
+                        {
+                            CountAc(block, lumaAc);
+                        }
                     }
                 }
 
@@ -204,8 +230,27 @@ internal static class JpegEncoder
 
                 for (int mx = 0; mx < mcusWide; mx++)
                 {
-                    JpegFdct.Transform(cbHalf.AsSpan(mx * 8), halfWidth, chromaQ, planes[1].Block(mx, row));
-                    JpegFdct.Transform(crHalf.AsSpan(mx * 8), halfWidth, chromaQ, planes[2].Block(mx, row));
+                    Span<short> blue = planes[1].Block(mx, row);
+                    Span<short> red = planes[2].Block(mx, row);
+                    JpegFdct.Transform(cbHalf.AsSpan(mx * 8), halfWidth, chromaQ, blue);
+                    JpegFdct.Transform(crHalf.AsSpan(mx * 8), halfWidth, chromaQ, red);
+                    if (counts is not null)
+                    {
+                        CountAc(blue, chromaAc);
+                        CountAc(red, chromaAc);
+                    }
+                }
+            }
+
+            if (counts is not null)
+            {
+                lock (counts)
+                {
+                    for (int k = 0; k < 256; k++)
+                    {
+                        counts[1][k] += lumaAc[k];
+                        counts[3][k] += chromaAc[k];
+                    }
                 }
             }
         });
@@ -288,11 +333,11 @@ internal static class JpegEncoder
 
     private delegate void BlockVisitor(int component, ReadOnlySpan<short> block, int previous);
 
-    // Visits blocks in interleaved MCU order, giving each component's previous DC for the difference.
-    private static void Walk(Plane[] planes, int mcusWide, int mcusHigh, int factor, BlockVisitor visit)
+    // Visits the blocks of MCU rows first to end in interleaved MCU order, giving each component's previous DC for the
+    // difference, starting from the values given.
+    private static void Walk(Plane[] planes, int mcusWide, int factor, int first, int end, int[] previous, BlockVisitor visit)
     {
-        int[] previous = new int[planes.Length];
-        for (int my = 0; my < mcusHigh; my++)
+        for (int my = first; my < end; my++)
         {
             for (int mx = 0; mx < mcusWide; mx++)
             {
@@ -334,9 +379,8 @@ internal static class JpegEncoder
         return mask;
     }
 
-    private static void CountBlock(ReadOnlySpan<short> block, int previous, long[] dc, long[] ac)
+    private static void CountAc(ReadOnlySpan<short> block, long[] ac)
     {
-        dc[Category(block[0] - previous)]++;
         ulong mask = NonZero(block) & ~1UL;
         int last = 0;
         while (mask != 0)
@@ -357,39 +401,6 @@ internal static class JpegEncoder
         if (last < 63)
         {
             ac[0x00]++;
-        }
-    }
-
-    private static void EncodeBlock(BitWriter bits, ReadOnlySpan<short> block, int previous, JpegHuffmanEncoder dc, JpegHuffmanEncoder ac)
-    {
-        int difference = block[0] - previous;
-        int size = Category(difference);
-
-        // A code and its value bits go out together: at most 16 + 11 bits.
-        bits.Write((dc.Code(size) << size) | Magnitude(difference, size), dc.Length(size) + size);
-        ulong mask = NonZero(block) & ~1UL;
-        int last = 0;
-        while (mask != 0)
-        {
-            int k = BitOperations.TrailingZeroCount(mask);
-            mask &= mask - 1;
-            int run = k - last - 1;
-            while (run > 15)
-            {
-                bits.Write(ac.Code(0xF0), ac.Length(0xF0));
-                run -= 16;
-            }
-
-            int value = block[k];
-            size = Category(value);
-            int symbol = (run << 4) | size;
-            bits.Write((ac.Code(symbol) << size) | Magnitude(value, size), ac.Length(symbol) + size);
-            last = k;
-        }
-
-        if (last < 63)
-        {
-            bits.Write(ac.Code(0x00), ac.Length(0x00));
         }
     }
 
@@ -526,7 +537,7 @@ internal static class JpegEncoder
             {
                 JpegProgressive.Scan scan = script[s];
                 JpegProgressive.BlockOrder order = scan.Components.Length > 1
-                    ? visit => Walk(planes, mcusWide, mcusHigh, factor, (component, block, _) => visit(component, block))
+                    ? visit => Walk(planes, mcusWide, factor, 0, mcusHigh, new int[planes.Length], (component, block, _) => visit(component, block))
                     : visit =>
                     {
                         int c = scan.Components[0];
@@ -546,7 +557,6 @@ internal static class JpegEncoder
                 JpegHuffmanEncoder? ac = counting.Used(2) ? JpegHuffmanEncoder.Optimal(counting.Counts[2]) : null;
                 var writing = new WriteSink(new BitWriter(4096), dcLuma, dcChroma, ac);
                 JpegProgressive.Encode(ref writing, scan, order);
-                writing.Writer.Flush();
                 coded[s] = (dcLuma, dcChroma, ac, writing.Writer);
             }
         });
@@ -570,7 +580,9 @@ internal static class JpegEncoder
             sos[^2] = (byte)scan.End;
             sos[^1] = (byte)((scan.High << 4) | scan.Low);
             Segment(output, 0xDA, sos);
-            output.Write(bits.Data);
+            var stuffed = new StuffingWriter(output);
+            bits.CopyTo(stuffed);
+            stuffed.Finish();
         }
 
         output.Write<byte>([0xFF, 0xD9]);
@@ -627,88 +639,173 @@ internal static class JpegEncoder
         public Span<short> Block(int x, int y) => _coefficients.AsSpan(((y * blocksWide) + x) * 64, 64);
     }
 
-    /// <summary>Writes Huffman-coded bits, most significant first, stuffing a zero after every 0xFF byte (F.1.2.3).</summary>
+    /// <summary>Collects Huffman-coded bits, most significant first, in 32-bit words, with no stuffing yet.</summary>
     private sealed class BitWriter(int capacity)
     {
-        private byte[] _data = new byte[capacity];
+        private uint[] _words = new uint[Math.Max(capacity / 4, 16)];
+        private int _length;
         private ulong _buffer;
         private int _count;
 
-        public int Length { get; private set; }
-
-        public ReadOnlySpan<byte> Data => _data.AsSpan(0, Length);
-
         public void Write(int value, int length)
         {
-            if (length == 0)
-            {
-                return;
-            }
-
             _buffer = (_buffer << length) | (uint)(value & ((1 << length) - 1));
             _count += length;
-            if (_count < 32)
+            if (_count >= 32)
             {
-                return;
-            }
+                if (_length == _words.Length)
+                {
+                    Array.Resize(ref _words, (int)Math.Min((long)_words.Length * 2, Array.MaxLength));
+                }
 
-            // Four or more bytes are ready: at most eight come out, each perhaps with a stuffed zero.
-            if (Length + 16 > _data.Length)
-            {
-                Array.Resize(ref _data, (int)Math.Min((long)_data.Length * 2, Array.MaxLength));
-            }
-
-            // Usually none of the next four bytes is 0xFF, and they go out in one store.
-            uint four = (uint)(_buffer >> (_count - 32));
-            if (((four & 0x80808080u) & ~(four + 0x01010101u)) == 0 || !HasFF(four))
-            {
-                BinaryPrimitives.WriteUInt32BigEndian(_data.AsSpan(Length, 4), four);
-                Length += 4;
                 _count -= 32;
-                return;
-            }
-
-            while (_count >= 8)
-            {
-                _count -= 8;
-                byte b = (byte)(_buffer >> _count);
-                _data[Length++] = b;
-                if (b == 0xFF)
-                {
-                    _data[Length++] = 0;
-                }
+                _words[_length++] = (uint)(_buffer >> _count);
             }
         }
 
-        // Pads the last byte with ones (F.1.2.3), after writing out whole bytes still held.
-        public void Flush()
+        /// <summary>Codes a block: the DC difference, then runs of zeros and values, then an end of block if needed.</summary>
+        public void Block(ReadOnlySpan<short> block, int previous, JpegHuffmanEncoder dc, JpegHuffmanEncoder ac)
         {
-            if (Length + 16 > _data.Length)
+            // At most 64 codes of 16 + 11 bits, 54 words: room is made once, and the state is held in locals.
+            if (_length + 64 > _words.Length)
             {
-                Array.Resize(ref _data, _data.Length + 16);
+                Array.Resize(ref _words, (int)Math.Min(((long)_words.Length * 2) + 64, Array.MaxLength));
             }
 
-            if (_count % 8 != 0)
+            uint[] words = _words;
+            int length = _length;
+            ulong buffer = _buffer;
+            int count = _count;
+            ReadOnlySpan<ushort> codes = ac.Codes;
+            ReadOnlySpan<byte> lengths = ac.Lengths;
+
+            // A code and its value bits go out together.
+            int difference = block[0] - previous;
+            int size = Category(difference);
+            Put(ref buffer, ref count, words, ref length, (dc.Code(size) << size) | Magnitude(difference, size), dc.Length(size) + size);
+            ulong mask = NonZero(block) & ~1UL;
+            int last = 0;
+            while (mask != 0)
             {
-                int pad = 8 - (_count % 8);
-                _buffer = (_buffer << pad) | (uint)((1 << pad) - 1);
-                _count += pad;
+                int k = BitOperations.TrailingZeroCount(mask);
+                mask &= mask - 1;
+                int run = k - last - 1;
+                while (run > 15)
+                {
+                    Put(ref buffer, ref count, words, ref length, codes[0xF0], lengths[0xF0]);
+                    run -= 16;
+                }
+
+                int value = block[k];
+                size = Category(value);
+                int symbol = (run << 4) | size;
+                Put(ref buffer, ref count, words, ref length, (codes[symbol] << size) | Magnitude(value, size), lengths[symbol] + size);
+                last = k;
             }
 
+            if (last < 63)
+            {
+                Put(ref buffer, ref count, words, ref length, codes[0x00], lengths[0x00]);
+            }
+
+            _length = length;
+            _buffer = buffer;
+            _count = count;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Put(ref ulong buffer, ref int count, uint[] words, ref int length, int value, int bits)
+        {
+            buffer = (buffer << bits) | (uint)value;
+            count += bits;
+            if (count >= 32)
+            {
+                count -= 32;
+                words[length++] = (uint)(buffer >> count);
+            }
+        }
+
+        /// <summary>Adds these bits to <paramref name="output"/>, the whole words then the rest.</summary>
+        public void CopyTo(StuffingWriter output)
+        {
+            foreach (uint word in _words.AsSpan(0, _length))
+            {
+                output.Word(word);
+            }
+
+            if (_count > 0)
+            {
+                output.Bits((uint)_buffer & ((1u << _count) - 1), _count);
+            }
+        }
+    }
+
+    /// <summary>Writes bits as bytes, stuffing a zero after every 0xFF byte (F.1.2.3).</summary>
+    private sealed class StuffingWriter(ArrayBufferWriter<byte> output)
+    {
+        private ulong _buffer;
+        private int _count;
+
+        public void Word(uint word)
+        {
+            _buffer = (_buffer << 32) | word;
+            Span<byte> span = output.GetSpan(8);
+            int written = 0;
+
+            // Usually none of the four bytes is 0xFF, and they go out in one store.
+            uint four = (uint)(_buffer >> _count);
+            if (!HasFF(four))
+            {
+                BinaryPrimitives.WriteUInt32BigEndian(span, four);
+                written = 4;
+            }
+            else
+            {
+                for (int shift = 24; shift >= 0; shift -= 8)
+                {
+                    byte b = (byte)(four >> shift);
+                    span[written++] = b;
+                    if (b == 0xFF)
+                    {
+                        span[written++] = 0;
+                    }
+                }
+            }
+
+            output.Advance(written);
+        }
+
+        public void Bits(uint value, int length)
+        {
+            _buffer = (_buffer << length) | value;
+            _count += length;
+            Span<byte> span = output.GetSpan(16);
+            int written = 0;
             while (_count >= 8)
             {
                 _count -= 8;
                 byte b = (byte)(_buffer >> _count);
-                _data[Length++] = b;
+                span[written++] = b;
                 if (b == 0xFF)
                 {
-                    _data[Length++] = 0;
+                    span[written++] = 0;
                 }
+            }
+
+            output.Advance(written);
+        }
+
+        // Pads the last byte with ones (F.1.2.3).
+        public void Finish()
+        {
+            if (_count > 0)
+            {
+                int pad = 8 - _count;
+                Bits((1u << pad) - 1, pad);
             }
         }
 
-        private static bool HasFF(uint four) =>
-            (four & 0xFF000000u) == 0xFF000000u || (four & 0x00FF0000u) == 0x00FF0000u
-            || (four & 0x0000FF00u) == 0x0000FF00u || (four & 0x000000FFu) == 0x000000FFu;
+        // Whether any byte is 0xFF: whether ~four has a zero byte.
+        private static bool HasFF(uint four) => ((~four - 0x01010101u) & four & 0x80808080u) != 0;
     }
 }
