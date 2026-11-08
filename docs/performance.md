@@ -8,6 +8,43 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: WebP encoding at libwebp's speed
+
+The 12-megapixel photo decoded from `photo.jpg`, on one core (`MaxDegreeOfParallelism = 1`), timed by a small
+harness with tiered compilation off, best of a few runs while other sessions shared the machine. cwebp 1.6 was timed in
+the gate image on the same pixels.
+
+**Lossy**, quality 80, effort 4: 2.31 s to 1.41 s, with every one of 36 reference encodings byte for byte the same.
+cwebp `-q 80` takes 1.4 s.
+- Quantisation as vectors, with each divisor turned into an exact multiply and shift.
+- Token costs read from tables built from the default coefficient probabilities, which the mode decisions use.
+- The subblock mode trials run four candidates at a time, one in each lane, following the scalar integer steps
+  exactly (wrap to 16 bits included); the strict tie-break in rank order is kept.
+- Whole-block luma and chroma code four blocks at a time in the same way.
+
+**Lossless**, by effort:
+
+| Effort | Before | After | cwebp |
+|---|---|---|---|
+| 1 | 3.4 s, 14.97 MB | 2.2 s, 14.64 MB | `-z 1`: 2.0 s, 14.42 MB |
+| 2 | 14.61 MB | 2.5 s, 14.57 MB | |
+| 4 (default) | 5.9 s, 14.80 MB | 3.0 s, 14.56 MB | `-z 3`: 3.0 s, 14.42 MB |
+| 5 | | 3.8 s, 14.53 MB | `-z 6`: 6.0 s, 14.43 MB |
+
+- Predictor residuals as vectors, four pixels at a time, equal to the scalar predictor for every mode (tested): 1.4
+  to 0.6 s.
+- Subtract-green chosen per image by the entropy of left-neighbour differences, as libwebp's analysis does, rather
+  than by effort: 1 to 2% smaller.
+- The cross-colour search starts from the least-squares slope instead of scanning every 16th multiplier.
+- The colour cache size is judged on four strips of a large image: 0.5 to 0.16 s, the same choice on the test photo.
+- The match finder hashes runs of three pixels rather than pairs. A photo's residuals are mostly near zero, so pairs
+  repeat everywhere and the chains were long; the default effort went from 5.0 to 3.0 s at the same size.
+- Effort 2 now takes the cost-based parse with 16-pixel predictor tiles, so it is smaller than effort 1 again.
+
+Sizes stay within about 1% of cwebp's on the photo and the same or smaller on the graphics test images. Deeper
+searches find short, far matches that make a photo slightly larger (effort 3 and 4 are no smaller than effort 2 on
+it), while graphics need them; a cost model that tells the two apart is still to do.
+
 ## 2026-11-08: JPEG thumbnails on one core
 
 Phase timings of the 400 px thumbnail on one core showed Huffman decoding at 23 ms and the reduced inverse DCT at

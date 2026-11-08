@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Faster WebP encoding, measured on a 12-megapixel photo on one core:
+  - Lossy encoding takes 1.4 s, down from 2.3 s, the same as cwebp. The output is unchanged.
+  - Lossless encoding at the default effort takes 3.0 s, down from 5.9 s, and makes a file 1.6% smaller.
+  - Lossless effort 2 now makes smaller files than effort 1. Before, its files were larger.
+
 ## 0.1.0-preview.3
 
 - Repository set up: solution, library, tests, AOT smoke sample, CI and the Linux gate.
