@@ -3,6 +3,7 @@ using System.IO;
 using BenchmarkDotNet.Attributes;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.Formats.Webp;
 using SharpRgb24 = SixLabors.ImageSharp.PixelFormats.Rgb24;
 using SixLabors.ImageSharp.Processing;
 using Sharp = SixLabors.ImageSharp;
@@ -68,6 +69,14 @@ public class ImageSharpBenchmarks
     {
         using var output = new MemoryStream();
         _decoded.Save(output, new PngEncoder());
+        return output.Length;
+    }
+
+    [Benchmark]
+    public long Sharp_Encode_WebpLossless()
+    {
+        using var output = new MemoryStream();
+        _decoded.Save(output, new WebpEncoder { FileFormat = WebpFileFormatType.Lossless });
         return output.Length;
     }
 

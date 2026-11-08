@@ -30,7 +30,6 @@ internal static class Vp8lEncoder
     private const int MaxCopy = 4096;
     private const int MinCopy = 3;
     private const int MaxCacheBits = 10;
-    private const int HashBits = 18;
 
     // The largest distance a distance code can carry (prefix 39 with all extra bits set), less the 120 plane codes.
     private const int MaxDistance = (1 << 20) - 120;
@@ -210,7 +209,8 @@ internal static class Vp8lEncoder
     }
 
     // Section 4.1. The residual of each pixel from its prediction, with the mode for each tile chosen by the bits its
-    // residuals would take if coded with the statistics of all residuals chosen so far (refreshed each row of tiles).
+    // residuals would take if coded with the statistics of all residuals chosen so far. The statistics are refreshed
+    // once per row of tiles, so the tiles of a row are independent and run in parallel, with the same result.
     internal static (uint[] Residuals, uint[] Modes) Predict(uint[] p, int width, int height, int tileBits, int effort)
     {
         int tilesWide = DivideUp(width, tileBits);
@@ -218,6 +218,7 @@ internal static class Vp8lEncoder
         int tile = 1 << tileBits;
         uint[] residuals = new uint[p.Length];
         uint[] modes = new uint[tilesWide * tilesHigh];
+
         // The statistics start from a prior that small residuals are common, so the first tiles aren't chosen blind.
         int[] seen = new int[4 * 256];
         for (int v = 0; v < 256; v++)
@@ -228,7 +229,8 @@ internal static class Vp8lEncoder
         }
 
         float[] cost = new float[4 * 256];
-        int modeCount = effort == 0 ? 2 : 14;
+        int firstMode = effort == 0 ? 1 : 0;
+        int lastMode = effort == 0 ? 2 : 13;
 
         // The first row predicts from the left (the first pixel from opaque black), the first column from above.
         residuals[0] = Subtract(p[0], 0xFF000000u);
@@ -242,63 +244,92 @@ internal static class Vp8lEncoder
             residuals[y * width] = Subtract(p[y * width], p[(y - 1) * width]);
         }
 
+        int bands = Processing.Parallelism.Bands((long)width * tile * (lastMode - firstMode + 1), tilesWide);
+        int[][] counts = new int[bands][];
+        for (int b = 0; b < bands; b++)
+        {
+            counts[b] = new int[4 * 256];
+        }
+
         for (int ty = 0; ty < tilesHigh; ty++)
         {
             Costs(seen, cost);
             int top = Math.Max(ty * tile, 1);
             int bottom = Math.Min((ty + 1) * tile, height);
-            for (int tx = 0; tx < tilesWide; tx++)
+            int row = ty;
+            Processing.Parallelism.For(bands, band =>
             {
-                int left = Math.Max(tx * tile, 1);
-                int right = Math.Min((tx + 1) * tile, width);
-                int best = 1;
-                float bestCost = float.MaxValue;
-                for (int mode = effort == 0 ? 1 : 0; mode < (effort == 0 ? 3 : modeCount); mode++)
+                int[] local = counts[band];
+                for (int tx = tilesWide * band / bands; tx < tilesWide * (band + 1) / bands; tx++)
                 {
-                    float total = 0;
-                    for (int y = top; y < bottom && total < bestCost; y++)
+                    int left = Math.Max(tx * tile, 1);
+                    int right = Math.Min((tx + 1) * tile, width);
+                    int best = ChooseMode(p, width, top, bottom, left, right, firstMode, lastMode, cost);
+                    modes[(row * tilesWide) + tx] = 0xFF000000u | ((uint)best << 8);
+                    for (int y = top; y < bottom; y++)
                     {
-                        int row = y * width;
                         for (int x = left; x < right; x++)
                         {
-                            int i = row + x;
-                            uint residual = Subtract(p[i], Vp8lDecoder.Transform.Predict(mode, p[i - 1], p[i - width], p[i - width + 1], p[i - width - 1]));
-                            total += cost[(int)(residual >> 24)] + cost[256 + (int)((residual >> 16) & 0xFF)]
-                                + cost[512 + (int)((residual >> 8) & 0xFF)] + cost[768 + (int)(residual & 0xFF)];
+                            int i = (y * width) + x;
+                            uint residual = Subtract(p[i], Vp8lDecoder.Transform.Predict(best, p[i - 1], p[i - width], p[i - width + 1], p[i - width - 1]));
+                            residuals[i] = residual;
+                            local[(int)(residual >> 24)]++;
+                            local[256 + (int)((residual >> 16) & 0xFF)]++;
+                            local[512 + (int)((residual >> 8) & 0xFF)]++;
+                            local[768 + (int)(residual & 0xFF)]++;
                         }
                     }
-
-                    if (total < bestCost)
-                    {
-                        bestCost = total;
-                        best = mode;
-                    }
                 }
+            });
 
-                modes[(ty * tilesWide) + tx] = 0xFF000000u | ((uint)best << 8);
-                for (int y = top; y < bottom; y++)
+            foreach (int[] local in counts)
+            {
+                for (int v = 0; v < local.Length; v++)
                 {
-                    int row = y * width;
-                    for (int x = left; x < right; x++)
-                    {
-                        int i = row + x;
-                        uint residual = Subtract(p[i], Vp8lDecoder.Transform.Predict(best, p[i - 1], p[i - width], p[i - width + 1], p[i - width - 1]));
-                        residuals[i] = residual;
-                        seen[(int)(residual >> 24)]++;
-                        seen[256 + (int)((residual >> 16) & 0xFF)]++;
-                        seen[512 + (int)((residual >> 8) & 0xFF)]++;
-                        seen[768 + (int)(residual & 0xFF)]++;
-                    }
+                    seen[v] += local[v];
                 }
+
+                Array.Clear(local);
             }
         }
 
         return (residuals, modes);
     }
 
+    // The mode whose residuals over the tile cost fewest bits; the lowest mode wins ties.
+    private static int ChooseMode(uint[] p, int width, int top, int bottom, int left, int right, int firstMode, int lastMode, float[] cost)
+    {
+        int best = 1;
+        float bestCost = float.MaxValue;
+        for (int mode = firstMode; mode <= lastMode; mode++)
+        {
+            float total = 0;
+            for (int y = top; y < bottom && total < bestCost; y++)
+            {
+                int row = y * width;
+                for (int x = left; x < right; x++)
+                {
+                    int i = row + x;
+                    uint residual = Subtract(p[i], Vp8lDecoder.Transform.Predict(mode, p[i - 1], p[i - width], p[i - width + 1], p[i - width - 1]));
+                    total += cost[(int)(residual >> 24)] + cost[256 + (int)((residual >> 16) & 0xFF)]
+                        + cost[512 + (int)((residual >> 8) & 0xFF)] + cost[768 + (int)(residual & 0xFF)];
+                }
+            }
+
+            if (total < bestCost)
+            {
+                bestCost = total;
+                best = mode;
+            }
+        }
+
+        return best;
+    }
+
     // Section 4.2: red and blue less what green (and blue less what red) predicts of them, with multipliers chosen per
-    // tile to make the residuals cheapest by the statistics so far: a coarse search, then a fine one around the best.
-    // The transform comes after the predictor, so it's undone first.
+    // tile to make the residuals cheapest by the statistics so far (refreshed per row of tiles, so a row's tiles run in
+    // parallel): a coarse search, then a fine one around the best. The transform comes after the predictor, so it's
+    // undone first.
     internal static uint[] CrossColour(uint[] p, int width, int height, int tileBits)
     {
         int tilesWide = DivideUp(width, tileBits);
@@ -314,55 +345,86 @@ internal static class Vp8lEncoder
 
         float[] redCost = new float[256];
         float[] blueCost = new float[256];
-        int[] greens = new int[tile * tile];
-        int[] reds = new int[tile * tile];
-        int[] blues = new int[tile * tile];
+        int bands = Processing.Parallelism.Bands((long)width * tile * 48, tilesWide);
+        var work = new ColourWork[bands];
+        for (int b = 0; b < bands; b++)
+        {
+            work[b] = new ColourWork(tile * tile);
+        }
+
         for (int ty = 0; ty < tilesHigh; ty++)
         {
             ChannelCosts(seen.AsSpan(0, 256), redCost);
             ChannelCosts(seen.AsSpan(256, 256), blueCost);
             int top = ty * tile;
             int bottom = Math.Min(top + tile, height);
-            for (int tx = 0; tx < tilesWide; tx++)
+            int row = ty;
+            Processing.Parallelism.For(bands, band =>
             {
-                int left = tx * tile;
-                int right = Math.Min(left + tile, width);
-                int count = 0;
-                for (int y = top; y < bottom; y++)
+                ColourWork w = work[band];
+                for (int tx = tilesWide * band / bands; tx < tilesWide * (band + 1) / bands; tx++)
                 {
-                    for (int x = left; x < right; x++, count++)
+                    int left = tx * tile;
+                    int right = Math.Min(left + tile, width);
+                    int count = 0;
+                    for (int y = top; y < bottom; y++)
                     {
-                        uint argb = p[(y * width) + x];
-                        greens[count] = (sbyte)(argb >> 8);
-                        reds[count] = (int)((argb >> 16) & 0xFF);
-                        blues[count] = (int)(argb & 0xFF);
+                        for (int x = left; x < right; x++, count++)
+                        {
+                            uint argb = p[(y * width) + x];
+                            w.Greens[count] = (sbyte)(argb >> 8);
+                            w.Reds[count] = (int)((argb >> 16) & 0xFF);
+                            w.Blues[count] = (int)(argb & 0xFF);
+                        }
+                    }
+
+                    int greenToRed = Search(t => Cost(w.Reds, w.Greens, null, count, t, 0, redCost));
+                    int greenToBlue = Search(t => Cost(w.Blues, w.Greens, null, count, t, 0, blueCost));
+                    int redToBlue = Search(t => Cost(w.Blues, w.Greens, w.Reds, count, greenToBlue, t, blueCost));
+                    multipliers[(row * tilesWide) + tx] = 0xFF000000u | ((uint)(byte)redToBlue << 16) | ((uint)(byte)greenToBlue << 8) | (byte)greenToRed;
+
+                    for (int y = top; y < bottom; y++)
+                    {
+                        for (int x = left; x < right; x++)
+                        {
+                            int i = (y * width) + x;
+                            uint argb = p[i];
+                            int green = (sbyte)(argb >> 8);
+                            int red = (int)((argb >> 16) & 0xFF);
+                            int newRed = (red - Delta(greenToRed, green)) & 0xFF;
+                            int newBlue = ((int)(argb & 0xFF) - Delta(greenToBlue, green) - Delta(redToBlue, (sbyte)red)) & 0xFF;
+                            p[i] = (argb & 0xFF00FF00u) | ((uint)newRed << 16) | (uint)newBlue;
+                            w.Counts[newRed]++;
+                            w.Counts[256 + newBlue]++;
+                        }
                     }
                 }
+            });
 
-                int greenToRed = Search(t => Cost(reds, greens, null, count, t, 0, redCost));
-                int greenToBlue = Search(t => Cost(blues, greens, null, count, t, 0, blueCost));
-                int redToBlue = Search(t => Cost(blues, greens, reds, count, greenToBlue, t, blueCost));
-                multipliers[(ty * tilesWide) + tx] = 0xFF000000u | ((uint)(byte)redToBlue << 16) | ((uint)(byte)greenToBlue << 8) | (byte)greenToRed;
-
-                for (int y = top; y < bottom; y++)
+            foreach (ColourWork w in work)
+            {
+                for (int v = 0; v < seen.Length; v++)
                 {
-                    for (int x = left; x < right; x++)
-                    {
-                        int i = (y * width) + x;
-                        uint argb = p[i];
-                        int green = (sbyte)(argb >> 8);
-                        int red = (int)((argb >> 16) & 0xFF);
-                        int newRed = (red - Delta(greenToRed, green)) & 0xFF;
-                        int newBlue = ((int)(argb & 0xFF) - Delta(greenToBlue, green) - Delta(redToBlue, (sbyte)red)) & 0xFF;
-                        p[i] = (argb & 0xFF00FF00u) | ((uint)newRed << 16) | (uint)newBlue;
-                        seen[newRed]++;
-                        seen[256 + newBlue]++;
-                    }
+                    seen[v] += w.Counts[v];
                 }
+
+                Array.Clear(w.Counts);
             }
         }
 
         return multipliers;
+    }
+
+    // One thread's buffers for the cross-colour search.
+    private sealed class ColourWork(int pixels)
+    {
+        public int[] Greens { get; } = new int[pixels];
+
+        public int[] Reds { get; } = new int[pixels];
+
+        public int[] Blues { get; } = new int[pixels];
+
+        public int[] Counts { get; } = new int[2 * 256];
     }
 
     private static int Delta(int multiplier, int colour) => (multiplier * colour) >> 5;
@@ -1041,6 +1103,7 @@ internal static class Vp8lEncoder
             for (int i = 0; i < n;)
             {
                 (int length, int distance) = finder.Find(i);
+                finder.Extend(i, ref length, ref distance);
                 if (length >= MinCopy)
                 {
                     lengths[count] = length;
@@ -1055,41 +1118,61 @@ internal static class Vp8lEncoder
             return (lengths, distances, count, effort == 0 ? 0 : ChooseCacheBits(p, lengths, count));
         }
 
-        // Every pixel's longest match. Inside a long copy the match one pixel on is the same copy, one shorter, so the
-        // search is skipped there, except where the greedy parse starts a token.
+        // Every pixel's longest match, in chunks of fixed size that run in parallel (fixed, so the result doesn't depend
+        // on the number of threads). Within a chunk, the match one pixel into a long copy is the same copy one shorter,
+        // so the search is skipped there.
         int[] matchLength = new int[n];
         int[] matchDistance = new int[n];
-        // The distance candidates follow a greedy parse, as above, so they keep the distances that made long copies.
-        int nextToken = 0;
-        for (int i = 0; i < n; i++)
+        bool[] inherited = new bool[n];
+        const int Chunk = 1 << 16;
+        int chunks = (n + Chunk - 1) / Chunk;
+        Processing.Parallelism.For(Processing.Parallelism.Bands(n, chunks), band =>
         {
-            if (i > 0 && matchLength[i - 1] > 32 && i != nextToken)
+            int bands = Processing.Parallelism.Bands(n, chunks);
+            for (int c = chunks * band / bands; c < chunks * (band + 1) / bands; c++)
             {
-                matchLength[i] = matchLength[i - 1] - 1;
-                matchDistance[i] = matchDistance[i - 1];
-            }
-            else
-            {
-                (matchLength[i], matchDistance[i]) = finder.Find(i);
-            }
-
-            if (i == nextToken)
-            {
-                bool copy = matchLength[i] >= MinCopy;
-                if (copy)
+                int end = Math.Min((c + 1) * Chunk, n);
+                for (int i = c * Chunk; i < end; i++)
                 {
-                    finder.Used(i, matchLength[i], matchDistance[i]);
+                    if (i > c * Chunk && matchLength[i - 1] > 32)
+                    {
+                        matchLength[i] = matchLength[i - 1] - 1;
+                        matchDistance[i] = matchDistance[i - 1];
+                        inherited[i] = true;
+                        continue;
+                    }
+
+                    (matchLength[i], matchDistance[i]) = finder.Find(i);
                 }
-
-                nextToken += copy ? matchLength[i] : 1;
             }
-        }
+        });
 
+        // Then a greedy parse, which tries the distances it has used where its tokens start, as the greedy parse above
+        // does: they find the long copies in patterns. Its tokens choose the cache size and price the symbols.
         for (int i = 0; i < n; count++)
         {
+            int length = matchLength[i];
+            int distance = matchDistance[i];
+            if (inherited[i])
+            {
+                (length, distance) = finder.Find(i);
+            }
+
+            finder.Extend(i, ref length, ref distance);
+            if (length > matchLength[i])
+            {
+                matchLength[i] = length;
+                matchDistance[i] = distance;
+            }
+
             bool copy = matchLength[i] >= MinCopy;
             lengths[count] = copy ? matchLength[i] : 0;
             distances[count] = copy ? matchDistance[i] : 0;
+            if (copy)
+            {
+                finder.Used(i, matchLength[i], matchDistance[i]);
+            }
+
             i += copy ? matchLength[i] : 1;
         }
 
@@ -1208,8 +1291,10 @@ internal static class Vp8lEncoder
     }
 
     /// <summary>
-    /// Finds the longest earlier match for a pixel: the cheap candidates first (the pixel to the left, rows above, the
-    /// last two distances used and the one used above), then hash chains over pairs of pixels, nearest first.
+    /// Finds the longest earlier match for a pixel: the pixel to the left and the rows above first, then hash chains over
+    /// pairs of pixels, nearest first. The chains are built up front, each pixel linking only to earlier ones, so
+    /// <see cref="Find"/> may run on many pixels at once. <see cref="Extend"/> tries the distances a parse has used,
+    /// which follow the parse and so run in order.
     /// </summary>
     private sealed class MatchFinder
     {
@@ -1217,10 +1302,8 @@ internal static class Vp8lEncoder
         private readonly int _width;
         private readonly int _depth;
         private readonly bool _quick;
-        private readonly int[] _head = new int[1 << HashBits];
         private readonly int[] _chain;
         private readonly int[] _used;
-        private int _inserted;
         private int _last = 1;
         private int _beforeLast;
 
@@ -1233,22 +1316,37 @@ internal static class Vp8lEncoder
             _quick = effort == 0;
             _chain = new int[p.Length];
             _used = new int[p.Length];
-            Array.Fill(_head, -1);
+
+            // About one bucket per pixel, 2^10 to 2^22 of them: collisions make chains longer and the walk a run of
+            // cache misses. The last pixel has no pair and links to nothing.
+            int hashBits = Math.Clamp(BitOperations.Log2((uint)Math.Max(p.Length, 1)) + 1, 10, 22);
+            int shift = 32 - hashBits;
+            int[] head = new int[1 << hashBits];
+            Array.Fill(head, -1);
+            for (int i = 0; i + 1 < p.Length; i++)
+            {
+                int key = Hash(p[i], p[i + 1], shift);
+                _chain[i] = head[key];
+                head[key] = i;
+            }
+
+            if (p.Length > 0)
+            {
+                _chain[^1] = -1;
+            }
         }
 
         public (int Length, int Distance) Find(int i)
         {
             uint[] p = _p;
-            int n = p.Length;
-            Insert(i);
-            int most = Math.Min(MaxCopy, n - i);
+            int most = Math.Min(MaxCopy, p.Length - i);
             int bestLength = 0;
             int bestDistance = 0;
-            Span<int> candidates = [1, _width, _last, _beforeLast, 2 * _width, 3 * _width, i >= _width ? _used[i - _width] : 0];
+            ReadOnlySpan<int> candidates = [1, _width, 2 * _width, 3 * _width];
             for (int c = 0; c < (_quick ? 2 : candidates.Length); c++)
             {
                 int distance = candidates[c];
-                if (distance == 0 || distance > i || distance > MaxDistance || (c > 0 && candidates[..c].Contains(distance)))
+                if (distance > i || (c == 1 && distance == 1))
                 {
                     continue;
                 }
@@ -1287,6 +1385,33 @@ internal static class Vp8lEncoder
             return (bestLength, bestDistance);
         }
 
+        /// <summary>Tries the last two distances used and the one used for the pixel above, keeping any longer match.</summary>
+        public void Extend(int i, ref int length, ref int distance)
+        {
+            if (_quick)
+            {
+                return;
+            }
+
+            uint[] p = _p;
+            int most = Math.Min(MaxCopy, p.Length - i);
+            ReadOnlySpan<int> candidates = [_last, _beforeLast, i >= _width ? _used[i - _width] : 0];
+            foreach (int d in candidates)
+            {
+                if (d == 0 || d > i || d > MaxDistance || d == distance || length >= most)
+                {
+                    continue;
+                }
+
+                int found = Match(p, i, i - d, most);
+                if (found > length)
+                {
+                    length = found;
+                    distance = d;
+                }
+            }
+        }
+
         /// <summary>Records a copy, for the distance candidates of the pixels after and below it.</summary>
         public void Used(int i, int length, int distance)
         {
@@ -1298,21 +1423,9 @@ internal static class Vp8lEncoder
 
             _used.AsSpan(i, length).Fill(distance);
         }
-
-        // Every pixel up to and including i enters the chains, in order; the last pixel has no pair and never does.
-        private void Insert(int i)
-        {
-            uint[] p = _p;
-            for (; _inserted <= i && _inserted + 1 < p.Length; _inserted++)
-            {
-                int key = Hash(p[_inserted], p[_inserted + 1]);
-                _chain[_inserted] = _head[key];
-                _head[key] = _inserted;
-            }
-        }
     }
 
-    private static int Hash(uint a, uint b) => (int)(((a * 0x9E3779B1u) + (b * 0x85EBCA77u)) >> (32 - HashBits));
+    private static int Hash(uint a, uint b, int shift) => (int)(((a * 0x9E3779B1u) + (b * 0x85EBCA77u)) >> shift);
 
     private static int Match(uint[] p, int at, int from, int most)
     {
@@ -1322,74 +1435,81 @@ internal static class Vp8lEncoder
         return length;
     }
 
-    // Section 5.2.3: the cache size whose symbol statistics give the fewest bits, by Shannon entropy, trying them all at
-    // once in one walk over the pixels.
+    // Section 5.2.3: the cache size whose symbol statistics give the fewest bits, by Shannon entropy. Each size is a walk
+    // over the tokens of its own, so the sizes are tried in parallel.
     private static int ChooseCacheBits(uint[] pixels, int[] lengths, int count)
     {
-        var caches = new uint[MaxCacheBits + 1][];
-        var greens = new int[MaxCacheBits + 1][];
-        var reds = new int[MaxCacheBits + 1][];
-        var blues = new int[MaxCacheBits + 1][];
-        var alphas = new int[MaxCacheBits + 1][];
-        for (int b = 0; b <= MaxCacheBits; b++)
+        double[] bits = new double[MaxCacheBits + 1];
+        int bands = Processing.Parallelism.Bands((long)pixels.Length * (MaxCacheBits + 1), MaxCacheBits + 1);
+        Processing.Parallelism.For(bands, band =>
         {
-            caches[b] = new uint[1 << b];
-            greens[b] = new int[256 + (1 << b)];
-            reds[b] = new int[256];
-            blues[b] = new int[256];
-            alphas[b] = new int[256];
+            for (int b = (MaxCacheBits + 1) * band / bands; b < (MaxCacheBits + 1) * (band + 1) / bands; b++)
+            {
+                bits[b] = CacheBitsCost(pixels, lengths, count, b);
+            }
+        });
+
+        int best = 0;
+        for (int b = 1; b <= MaxCacheBits; b++)
+        {
+            if (bits[b] < bits[best])
+            {
+                best = b;
+            }
         }
 
+        return best;
+    }
+
+    // The literals' bits with a cache of 2^cacheBits (none for 0), and about 4 header bits for each cache symbol.
+    private static double CacheBitsCost(uint[] pixels, int[] lengths, int count, int cacheBits)
+    {
+        uint[] cache = new uint[1 << cacheBits];
+        int[] green = new int[256 + (1 << cacheBits)];
+        int[] red = new int[256];
+        int[] blue = new int[256];
+        int[] alpha = new int[256];
+        int shift = 32 - cacheBits;
         int at = 0;
         for (int k = 0; k < count; k++)
         {
             if (lengths[k] != 0)
             {
-                for (int end = at + lengths[k]; at < end; at++)
+                if (cacheBits > 0)
                 {
-                    uint key = 0x1E35A7BDu * pixels[at];
-                    for (int b = 1; b <= MaxCacheBits; b++)
+                    for (int end = at + lengths[k]; at < end; at++)
                     {
-                        caches[b][(int)(key >> (32 - b))] = pixels[at];
+                        cache[(int)((0x1E35A7BDu * pixels[at]) >> shift)] = pixels[at];
                     }
+                }
+                else
+                {
+                    at += lengths[k];
                 }
 
                 continue;
             }
 
             uint pixel = pixels[at++];
-            uint hash = 0x1E35A7BDu * pixel;
-            for (int b = 0; b <= MaxCacheBits; b++)
+            if (cacheBits > 0)
             {
-                int index = b == 0 ? 0 : (int)(hash >> (32 - b));
-                if (b > 0 && caches[b][index] == pixel)
+                int index = (int)((0x1E35A7BDu * pixel) >> shift);
+                if (cache[index] == pixel)
                 {
-                    greens[b][256 + index]++;
+                    green[256 + index]++;
                     continue;
                 }
 
-                caches[b][index] = pixel;
-                greens[b][(pixel >> 8) & 0xFF]++;
-                reds[b][(pixel >> 16) & 0xFF]++;
-                blues[b][pixel & 0xFF]++;
-                alphas[b][pixel >> 24]++;
+                cache[index] = pixel;
             }
+
+            green[(pixel >> 8) & 0xFF]++;
+            red[(pixel >> 16) & 0xFF]++;
+            blue[pixel & 0xFF]++;
+            alpha[pixel >> 24]++;
         }
 
-        int best = 0;
-        double bestBits = double.MaxValue;
-        for (int b = 0; b <= MaxCacheBits; b++)
-        {
-            // A cache's symbols also cost their share of the green code's lengths in the header, about 4 bits each.
-            double total = Entropy(greens[b]) + Entropy(reds[b]) + Entropy(blues[b]) + Entropy(alphas[b]) + (b == 0 ? 0 : 4 << b);
-            if (total < bestBits)
-            {
-                bestBits = total;
-                best = b;
-            }
-        }
-
-        return best;
+        return Entropy(green) + Entropy(red) + Entropy(blue) + Entropy(alpha) + (cacheBits == 0 ? 0 : 4 << cacheBits);
     }
 
     private static double Entropy(int[] counts)

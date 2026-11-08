@@ -8,6 +8,33 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: lossless WebP encoding
+
+The 12-megapixel photo, effort 4 (cwebp's default `-m 4`). Sizes are for `photo.png`; times are BenchmarkDotNet's for
+the photo decoded from `photo.jpg`, taken while another session was using the machine, so treat them as ±15%.
+
+| Encoder | Size | One core | All cores |
+|---|---:|---:|---:|
+| Ours | 23.08 MB | 5.9 s | 2.2 s |
+| cwebp 1.6 `-lossless -exact -m 4` (gate image, its own timer) | 23.05 MB | about 4 s | |
+| libwebp through SkiaSharp (lossless, quality 75) | | 2.8 s | |
+| ImageSharp 2.1 (lossless) | | 9.7 s | 9.9 s |
+
+At effort 0 ours is 26.44 MB against cwebp `-m 0`'s 26.77 MB; on small test pictures ours is smaller on grey (84
+against 116 bytes) and within 10% on few-colour graphics. What made the difference, in order:
+1. **No subtract-green before the predictor when cross-colour follows** (5%): cross-colour's multipliers take green
+   out as far as it helps, and predicting on the raw channels gives cleaner residuals. cwebp's verbose output
+   showed it doing the same.
+2. **Cross-colour** (6%) and the **entropy image** (1%).
+3. **A cost-based parse** that prices cache hits exactly (a pixel's cache hit doesn't depend on the parse, since every
+   pixel enters the cache in order); on graphics it halved the size.
+
+And the time, from 5.5 s on one thread: the hash table sized to the image (2.4 to 1.3 s for the match search), tiles
+of a row chosen in parallel (predictor 1.5 to 0.2 s, cross-colour 1.1 to 0.1 s), matches searched in parallel in fixed
+chunks, and the cache sizes tried in parallel. Still to do: SIMD for the predictor and multiplier searches (2.4 s of
+the 4.2 s on one core), and memory: about 840 MB for a 12-megapixel encode, mostly per-pixel arrays in the match
+search and the parse, which could be pooled or banded.
+
 ## 2026-11-08: against ImageSharp 2.1
 
 ImageSharp 2.1.13 (`ImageSharpBenchmarks`) is the last release under Apache-2.0; 3.0 moved to the Six Labors Split

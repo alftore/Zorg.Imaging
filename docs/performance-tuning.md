@@ -130,6 +130,16 @@ where it was measured. `docs/performance.md` has the current numbers.
   pool and the caller only waits for them, a busy pool can stall or deadlock the decode. Here the caller runs the same
   loop as the helpers, so it finishes alone if no helper ever starts; it waits only for helpers that are already
   inside a stage. A failure in any stage is captured (`ExceptionDispatchInfo`) and rethrown on the caller's thread.
+- **Find the work that's independent once a decision is held still.** The WebP lossless encoder chooses each tile's
+  predictor and colour multipliers by statistics of what it chose before, which looks sequential. Refreshing those
+  statistics once per row of tiles instead of after every tile cost nothing in file size, and makes the tiles of a row
+  independent: they run in parallel, and the counts they add are summed after the row. 1.5 s became 0.22 s.
+- **Split a search from the state it depends on.** Hash chains can be built first (each pixel links only to earlier
+  ones), then every pixel's match searched in parallel. The few candidates that depend on the parse so far (the last
+  distances used) are checked afterwards in one cheap sequential pass. Chunks have a fixed size, not one per thread,
+  so the result is the same on any number of cores.
+- **Several candidates evaluated over the same data are separate tasks.** The colour-cache size is chosen by trying
+  eleven sizes; each is its own walk over the tokens, so they run side by side.
 - **Spin without sleeping for short waits.** `SpinWait.SpinOnce(sleep1Threshold: -1)` yields but never calls
   `Thread.Sleep(1)`, which on Windows can sleep for 15 ms.
 
@@ -140,5 +150,9 @@ where it was measured. `docs/performance.md` has the current numbers.
   replacement; with 15 warm-up rounds it was a steady 116 ms.
 
 ## Memory
+
+- **Size hash tables to the input.** A fixed 2^18-bucket table for a 12-megapixel image puts about 46 pixels in each
+  bucket, and walking a chain becomes a run of cache misses. One bucket per pixel (2^22 at most) halved the WebP
+  match search, from 2.4 to 1.3 s, with the same output.
 
 - **Rent big buffers from `ArrayPool<T>.Shared`, `stackalloc` small ones**, and never allocate per pixel or per block.

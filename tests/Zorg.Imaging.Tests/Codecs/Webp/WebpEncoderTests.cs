@@ -277,6 +277,20 @@ public class WebpEncoderTests
         Assert.Equal(expected, piped.ToArray());
     }
 
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void The_file_is_the_same_on_one_core_and_on_many(int effort)
+    {
+        // Large enough for every threaded stage to split its work.
+        using Image photo = JpegEncoderTests.Photo(1250, 640, PixelFormat.Rgba32, seed: 11);
+        byte[] one = Save(photo, new WebpEncoderOptions { Lossless = true, Effort = effort, MaxDegreeOfParallelism = 1 });
+        byte[] many = Save(photo, new WebpEncoderOptions { Lossless = true, Effort = effort, MaxDegreeOfParallelism = 8 });
+        Assert.Equal(one, many);
+        using Image decoded = Image.Decode(many, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        Assert.Equal(Rgba(photo), decoded.GetPixelBytes().ToArray());
+    }
+
     [Fact]
     public void Prefix_code_lengths_stay_within_the_limit_and_fill_the_code()
     {
