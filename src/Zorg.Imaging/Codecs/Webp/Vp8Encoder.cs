@@ -692,8 +692,13 @@ internal sealed class Vp8Encoder
     // Magnitudes round down after adding a bias of 3/8 of a step, or half a step for the DC, which suits the cost of
     // larger levels; at most 2048.
     // floor(x / q) as (x * (2^32 / q + 1)) >> 32, exact for x and q below 2^16, which the values here are: a multiply
-    // where a division cost tens of cycles for each coefficient.
+    // where a division cost tens of cycles for each coefficient. Used for the DC.
     private static readonly ulong[] Reciprocals = BuildReciprocals();
+
+    // For the AC coefficients, which share one quantiser and go through vectors: floor(x / q) as (x * m) >> s with
+    // s = 15 + ceil(log2 q) and m = ceil(2^s / q), exact for x below 2^15 (Granlund and Montgomery), and x * m stays
+    // below 2^31. The largest magnitude here, a Y2 coefficient plus its bias, is under 16,700.
+    private static readonly (uint Multiplier, int Shift)[] Magic = BuildMagic();
 
     private static ulong[] BuildReciprocals()
     {
@@ -706,26 +711,69 @@ internal sealed class Vp8Encoder
         return reciprocals;
     }
 
+    private static (uint, int)[] BuildMagic()
+    {
+        var magic = new (uint, int)[4096];
+        for (int q = 1; q < magic.Length; q++)
+        {
+            int l = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)(q - 1));
+            int shift = 15 + l;
+            magic[q] = ((uint)(((1UL << shift) + (ulong)q - 1) / (ulong)q), shift);
+        }
+
+        return magic;
+    }
+
+    // Levels in scan order from first, and the dequantised coefficients in natural order (as the decoder rebuilds them).
+    // Magnitudes round down after adding a bias of 3/8 of a step, or half a step for the DC, which suits the cost of
+    // larger levels; at most 2048. The AC coefficients are quantised together as vectors in natural order, without a
+    // branch for each; the DC on its own.
     private static void Quantise(ReadOnlySpan<short> coefficients, int first, int dc, int ac, Span<short> levels, Span<short> dequantised)
     {
-        levels.Clear();
-        dequantised.Clear();
-        ReadOnlySpan<byte> zigzag = ZigZag;
-        for (int c = first; c < 16; c++)
+        (uint multiplier, int shift) = Magic[ac];
+        Vector128<int> bias = Vector128.Create((ac * 3) / 8);
+        Vector128<uint> m = Vector128.Create(multiplier);
+        Vector128<int> top = Vector128.Create(2048);
+        Vector128<int> step = Vector128.Create(ac);
+        Span<short> natural = stackalloc short[16];
+        ReadOnlySpan<Vector128<short>> input = MemoryMarshal.Cast<short, Vector128<short>>(coefficients[..16]);
+        Span<Vector128<short>> levelVectors = MemoryMarshal.Cast<short, Vector128<short>>(natural);
+        Span<Vector128<short>> outVectors = MemoryMarshal.Cast<short, Vector128<short>>(dequantised[..16]);
+        for (int half = 0; half < 2; half++)
         {
-            int q = c == 0 ? dc : ac;
-            int value = coefficients[zigzag[c]];
-            int magnitude = Math.Abs(value);
-            int bias = c == 0 ? q / 2 : (q * 3) / 8;
-            int level = (int)Math.Min(((ulong)(magnitude + bias) * Reciprocals[q]) >> 32, 2048);
-            if (level == 0)
-            {
-                continue;
-            }
-
-            levels[c] = (short)(value < 0 ? -level : level);
-            dequantised[zigzag[c]] = (short)(levels[c] * q);
+            Vector128<short> v = input[half];
+            Vector128<int> low = Quantise(Vector128.WidenLower(v), bias, m, shift, top);
+            Vector128<int> high = Quantise(Vector128.WidenUpper(v), bias, m, shift, top);
+            levelVectors[half] = Vector128.Narrow(low, high);
+            outVectors[half] = Vector128.Narrow(low * step, high * step);
         }
+
+        // The DC: its own quantiser and bias, or none from a first of 1 (the Y blocks whose DC goes to Y2).
+        if (first == 0)
+        {
+            int value = coefficients[0];
+            int level = (int)Math.Min(((ulong)(Math.Abs(value) + (dc / 2)) * Reciprocals[dc]) >> 32, 2048);
+            natural[0] = (short)(value < 0 ? -level : level);
+            dequantised[0] = (short)(natural[0] * dc);
+        }
+        else
+        {
+            natural[0] = 0;
+            dequantised[0] = 0;
+        }
+
+        ReadOnlySpan<byte> zigzag = ZigZag;
+        for (int c = 0; c < 16; c++)
+        {
+            levels[c] = natural[zigzag[c]];
+        }
+    }
+
+    private static Vector128<int> Quantise(Vector128<int> value, Vector128<int> bias, Vector128<uint> multiplier, int shift, Vector128<int> top)
+    {
+        Vector128<int> magnitude = Vector128.Abs(value) + bias;
+        Vector128<int> level = Vector128.Min(Vector128.ShiftRightLogical(magnitude.AsUInt32() * multiplier, shift).AsInt32(), top);
+        return Vector128.ConditionalSelect(Vector128.LessThan(value, Vector128<int>.Zero), -level, level);
     }
 
     private static bool HasLevels(ReadOnlySpan<short> levels, int first)
