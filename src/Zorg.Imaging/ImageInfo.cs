@@ -70,6 +70,13 @@ public sealed class ImageInfo
     /// <example><code>bool profiled = info.HasIccProfile;</code></example>
     public bool HasIccProfile { get; internal init; }
 
+    /// <summary>
+    /// The colour space decoding will give the pixels, when <see cref="IdentifyOptions.ReadColorSpace"/> asked for it;
+    /// otherwise <see langword="null"/>. A CMYK JPEG reports sRGB, since decoding converts it.
+    /// </summary>
+    /// <example><code>bool wide = info.ColorSpace is { IsSrgb: false };</code></example>
+    public ColorSpace? ColorSpace { get; internal init; }
+
     /// <summary>Whether the file carries an EXIF block. Decoding strips it by default.</summary>
     /// <example><code>bool exif = info.HasExif;</code></example>
     public bool HasExif { get; internal init; }

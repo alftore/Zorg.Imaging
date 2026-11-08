@@ -44,6 +44,7 @@ internal static class JpegHeaderReader
         bool hasExif = false;
         bool hasIcc = false;
         int orientation = 1;
+        JpegIccChunks? icc = options.ReadColorSpace ? new JpegIccChunks() : null;
 
         while (true)
         {
@@ -88,6 +89,8 @@ internal static class JpegHeaderReader
                     throw ImageErrors.Corrupt("The JPEG file declares its height after the scan (DNL marker), which isn't supported.");
                 }
 
+                // Decoding turns CMYK (four components) into sRGB.
+                ColorSpace? colorSpace = icc is null ? null : scratch[5] == 4 ? ColorSpace.Srgb : icc.Resolve();
                 return new ImageInfo(ImageFormat.Jpeg, width, height)
                 {
                     Orientation = orientation,
@@ -96,6 +99,7 @@ internal static class JpegHeaderReader
                     FrameCount = 1,
                     HasExif = hasExif,
                     HasIccProfile = hasIcc,
+                    ColorSpace = colorSpace,
                 };
             }
 
@@ -116,6 +120,15 @@ internal static class JpegHeaderReader
 
                 hasExif |= isExif;
                 hasIcc |= isIcc;
+                if (isIcc && icc is not null)
+                {
+                    byte[] data = new byte[dataLength];
+                    scratch.AsSpan(0, prefixLength).CopyTo(data);
+                    await reader.ReadExactlyAsync(data.AsMemory(prefixLength), cancellationToken).ConfigureAwait(false);
+                    icc.Add(data);
+                    continue;
+                }
+
                 await reader.SkipAsync(rest, cancellationToken).ConfigureAwait(false);
                 continue;
             }

@@ -17,6 +17,8 @@ internal static class DecoderFuzz
     /// <summary>Small enough that a damaged size field can't make a test allocate much.</summary>
     public static readonly DecodeOptions Small = new() { Limits = new ImageLimits { MaxPixels = 1_000_000, MaxFrames = 64 } };
 
+    private static readonly IdentifyOptions ReadingColour = new() { ReadColorSpace = true };
+
     private static readonly byte[] EdgeValues = [0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF];
 
     /// <summary>
@@ -122,6 +124,8 @@ internal static class DecoderFuzz
     {
         Exception? error = Record.Exception(() => Image.Identify(data));
         Assert.True(error is null, $"Identify, {what}: {error}");
+        error = Record.Exception(() => Image.Identify(data, ReadingColour));
+        Assert.True(error is null, $"Identify with the colour space, {what}: {error}");
     }
 
     /// <summary>

@@ -68,7 +68,7 @@ internal static class WebpHeaderReader
 
                 int width = BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(6)) & 0x3FFF;
                 int height = BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(8)) & 0x3FFF;
-                return Still(width, height, hasAlpha: false);
+                return Still(width, height, hasAlpha: false, options);
             }
 
             case "VP8L":
@@ -92,7 +92,7 @@ internal static class WebpHeaderReader
 
                 int width = (int)(bits & 0x3FFF) + 1;
                 int height = (int)((bits >> 14) & 0x3FFF) + 1;
-                return Still(width, height, hasAlpha: ((bits >> 28) & 1) != 0);
+                return Still(width, height, hasAlpha: ((bits >> 28) & 1) != 0, options);
             }
 
             case "VP8X":
@@ -126,7 +126,9 @@ internal static class WebpHeaderReader
 
         int orientation = 1;
         int frames = 0;
-        if (countFrames || hasExif)
+        bool readIcc = options.ReadColorSpace && (flags & IccFlag) != 0;
+        ColorSpace? colorSpace = options.ReadColorSpace ? ColorSpace.Srgb : null;
+        if (countFrames || hasExif || readIcc)
         {
             await SkipChunkRestAsync(reader, end, size, Vp8xLength, cancellationToken).ConfigureAwait(false);
             bool exifFound = false;
@@ -136,7 +138,21 @@ internal static class WebpHeaderReader
             {
                 (string fourCc, uint chunkSize) = await ReadChunkHeaderAsync(reader, end, buffer, first: false, cancellationToken).ConfigureAwait(false);
                 int read = 0;
-                if (hasExif && !exifFound && fourCc == "EXIF")
+                if (readIcc && fourCc == "ICCP")
+                {
+                    readIcc = false;
+                    if (chunkSize > ColorSpace.MaxIccProfileBytes)
+                    {
+                        throw ImageErrors.ExceedsLimits("The WebP file's ICC profile is more than the profile size limit.");
+                    }
+
+                    byte[] profile = new byte[chunkSize];
+                    await reader.ReadExactlyAsync(profile, cancellationToken).ConfigureAwait(false);
+                    read = (int)chunkSize;
+                    string? problem = ColorSpace.CheckIccProfile(profile);
+                    colorSpace = problem is null ? ColorSpace.FromCheckedIccProfile(profile) : throw ImageErrors.Corrupt(problem);
+                }
+                else if (hasExif && !exifFound && fourCc == "EXIF")
                 {
                     exifFound = true;
                     (orientation, read) = await ExifOrientation.ReadAsync(
@@ -153,7 +169,7 @@ internal static class WebpHeaderReader
 
                 await SkipChunkRestAsync(reader, end, chunkSize, read, cancellationToken).ConfigureAwait(false);
 
-                if (exifFound && !countFrames)
+                if ((exifFound || !hasExif) && !countFrames && !readIcc)
                 {
                     break;
                 }
@@ -168,6 +184,7 @@ internal static class WebpHeaderReader
             HasExif = hasExif,
             IsAnimated = animated,
             FrameCount = animated ? (countFrames ? frames : null) : 1,
+            ColorSpace = colorSpace,
         };
     }
 
@@ -213,10 +230,12 @@ internal static class WebpHeaderReader
 
     private static int ReadUInt24(ReadOnlySpan<byte> data) => data[0] | (data[1] << 8) | (data[2] << 16);
 
-    private static ImageInfo Still(int width, int height, bool hasAlpha) =>
+    // A simple file (VP8 or VP8L alone) has no place for a profile, so it is sRGB.
+    private static ImageInfo Still(int width, int height, bool hasAlpha, IdentifyOptions options) =>
         new(ImageFormat.Webp, width, height)
         {
             HasAlpha = hasAlpha,
             FrameCount = 1,
+            ColorSpace = options.ReadColorSpace ? ColorSpace.Srgb : null,
         };
 }

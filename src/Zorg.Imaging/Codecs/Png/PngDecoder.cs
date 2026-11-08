@@ -534,7 +534,8 @@ internal static class PngDecoder
     /// The colour chunks before the image data. The PNG specification's precedence decides: <c>cICP</c>, then
     /// <c>iCCP</c>, then <c>sRGB</c>, then <c>gAMA</c> and <c>cHRM</c>. A second chunk of a kind is ignored.
     /// </summary>
-    private sealed class ColourChunks
+    /// <summary>The colour chunks (cICP, iCCP, sRGB, gAMA, cHRM): read by the decoder, and by the header reader when asked.</summary>
+    internal sealed class ColourChunks
     {
         private byte[]? _cicp;
         private byte[]? _iccProfile;
@@ -542,22 +543,32 @@ internal static class PngDecoder
         private int _gamma;
         private int[]? _chromaticities;
 
+        /// <summary>Whether <paramref name="type"/> is a colour chunk not seen yet (the first of each counts).</summary>
+        public bool Wants(uint type) => type switch
+        {
+            Cicp => _cicp is null,
+            Iccp => _iccProfile is null,
+            SrgbChunk => !_srgb,
+            Gama => _gamma == 0,
+            Chrm => _chromaticities is null,
+            _ => false,
+        };
+
         public async ValueTask ReadAsync(DataReader reader, uint type, long length, CancellationToken cancellationToken)
         {
-            bool seen = type switch
-            {
-                Cicp => _cicp is not null,
-                Iccp => _iccProfile is not null,
-                SrgbChunk => _srgb,
-                Gama => _gamma != 0,
-                _ => _chromaticities is not null,
-            };
-            if (seen)
+            if (!Wants(type))
             {
                 await reader.SkipAsync(length + CrcLength, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
+            CheckLength(type, length);
+            Add(type, await ReadChunkDataAsync(reader, type, length, cancellationToken).ConfigureAwait(false));
+        }
+
+        /// <summary>Refuses a colour chunk whose length can't be right, before its data is read.</summary>
+        public static void CheckLength(uint type, long length)
+        {
             long expected = type switch
             {
                 Cicp => 4,
@@ -575,8 +586,11 @@ internal static class PngDecoder
             {
                 throw ImageErrors.ExceedsLimits(string.Create(CultureInfo.InvariantCulture, $"The PNG file's iCCP chunk is {length} bytes, more than the {ColorSpace.MaxIccProfileBytes}-byte limit for a profile."));
             }
+        }
 
-            byte[] data = await ReadChunkDataAsync(reader, type, length, cancellationToken).ConfigureAwait(false);
+        /// <summary>Takes a wanted colour chunk's data.</summary>
+        public void Add(uint type, byte[] data)
+        {
             switch (type)
             {
                 case Cicp:

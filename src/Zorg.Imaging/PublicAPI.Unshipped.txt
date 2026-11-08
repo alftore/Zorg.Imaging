@@ -433,3 +433,6 @@ Zorg.Imaging.ImageMetadata.Location.get -> Zorg.Imaging.GeoLocation?
 Zorg.Imaging.ImageMetadata.Orientation.get -> int
 Zorg.Imaging.ImageMetadata.Title.get -> string?
 Zorg.Imaging.ImageMetadata.Xmp.get -> System.ReadOnlyMemory<byte>
+Zorg.Imaging.IdentifyOptions.ReadColorSpace.get -> bool
+Zorg.Imaging.IdentifyOptions.ReadColorSpace.init -> void
+Zorg.Imaging.ImageInfo.ColorSpace.get -> Zorg.Imaging.ColorSpace?

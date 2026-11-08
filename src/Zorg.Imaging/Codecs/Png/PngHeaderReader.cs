@@ -50,6 +50,7 @@ internal static class PngHeaderReader
         int orientation = 1;
         int frames = 1;
         bool sawActl = false;
+        PngDecoder.ColourChunks? colour = options.ReadColorSpace ? new PngDecoder.ColourChunks() : null;
 
         while (true)
         {
@@ -94,8 +95,17 @@ internal static class PngHeaderReader
                     hasAlpha = true;
                     break;
 
-                case Iccp:
+                case Iccp when colour is null:
                     hasIcc = true;
+                    break;
+
+                case uint chunk when colour is not null && colour.Wants(chunk):
+                    hasIcc |= chunk == Iccp;
+                    PngDecoder.ColourChunks.CheckLength(chunk, length);
+                    byte[] data = new byte[length];
+                    await reader.ReadExactlyAsync(data, cancellationToken).ConfigureAwait(false);
+                    colour.Add(chunk, data);
+                    skip = CrcLength;
                     break;
 
                 case Exif when !hasExif:
@@ -120,6 +130,7 @@ internal static class PngHeaderReader
             FrameCount = frames,
             HasIccProfile = hasIcc,
             HasExif = hasExif,
+            ColorSpace = colour?.Resolve(),
         };
     }
 

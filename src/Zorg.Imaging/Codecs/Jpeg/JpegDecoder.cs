@@ -320,8 +320,7 @@ internal static class JpegDecoder
         private readonly ushort[]?[] _quantisation = new ushort[4][];
         private readonly JpegHuffman?[] _dc = new JpegHuffman[4];
         private readonly JpegHuffman?[] _ac = new JpegHuffman[4];
-        private readonly List<(int Sequence, int Count, byte[] Data)> _icc = [];
-        private long _iccBytes;
+        private readonly JpegIccChunks _icc = new();
 
         public JpegFrame? Frame { get; set; }
 
@@ -434,53 +433,9 @@ internal static class JpegDecoder
             }
         }
 
-        public void AddIccChunk(byte[] data)
-        {
-            if (data.Length < IccPrefix.Length + 2)
-            {
-                throw ImageErrors.Corrupt("A JPEG ICC profile chunk is too short.");
-            }
+        public void AddIccChunk(byte[] data) => _icc.Add(data);
 
-            _iccBytes += data.Length - IccPrefix.Length - 2;
-            if (_iccBytes > ColorSpace.MaxIccProfileBytes)
-            {
-                throw ImageErrors.ExceedsLimits(string.Create(CultureInfo.InvariantCulture, $"The JPEG file's ICC profile is more than {ColorSpace.MaxIccProfileBytes} bytes."));
-            }
-
-            _icc.Add((data[IccPrefix.Length], data[IccPrefix.Length + 1], data[(IccPrefix.Length + 2)..]));
-        }
-
-        public ColorSpace ResolveColorSpace()
-        {
-            if (_icc.Count == 0)
-            {
-                return ColorSpace.Srgb;
-            }
-
-            // Chunks are numbered 1 to the count (ICC.1, B.4); every one must be there, once.
-            int count = _icc[0].Count;
-            if (count != _icc.Count)
-            {
-                throw ImageErrors.Corrupt("The JPEG file's ICC profile is missing chunks.");
-            }
-
-            _icc.Sort((a, b) => a.Sequence.CompareTo(b.Sequence));
-            byte[] profile = new byte[_iccBytes];
-            int at = 0;
-            for (int i = 0; i < count; i++)
-            {
-                if (_icc[i].Sequence != i + 1 || _icc[i].Count != count)
-                {
-                    throw ImageErrors.Corrupt("The JPEG file's ICC profile chunks are numbered wrongly.");
-                }
-
-                _icc[i].Data.CopyTo(profile, at);
-                at += _icc[i].Data.Length;
-            }
-
-            string? problem = ColorSpace.CheckIccProfile(profile);
-            return problem is null ? ColorSpace.FromCheckedIccProfile(profile) : throw ImageErrors.Corrupt(problem);
-        }
+        public ColorSpace ResolveColorSpace() => _icc.Resolve();
 
         public JpegScan ParseScan(ReadOnlySpan<byte> data)
         {

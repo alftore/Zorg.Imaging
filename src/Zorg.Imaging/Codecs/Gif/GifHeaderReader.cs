@@ -37,6 +37,7 @@ internal static class GifHeaderReader
         bool hasAlpha = false;
         bool hasLoop = false;
         bool hasIcc = false;
+        ColorSpace? colorSpace = options.ReadColorSpace ? ColorSpace.Srgb : null;
         int frames = 0;
         byte[] block = new byte[255];
         byte[] one = new byte[1];
@@ -76,6 +77,13 @@ internal static class GifHeaderReader
                         else if (name.SequenceEqual("ICCRGBG1012"u8))
                         {
                             hasIcc = true;
+
+                            // The decoder takes the profile only before the first frame; so does this.
+                            if (colorSpace is not null && frames == 0)
+                            {
+                                colorSpace = await ReadProfileAsync(reader, cancellationToken).ConfigureAwait(false);
+                                continue;
+                            }
                         }
                     }
 
@@ -130,7 +138,35 @@ internal static class GifHeaderReader
             IsAnimated = hasLoop || (countFrames && frames > 1),
             FrameCount = countFrames ? frames : null,
             HasIccProfile = hasIcc,
+            ColorSpace = colorSpace,
         };
+    }
+
+    // The profile's sub-blocks joined, within the profile size limit, then checked as the decoder checks it.
+    private static async ValueTask<ColorSpace> ReadProfileAsync(HeaderReader reader, CancellationToken cancellationToken)
+    {
+        var profile = new System.Collections.Generic.List<byte>();
+        byte[] block = new byte[255];
+        while (true)
+        {
+            byte length = await reader.ReadByteAsync(cancellationToken).ConfigureAwait(false);
+            if (length == 0)
+            {
+                break;
+            }
+
+            if (profile.Count + length > ColorSpace.MaxIccProfileBytes)
+            {
+                throw ImageErrors.ExceedsLimits("The GIF file's ICC profile is more than the profile size limit.");
+            }
+
+            await reader.ReadExactlyAsync(block.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
+            profile.AddRange(block.AsSpan(0, length).ToArray());
+        }
+
+        byte[] bytes = [.. profile];
+        string? problem = ColorSpace.CheckIccProfile(bytes);
+        return problem is null ? ColorSpace.FromCheckedIccProfile(bytes) : throw ImageErrors.Corrupt(problem);
     }
 
     private static ValueTask SkipColourTableAsync(HeaderReader reader, byte packed, CancellationToken cancellationToken)
