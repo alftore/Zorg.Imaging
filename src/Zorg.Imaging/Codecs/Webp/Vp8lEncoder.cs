@@ -1649,13 +1649,40 @@ internal static class Vp8lEncoder
     // over the tokens of its own, so the sizes are tried in parallel.
     private static int ChooseCacheBits(uint[] pixels, int[] lengths, int count)
     {
+        // A large image is judged from four strips spread down it, each a sixteenth of the tokens and starting with an
+        // empty cache: the choice is an estimate either way, and this is a quarter of the work.
+        var strips = new List<(int FirstToken, int Tokens, int FirstPixel)>();
+        if (pixels.Length >= 1 << 20)
+        {
+            int strip = count / 16;
+            int at = 0;
+            int token = 0;
+            for (int s = 0; s < 4; s++)
+            {
+                int first = (count * ((4 * s) + 2)) / 16;
+                for (; token < first; token++)
+                {
+                    at += Math.Max(lengths[token], 1);
+                }
+
+                strips.Add((first, strip, at));
+            }
+        }
+        else
+        {
+            strips.Add((0, count, 0));
+        }
+
         double[] bits = new double[MaxCacheBits + 1];
         int bands = Processing.Parallelism.Bands((long)pixels.Length * (MaxCacheBits + 1), MaxCacheBits + 1);
         Processing.Parallelism.For(bands, band =>
         {
             for (int b = (MaxCacheBits + 1) * band / bands; b < (MaxCacheBits + 1) * (band + 1) / bands; b++)
             {
-                bits[b] = CacheBitsCost(pixels, lengths, count, b);
+                foreach ((int firstToken, int tokens, int firstPixel) in strips)
+                {
+                    bits[b] += CacheBitsCost(pixels, lengths, firstToken, tokens, firstPixel, b);
+                }
             }
         });
 
@@ -1672,7 +1699,7 @@ internal static class Vp8lEncoder
     }
 
     // The literals' bits with a cache of 2^cacheBits (none for 0), and about 4 header bits for each cache symbol.
-    private static double CacheBitsCost(uint[] pixels, int[] lengths, int count, int cacheBits)
+    private static double CacheBitsCost(uint[] pixels, int[] lengths, int firstToken, int tokens, int firstPixel, int cacheBits)
     {
         uint[] cache = new uint[1 << cacheBits];
         int[] green = new int[256 + (1 << cacheBits)];
@@ -1680,8 +1707,8 @@ internal static class Vp8lEncoder
         int[] blue = new int[256];
         int[] alpha = new int[256];
         int shift = 32 - cacheBits;
-        int at = 0;
-        for (int k = 0; k < count; k++)
+        int at = firstPixel;
+        for (int k = firstToken; k < firstToken + tokens; k++)
         {
             if (lengths[k] != 0)
             {
