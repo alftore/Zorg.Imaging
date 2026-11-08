@@ -395,15 +395,28 @@ internal sealed class Vp8Encoder
     // levels gets the 16 Y blocks then the Y2 block; the contexts are updated as the tokens would leave them.
     private long WholeLuma(int x0, int y0, Span<short> levels, Span<byte> left, Span<byte> above, out uint nonZeroBits)
     {
-        Span<short> coefficients = stackalloc short[16 * 16];
+        // The sixteen blocks' predictions are all in the plane already, so the blocks are transformed four at a time:
+        // each row of four blocks in the lanes. Only the token costs depend on order, and they are counted after.
+        Span<Vector128<int>> coefficients = stackalloc Vector128<int>[4 * 16];
         Span<short> dcs = stackalloc short[16];
+        Span<int> xs = stackalloc int[4];
+        Span<int> ys = stackalloc int[4];
         nonZeroBits = 0;
-        for (int i = 0; i < 16; i++)
+        for (int g = 0; g < 4; g++)
         {
-            int bx = x0 + ((i & 3) * 4);
-            int by = y0 + ((i >> 2) * 4);
-            ForwardDct(_sourceY, (by * _strideY) + bx, _strideY, _y, bx, by, coefficients.Slice(i * 16, 16));
-            dcs[i] = coefficients[i * 16];
+            for (int l = 0; l < 4; l++)
+            {
+                xs[l] = x0 + (l * 4);
+                ys[l] = y0 + (g * 4);
+            }
+
+            Span<Vector128<int>> e = coefficients.Slice(g * 16, 16);
+            ResidualLanes(_sourceY, _strideY, _y, xs, ys, e);
+            ForwardDctLanes(e);
+            for (int l = 0; l < 4; l++)
+            {
+                dcs[(g * 4) + l] = (short)e[0].GetElement(l);
+            }
         }
 
         Span<short> y2 = stackalloc short[16];
@@ -421,26 +434,36 @@ internal sealed class Vp8Encoder
 
         Span<short> reconstructedDcs = stackalloc short[16];
         InverseWht(y2Dequantised, reconstructedDcs);
-        Span<short> dequantised = stackalloc short[16];
+        Span<Vector128<int>> blockLevels = stackalloc Vector128<int>[16];
+        Span<Vector128<int>> dequantised = stackalloc Vector128<int>[16];
+        Span<Vector128<int>> residual = stackalloc Vector128<int>[16];
         long distortion = 0;
+        for (int g = 0; g < 4; g++)
+        {
+            for (int l = 0; l < 4; l++)
+            {
+                xs[l] = x0 + (l * 4);
+                ys[l] = y0 + (g * 4);
+            }
+
+            QuantiseLanes(coefficients.Slice(g * 16, 16), 1, _y1Dc, _y1Ac, blockLevels, dequantised);
+            LevelsToBlocks(blockLevels, levels.Slice(g * 64, 64));
+            dequantised[0] = Vector128.Create(reconstructedDcs[g * 4], reconstructedDcs[(g * 4) + 1], reconstructedDcs[(g * 4) + 2], reconstructedDcs[(g * 4) + 3]);
+            InverseDctLanes(dequantised, residual);
+            distortion += ReconstructLanes(_sourceY, _strideY, _y, xs, ys, residual);
+        }
+
         for (int i = 0; i < 16; i++)
         {
-            int bx = x0 + ((i & 3) * 4);
-            int by = y0 + ((i >> 2) * 4);
-            Span<short> blockLevels = levels.Slice(i * 16, 16);
-            Quantise(coefficients.Slice(i * 16, 16), 1, _y1Dc, _y1Ac, blockLevels, dequantised);
+            Span<short> block = levels.Slice(i * 16, 16);
             int context = left[i >> 2] + above[i & 3];
-            bits += BlockCost(blockLevels, 0, 1, context);
-            bool nonZero = HasLevels(blockLevels, 1);
+            bits += BlockCost(block, 0, 1, context);
+            bool nonZero = HasLevels(block, 1);
             left[i >> 2] = above[i & 3] = (byte)(nonZero ? 1 : 0);
             if (nonZero)
             {
                 nonZeroBits |= 1u << i;
             }
-
-            dequantised[0] = reconstructedDcs[i];
-            AddResidual(_y, bx, by, dequantised, any: true);
-            distortion += Distortion(_sourceY, (by * _strideY) + bx, _strideY, _y, bx, by);
         }
 
         return distortion + (_lambda * bits);
@@ -471,7 +494,41 @@ internal sealed class Vp8Encoder
             e[i] = Vector128.Create(o - predictions[i], o - predictions[16 + i], o - predictions[32 + i], o - predictions[48 + i]);
         }
 
-        // Forward DCT: rows (scaled by 8), then columns.
+        ForwardDctLanes(e);
+        Span<Vector128<int>> levels = stackalloc Vector128<int>[16];
+        Span<Vector128<int>> dequantised = stackalloc Vector128<int>[16];
+        QuantiseLanes(e, 0, dc, ac, levels, dequantised);
+        LevelsToBlocks(levels, levelsOut);
+        Span<Vector128<int>> residual = e;
+        InverseDctLanes(dequantised, residual);
+
+        // Squared errors fit 32 bits: sixteen of at most 255^2.
+        Vector128<int> sum = Vector128<int>.Zero;
+        for (int at = 0; at < 16; at++)
+        {
+            Vector128<int> prediction = Vector128.Create(predictions[at], predictions[16 + at], predictions[32 + at], predictions[48 + at]);
+            Vector128<int> pixel = Vector128.Min(Vector128.Max(prediction + residual[at], Vector128<int>.Zero), Vector128.Create(255));
+            Vector128<int> error = Vector128.Create((int)original[at]) - pixel;
+            sum += error * error;
+            reconstructions[at] = (byte)pixel.GetElement(0);
+            reconstructions[16 + at] = (byte)pixel.GetElement(1);
+            reconstructions[32 + at] = (byte)pixel.GetElement(2);
+            reconstructions[48 + at] = (byte)pixel.GetElement(3);
+        }
+
+        for (int k = 0; k < 4; k++)
+        {
+            distortions[k] = (long)sum.GetElement(k) << 8;
+        }
+    }
+
+    // ---- Four blocks in the lanes of 128-bit vectors ----
+    // Element i (row-major in the block) of four blocks, one block in each lane. Each helper follows its scalar
+    // counterpart's integer steps exactly, so every lane's result equals the scalar result for that block.
+
+    // ForwardDct: residuals in, coefficients out (as the scalar code's shorts), in place.
+    private static void ForwardDctLanes(Span<Vector128<int>> e)
+    {
         Vector128<int> c5352 = Vector128.Create(5352);
         Vector128<int> c2217 = Vector128.Create(2217);
         Span<Vector128<int>> temp = stackalloc Vector128<int>[16];
@@ -485,45 +542,61 @@ internal sealed class Vp8Encoder
             temp[(r * 4) + 3] = Vector128.ShiftRightArithmetic((a3 * c2217) - (a2 * c5352) + Vector128.Create(256), 9);
         }
 
-        Span<Vector128<int>> coefficients = e;
         for (int c = 0; c < 4; c++)
         {
             Vector128<int> a0 = temp[c] + temp[12 + c], a1 = temp[4 + c] + temp[8 + c], a2 = temp[4 + c] - temp[8 + c], a3 = temp[c] - temp[12 + c];
-            coefficients[c] = Short(Vector128.ShiftRightArithmetic(a0 + a1 + Vector128.Create(8), 4));
-            coefficients[8 + c] = Short(Vector128.ShiftRightArithmetic(a0 - a1 + Vector128.Create(8), 4));
-            coefficients[4 + c] = Short(Vector128.ShiftRightArithmetic((a3 * c5352) + (a2 * c2217) + Vector128.Create(32768), 16));
-            coefficients[12 + c] = Short(Vector128.ShiftRightArithmetic((a3 * c2217) - (a2 * c5352) + Vector128.Create(32768), 16));
+            e[c] = Short(Vector128.ShiftRightArithmetic(a0 + a1 + Vector128.Create(8), 4));
+            e[8 + c] = Short(Vector128.ShiftRightArithmetic(a0 - a1 + Vector128.Create(8), 4));
+            e[4 + c] = Short(Vector128.ShiftRightArithmetic((a3 * c5352) + (a2 * c2217) + Vector128.Create(32768), 16));
+            e[12 + c] = Short(Vector128.ShiftRightArithmetic((a3 * c2217) - (a2 * c5352) + Vector128.Create(32768), 16));
         }
+    }
 
-        // Quantise (natural order) and dequantise, with the same 16-bit wrap the scalar code's casts make.
-        Span<Vector128<int>> levels = temp;
-        Span<Vector128<int>> dequantised = stackalloc Vector128<int>[16];
+    // Quantise: levels and dequantised values in natural order, with the 16-bit wrap of the scalar casts; from a first
+    // of 1 the DC is left at 0 in both.
+    private static void QuantiseLanes(ReadOnlySpan<Vector128<int>> coefficients, int first, int dc, int ac, Span<Vector128<int>> levels, Span<Vector128<int>> dequantised)
+    {
+        Vector128<int> top = Vector128.Create(2048);
         for (int n = 0; n < 16; n++)
         {
+            if (n < first)
+            {
+                levels[n] = Vector128<int>.Zero;
+                dequantised[n] = Vector128<int>.Zero;
+                continue;
+            }
+
             int q = n == 0 ? dc : ac;
             (uint multiplier, int shift) = Magic[q];
             Vector128<int> value = coefficients[n];
             Vector128<int> magnitude = Vector128.Abs(value) + Vector128.Create(n == 0 ? q / 2 : (q * 3) / 8);
-            Vector128<int> level = Vector128.Min(Vector128.ShiftRightLogical(magnitude.AsUInt32() * Vector128.Create(multiplier), shift).AsInt32(), Vector128.Create(2048));
+            Vector128<int> level = Vector128.Min(Vector128.ShiftRightLogical(magnitude.AsUInt32() * Vector128.Create(multiplier), shift).AsInt32(), top);
             level = Vector128.ConditionalSelect(Vector128.LessThan(value, Vector128<int>.Zero), -level, level);
             levels[n] = level;
             dequantised[n] = Short(level * q);
         }
+    }
 
+    // The four blocks' levels in scan order, sixteen each, one block after another.
+    private static void LevelsToBlocks(ReadOnlySpan<Vector128<int>> levels, Span<short> output)
+    {
         ReadOnlySpan<byte> zigzag = ZigZag;
         for (int c = 0; c < 16; c++)
         {
             Vector128<int> level = levels[zigzag[c]];
-            levelsOut[c] = (short)level.GetElement(0);
-            levelsOut[16 + c] = (short)level.GetElement(1);
-            levelsOut[32 + c] = (short)level.GetElement(2);
-            levelsOut[48 + c] = (short)level.GetElement(3);
+            output[c] = (short)level.GetElement(0);
+            output[16 + c] = (short)level.GetElement(1);
+            output[32 + c] = (short)level.GetElement(2);
+            output[48 + c] = (short)level.GetElement(3);
         }
+    }
 
-        // Inverse DCT (section 14.4): columns, then rows, rounded by 8, added to the prediction and clamped.
+    // AddResidual's transform (section 14.4): dequantised coefficients in, the sixteen values added to the prediction out.
+    private static void InverseDctLanes(ReadOnlySpan<Vector128<int>> dequantised, Span<Vector128<int>> residual)
+    {
         Vector128<int> cos = Vector128.Create(20091);
         Vector128<int> sin = Vector128.Create(35468);
-        Span<Vector128<int>> pass = e;
+        Span<Vector128<int>> pass = stackalloc Vector128<int>[16];
         for (int i = 0; i < 4; i++)
         {
             Vector128<int> i0 = dequantised[i], i4 = dequantised[4 + i], i8 = dequantised[8 + i], i12 = dequantised[12 + i];
@@ -537,10 +610,7 @@ internal sealed class Vp8Encoder
             pass[8 + i] = b1 - c1;
         }
 
-        // Squared errors fit 32 bits: sixteen of at most 255^2.
         Vector128<int> four = Vector128.Create(4);
-        Vector128<int> sum = Vector128<int>.Zero;
-        Span<Vector128<int>> residual = stackalloc Vector128<int>[4];
         for (int i = 0; i < 4; i++)
         {
             Vector128<int> t0 = pass[i * 4], t1 = pass[(i * 4) + 1], t2 = pass[(i * 4) + 2], t3 = pass[(i * 4) + 3];
@@ -548,28 +618,59 @@ internal sealed class Vp8Encoder
             Vector128<int> b1 = t0 - t2;
             Vector128<int> c1 = Vector128.ShiftRightArithmetic(t1 * sin, 16) - (t3 + Vector128.ShiftRightArithmetic(t3 * cos, 16));
             Vector128<int> d1 = t1 + Vector128.ShiftRightArithmetic(t1 * cos, 16) + Vector128.ShiftRightArithmetic(t3 * sin, 16);
-            residual[0] = Vector128.ShiftRightArithmetic(a1 + d1 + four, 3);
-            residual[1] = Vector128.ShiftRightArithmetic(b1 + c1 + four, 3);
-            residual[2] = Vector128.ShiftRightArithmetic(b1 - c1 + four, 3);
-            residual[3] = Vector128.ShiftRightArithmetic(a1 - d1 + four, 3);
-            for (int x = 0; x < 4; x++)
+            residual[i * 4] = Vector128.ShiftRightArithmetic(a1 + d1 + four, 3);
+            residual[(i * 4) + 1] = Vector128.ShiftRightArithmetic(b1 + c1 + four, 3);
+            residual[(i * 4) + 2] = Vector128.ShiftRightArithmetic(b1 - c1 + four, 3);
+            residual[(i * 4) + 3] = Vector128.ShiftRightArithmetic(a1 - d1 + four, 3);
+        }
+    }
+
+    // Four blocks of a plane, each at its own place: the residual against the source, in lanes.
+    private static void ResidualLanes(byte[] source, int strideSource, Plane plane, ReadOnlySpan<int> xs, ReadOnlySpan<int> ys, Span<Vector128<int>> e)
+    {
+        for (int r = 0; r < 4; r++)
+        {
+            ReadOnlySpan<byte> p0 = plane.Row(ys[0] + r).Slice(xs[0], 4);
+            ReadOnlySpan<byte> p1 = plane.Row(ys[1] + r).Slice(xs[1], 4);
+            ReadOnlySpan<byte> p2 = plane.Row(ys[2] + r).Slice(xs[2], 4);
+            ReadOnlySpan<byte> p3 = plane.Row(ys[3] + r).Slice(xs[3], 4);
+            int s0 = ((ys[0] + r) * strideSource) + xs[0], s1 = ((ys[1] + r) * strideSource) + xs[1];
+            int s2 = ((ys[2] + r) * strideSource) + xs[2], s3 = ((ys[3] + r) * strideSource) + xs[3];
+            for (int c = 0; c < 4; c++)
             {
-                int at = (i * 4) + x;
-                Vector128<int> prediction = Vector128.Create(predictions[at], predictions[16 + at], predictions[32 + at], predictions[48 + at]);
-                Vector128<int> pixel = Vector128.Min(Vector128.Max(prediction + residual[x], Vector128<int>.Zero), Vector128.Create(255));
-                Vector128<int> error = Vector128.Create((int)original[at]) - pixel;
+                e[(r * 4) + c] = Vector128.Create(source[s0 + c] - p0[c], source[s1 + c] - p1[c], source[s2 + c] - p2[c], source[s3 + c] - p3[c]);
+            }
+        }
+    }
+
+    // Adds the residuals to the four predictions in the plane, clamped, as AddResidual does; returns the squared error
+    // against the source over the four blocks.
+    private static long ReconstructLanes(byte[] source, int strideSource, Plane plane, ReadOnlySpan<int> xs, ReadOnlySpan<int> ys, ReadOnlySpan<Vector128<int>> residual)
+    {
+        Vector128<int> sum = Vector128<int>.Zero;
+        Vector128<int> top = Vector128.Create(255);
+        for (int r = 0; r < 4; r++)
+        {
+            Span<byte> p0 = plane.Row(ys[0] + r).Slice(xs[0], 4);
+            Span<byte> p1 = plane.Row(ys[1] + r).Slice(xs[1], 4);
+            Span<byte> p2 = plane.Row(ys[2] + r).Slice(xs[2], 4);
+            Span<byte> p3 = plane.Row(ys[3] + r).Slice(xs[3], 4);
+            int s0 = ((ys[0] + r) * strideSource) + xs[0], s1 = ((ys[1] + r) * strideSource) + xs[1];
+            int s2 = ((ys[2] + r) * strideSource) + xs[2], s3 = ((ys[3] + r) * strideSource) + xs[3];
+            for (int c = 0; c < 4; c++)
+            {
+                Vector128<int> prediction = Vector128.Create(p0[c], p1[c], p2[c], p3[c]);
+                Vector128<int> pixel = Vector128.Min(Vector128.Max(prediction + residual[(r * 4) + c], Vector128<int>.Zero), top);
+                Vector128<int> error = Vector128.Create(source[s0 + c], source[s1 + c], source[s2 + c], source[s3 + c]) - pixel;
                 sum += error * error;
-                reconstructions[at] = (byte)pixel.GetElement(0);
-                reconstructions[16 + at] = (byte)pixel.GetElement(1);
-                reconstructions[32 + at] = (byte)pixel.GetElement(2);
-                reconstructions[48 + at] = (byte)pixel.GetElement(3);
+                p0[c] = (byte)pixel.GetElement(0);
+                p1[c] = (byte)pixel.GetElement(1);
+                p2[c] = (byte)pixel.GetElement(2);
+                p3[c] = (byte)pixel.GetElement(3);
             }
         }
 
-        distortions[0] = (long)sum.GetElement(0) << 8;
-        distortions[1] = (long)sum.GetElement(1) << 8;
-        distortions[2] = (long)sum.GetElement(2) << 8;
-        distortions[3] = (long)sum.GetElement(3) << 8;
+        return (long)Vector128.Sum(sum) << 8;
     }
 
     // A value as the scalar code's (short) cast leaves it: the low 16 bits, sign-extended.
@@ -620,34 +721,46 @@ internal sealed class Vp8Encoder
 
     private long WholeChroma(int cx, int cy, Span<short> levels, Span<byte> left, Span<byte> above, out uint nonZeroBits)
     {
-        Span<short> coefficients = stackalloc short[16];
-        Span<short> dequantised = stackalloc short[16];
+        // The four U blocks in the lanes, then the four V blocks; token costs after, in block order.
+        Span<Vector128<int>> e = stackalloc Vector128<int>[16];
+        Span<Vector128<int>> blockLevels = stackalloc Vector128<int>[16];
+        Span<Vector128<int>> dequantised = stackalloc Vector128<int>[16];
+        Span<int> xs = stackalloc int[4];
+        Span<int> ys = stackalloc int[4];
+        for (int l = 0; l < 4; l++)
+        {
+            xs[l] = cx + ((l & 1) * 4);
+            ys[l] = cy + ((l >> 1) * 4);
+        }
+
         nonZeroBits = 0;
         long distortion = 0;
+        for (int g = 0; g < 2; g++)
+        {
+            Plane plane = g == 0 ? _u : _v;
+            byte[] source = g == 0 ? _sourceU : _sourceV;
+            ResidualLanes(source, _strideUv, plane, xs, ys, e);
+            ForwardDctLanes(e);
+            QuantiseLanes(e, 0, _uvDc, _uvAc, blockLevels, dequantised);
+            LevelsToBlocks(blockLevels, levels.Slice(g * 64, 64));
+            InverseDctLanes(dequantised, e);
+            distortion += ReconstructLanes(source, _strideUv, plane, xs, ys, e);
+        }
+
         int bits = 0;
         for (int i = 0; i < 8; i++)
         {
-            bool isU = i < 4;
-            Plane plane = isU ? _u : _v;
-            byte[] source = isU ? _sourceU : _sourceV;
-            int bx = cx + ((i & 1) * 4);
-            int by = cy + (((i >> 1) & 1) * 4);
-            int slot = (isU ? 4 : 6);
+            int slot = i < 4 ? 4 : 6;
             int x = i & 1;
             int y = (i >> 1) & 1;
-            Span<short> blockLevels = levels.Slice(i * 16, 16);
-            ForwardDct(source, (by * _strideUv) + bx, _strideUv, plane, bx, by, coefficients);
-            Quantise(coefficients, 0, _uvDc, _uvAc, blockLevels, dequantised);
-            bits += BlockCost(blockLevels, 2, 0, left[slot + y] + above[slot + x]);
-            bool nonZero = HasLevels(blockLevels, 0);
+            Span<short> block = levels.Slice(i * 16, 16);
+            bits += BlockCost(block, 2, 0, left[slot + y] + above[slot + x]);
+            bool nonZero = HasLevels(block, 0);
             left[slot + y] = above[slot + x] = (byte)(nonZero ? 1 : 0);
             if (nonZero)
             {
                 nonZeroBits |= 1u << i;
             }
-
-            AddResidual(plane, bx, by, dequantised, any: true);
-            distortion += Distortion(source, (by * _strideUv) + bx, _strideUv, plane, bx, by);
         }
 
         return distortion + (_lambda * bits);
