@@ -323,3 +323,19 @@ static Zorg.Imaging.Rgba32.operator !=(Zorg.Imaging.Rgba32 left, Zorg.Imaging.Rg
 static Zorg.Imaging.Rgba32.operator ==(Zorg.Imaging.Rgba32 left, Zorg.Imaging.Rgba32 right) -> bool
 static Zorg.Imaging.Rgba64.operator !=(Zorg.Imaging.Rgba64 left, Zorg.Imaging.Rgba64 right) -> bool
 static Zorg.Imaging.Rgba64.operator ==(Zorg.Imaging.Rgba64 left, Zorg.Imaging.Rgba64 right) -> bool
+const Zorg.Imaging.WebpEncoderOptions.DefaultEffort = 4 -> int
+const Zorg.Imaging.WebpEncoderOptions.DefaultQuality = 80 -> int
+static Zorg.Imaging.WebpEncoderOptions.Default.get -> Zorg.Imaging.WebpEncoderOptions!
+Zorg.Imaging.Image.SaveAsWebp(System.IO.Stream! stream, Zorg.Imaging.WebpEncoderOptions? options = null) -> void
+Zorg.Imaging.Image.SaveAsWebpAsync(System.IO.Stream! stream, Zorg.Imaging.WebpEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.SaveAsWebpAsync(System.IO.Stream! stream, Zorg.Imaging.WebpEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.WebpEncoderOptions
+Zorg.Imaging.WebpEncoderOptions.Effort.get -> int
+Zorg.Imaging.WebpEncoderOptions.Effort.init -> void
+Zorg.Imaging.WebpEncoderOptions.Lossless.get -> bool
+Zorg.Imaging.WebpEncoderOptions.Lossless.init -> void
+Zorg.Imaging.WebpEncoderOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.WebpEncoderOptions.MaxDegreeOfParallelism.init -> void
+Zorg.Imaging.WebpEncoderOptions.Quality.get -> int
+Zorg.Imaging.WebpEncoderOptions.Quality.init -> void
+Zorg.Imaging.WebpEncoderOptions.WebpEncoderOptions() -> void

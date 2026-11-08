@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Imaging.Codecs.Jpeg;
 using Zorg.Imaging.Codecs.Png;
+using Zorg.Imaging.Codecs.Webp;
 
 namespace Zorg.Imaging;
 
@@ -126,6 +127,65 @@ public sealed partial class Image
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
         return JpegEncoder.EncodeAsync(this, stream, options ?? JpegEncoderOptions.Default, sync: false, cancellationToken);
+    }
+
+    /// <summary>Writes the image as a WebP file.</summary>
+    /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
+    /// <param name="options">The options, or <see langword="null"/> for <see cref="WebpEncoderOptions.Default"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="stream"/> can't write; <see cref="WebpEncoderOptions.Lossless"/> isn't set (this version writes
+    /// lossless WebP only); a side is longer than 16,384 pixels; or the <see cref="ColorSpace"/> is HDR (PQ or HLG), or
+    /// one that can't be described as an ICC profile yet.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <exception cref="IOException">The stream itself fails.</exception>
+    /// <remarks>
+    /// <para>
+    /// Lossless WebP (VP8L) keeps every pixel, alpha included, at 8 bits a sample: 16-bit samples are rounded and grey
+    /// is stored as RGB. Images of up to 256 colours are stored as a colour table, which suits logos and screenshots.
+    /// </para>
+    /// <para>
+    /// The <see cref="ColorSpace"/> is written as an ICC profile (in a <c>VP8X</c> file), so the file shows the same
+    /// colours: nothing for sRGB, the image's own profile when it has one, or a small generated one for Display P3,
+    /// Rec.2020 and other spaces known by their primaries. No other metadata is written.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// using FileStream file = File.Create("logo.webp");
+    /// image.SaveAsWebp(file, new WebpEncoderOptions { Lossless = true });
+    /// </code>
+    /// </example>
+    public void SaveAsWebp(Stream stream, WebpEncoderOptions? options = null)
+    {
+        CheckWritable(stream);
+        ObjectDisposedException.ThrowIf(_buffer is null, this);
+        ValueTask task = WebpEncoder.EncodeAsync(this, stream, options ?? WebpEncoderOptions.Default, sync: true, CancellationToken.None);
+        Debug.Assert(task.IsCompleted, "A synchronous encode must complete synchronously.");
+        task.GetAwaiter().GetResult();
+    }
+
+    /// <summary>Writes the image as a WebP file, asynchronously.</summary>
+    /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
+    /// <param name="options">The options, or <see langword="null"/> for <see cref="WebpEncoderOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>A task that completes when the file is written.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="stream"/> can't write, the options ask for lossy WebP, a side is longer than 16,384 pixels, or the
+    /// colour space can't be written.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <exception cref="IOException">The stream itself fails.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    /// <remarks>The file is the same as <see cref="SaveAsWebp"/> writes.</remarks>
+    /// <example><code>await image.SaveAsWebpAsync(response.Body, new WebpEncoderOptions { Lossless = true }, cancellationToken);</code></example>
+    public ValueTask SaveAsWebpAsync(Stream stream, WebpEncoderOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        CheckWritable(stream);
+        ObjectDisposedException.ThrowIf(_buffer is null, this);
+        return WebpEncoder.EncodeAsync(this, stream, options ?? WebpEncoderOptions.Default, sync: false, cancellationToken);
     }
 
     private static void CheckWritable(Stream stream)

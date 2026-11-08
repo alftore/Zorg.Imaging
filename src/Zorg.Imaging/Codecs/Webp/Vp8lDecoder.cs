@@ -20,7 +20,7 @@ internal static class Vp8lDecoder
     private const int DistanceAlphabet = 40;
 
     // Section 4.2.2: the distance codes 1 to 120 as (x, y) offsets, nearest first.
-    private static ReadOnlySpan<sbyte> DistanceMap =>
+    internal static ReadOnlySpan<sbyte> DistanceMap =>
     [
         0, 1, 1, 0, 1, 1, -1, 1, 0, 2, 2, 0, 1, 2, -1, 2,
         2, 1, -2, 1, 2, 2, -2, 2, 0, 3, 3, 0, 1, 3, -1, 3,
@@ -39,7 +39,7 @@ internal static class Vp8lDecoder
         -6, 7, 7, 6, -7, 6, 8, 5, 7, 7, -7, 7, 8, 6, 8, 7,
     ];
 
-    private enum TransformType
+    internal enum TransformType
     {
         Predictor = 0,
         CrossColor = 1,
@@ -329,7 +329,7 @@ internal static class Vp8lDecoder
         return Math.Max((dy * width) + dx, 1);
     }
 
-    private static uint AddPixels(uint a, uint b)
+    internal static uint AddPixels(uint a, uint b)
     {
         uint alphaGreen = (a & 0xFF00FF00u) + (b & 0xFF00FF00u);
         uint redBlue = (a & 0x00FF00FFu) + (b & 0x00FF00FFu);
@@ -337,7 +337,7 @@ internal static class Vp8lDecoder
     }
 
     /// <summary>One transform as read, with what's needed to undo it.</summary>
-    private sealed class Transform(TransformType type, int width)
+    internal sealed class Transform(TransformType type, int width)
     {
         public TransformType Type { get; } = type;
 
@@ -539,7 +539,7 @@ internal static class Vp8lDecoder
             return result;
         }
 
-        private static uint Predict(int mode, uint left, uint top, uint topRight, uint topLeft) => mode switch
+        internal static uint Predict(int mode, uint left, uint top, uint topRight, uint topLeft) => mode switch
         {
             0 => 0xFF000000u,
             1 => left,

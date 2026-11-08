@@ -20,8 +20,9 @@ public static class ImageDefaults
     /// on the .NET thread pool; small images use one thread whatever the setting, so they never pay for threads.
     /// </para>
     /// <para>
-    /// <see cref="DecodeOptions.MaxDegreeOfParallelism"/>, <see cref="JpegEncoderOptions.MaxDegreeOfParallelism"/> and
-    /// <see cref="ImagePipeline.WithMaxDegreeOfParallelism"/> override it for one call. Results are the same, byte for
+    /// <see cref="DecodeOptions.MaxDegreeOfParallelism"/>, <see cref="JpegEncoderOptions.MaxDegreeOfParallelism"/>,
+    /// <see cref="WebpEncoderOptions.MaxDegreeOfParallelism"/> and <see cref="ImagePipeline.WithMaxDegreeOfParallelism"/>
+    /// override it for one call. Results are the same, byte for
     /// byte, whatever the setting.
     /// </para>
     /// </remarks>

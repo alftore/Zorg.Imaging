@@ -233,6 +233,19 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
         "webp lossy decode",
         lossy.PixelFormat == PixelFormat.Rgba32 && (lossy.Width, lossy.Height) == (33, 17)
             && lossy.GetRow<Rgba32>(5)[7] == new Rgba32(131, 206, 147, 54) && lossy.GetRow<Rgba32>(16)[32] == new Rgba32(114, 13, 214, 247));
+
+    // Encode lossless at every effort and read it back exactly, with a Display P3 profile.
+    webp.ColorSpace = ColorSpace.DisplayP3;
+    bool exact = true;
+    for (int effort = 0; effort <= 6; effort++)
+    {
+        using var written = new MemoryStream();
+        webp.SaveAsWebp(written, new WebpEncoderOptions { Lossless = true, Effort = effort });
+        using Image back = Image.Decode(written.ToArray());
+        exact &= back.GetPixelBytes().SequenceEqual(webp.GetPixelBytes()) && back.ColorSpace.IccProfile.Length > 128;
+    }
+
+    Check("webp lossless encode", exact);
 }
 
 return failures == 0 ? 0 : 1;

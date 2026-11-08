@@ -65,6 +65,15 @@ public class SkiaBenchmarks
         return (int)data.Size;
     }
 
+    [Benchmark]
+    public int Skia_Encode_WebpLossless()
+    {
+        // libwebp lossless; its quality 75 is cwebp's default lossless effort.
+        using SKPixmap pixels = _decoded.PeekPixels();
+        using SKData data = pixels.Encode(new SKWebpEncoderOptions(SKWebpEncoderCompression.Lossless, 75))!;
+        return (int)data.Size;
+    }
+
     /// <summary>A 400-pixel thumbnail: libjpeg-turbo's scaled decode at 1/4 (as ours shrinks on load), then a Mitchell resize.</summary>
     [Benchmark]
     public int Skia_Thumbnail_Baseline()

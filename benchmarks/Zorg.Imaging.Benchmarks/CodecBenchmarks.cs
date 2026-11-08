@@ -94,6 +94,14 @@ public class CodecBenchmarks
     }
 
     [Benchmark]
+    public int Encode_WebpLossless()
+    {
+        using var output = new MemoryStream();
+        _decoded.SaveAsWebp(output, new WebpEncoderOptions { Lossless = true });
+        return (int)output.Length;
+    }
+
+    [Benchmark]
     public async Task<int> Web_JpegToJpeg()
     {
         using var output = new MemoryStream();
