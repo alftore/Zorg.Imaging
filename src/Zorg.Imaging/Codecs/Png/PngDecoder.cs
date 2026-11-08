@@ -183,13 +183,13 @@ internal static class PngDecoder
 
         if (animated && !defaultIsFrame)
         {
-            return await DecodeFirstFrameAsync(reader, length, header, palette, transparency, colour.Resolve(), Metadata.ImageMetadata.From(exifBlock, xmp), orientation, options, sync, head, cancellationToken).ConfigureAwait(false);
+            return await DecodeFirstFrameAsync(reader, length, header, palette, transparency, colour.Resolve(), Metadata.SourceMetadata.From(exifBlock, xmp), orientation, options, sync, head, cancellationToken).ConfigureAwait(false);
         }
 
         var converter = new PngRowConverter(header, palette, transparency, options.PixelFormat);
         Image image = header.CreateImage(converter.Target);
         image.ColorSpace = colour.Resolve();
-        image.Metadata = Metadata.ImageMetadata.From(exifBlock, xmp);
+        image.SourceMetadata = Metadata.SourceMetadata.From(exifBlock, xmp);
         try
         {
             var idat = new IdatStream(reader, length, sync);
@@ -222,7 +222,7 @@ internal static class PngDecoder
         byte[]? palette,
         byte[]? transparency,
         ColorSpace colorSpace,
-        Metadata.ImageMetadata? metadata,
+        Metadata.SourceMetadata? metadata,
         int orientation,
         DecodeOptions options,
         bool sync,
@@ -306,7 +306,7 @@ internal static class PngDecoder
             }
 
             frame.ColorSpace = colorSpace;
-            frame.Metadata = metadata;
+            frame.SourceMetadata = metadata;
             if (options.ApplyOrientation && orientation != 1)
             {
                 Image upright = Orientation.Apply(frame, orientation);

@@ -88,6 +88,7 @@ public class JpegMutationTests
         using Image photo = JpegEncoderTests.Photo(40, 30);
         photo.ColorSpace = ColorSpace.DisplayP3;
         files["encoded-p3-icc"] = JpegEncoderTests.Save(photo, new JpegEncoderOptions { ColorSpaceHandling = ColorSpaceHandling.Keep, Quality = 90 });
+        files["metadata-exif-iptc"] = Metadata.MetadataReadingTests.Rich();
         return files;
     }
 }

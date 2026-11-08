@@ -106,10 +106,15 @@ internal static class DecoderFuzz
         }
     }
 
-    /// <summary>Decodes with <see cref="Small"/> limits at full size.</summary>
+    /// <summary>Decodes with <see cref="Small"/> limits at full size, and reads every metadata fact, which parses lazily.</summary>
     public static void Decode(byte[] data)
     {
         using Image image = Image.Decode(data, Small);
+        if (image.Metadata is { } metadata)
+        {
+            _ = (metadata.CameraMake, metadata.CameraModel, metadata.LensModel, metadata.DateTaken, metadata.Location, metadata.Artist);
+            _ = (metadata.Copyright, metadata.Description, metadata.Title, metadata.Keywords.Count, metadata.Orientation);
+        }
     }
 
     /// <summary><see cref="Image.Identify"/> never throws for bad input: it reports it in the result.</summary>

@@ -111,7 +111,7 @@ internal static class JpegEncoder
 
         var output = new ArrayBufferWriter<byte>(4096 + profile.Length);
         (byte[]? exif, byte[]? xmp) = Metadata.MetadataWriter.Prepare(image, options.Metadata);
-        WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, progressive: false);
+        WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, progressive: false, options.Metadata);
         WriteTables(output, dcLuma, acLuma, dcChroma, acChroma);
 
         // SOS: every component, full spectrum, no approximation.
@@ -406,7 +406,8 @@ internal static class JpegEncoder
         int factor,
         byte[] luminance,
         byte[] chrominance,
-        bool progressive)
+        bool progressive,
+        MetadataOptions options)
     {
         output.Write<byte>([0xFF, 0xD8]);
 
@@ -423,6 +424,12 @@ internal static class JpegEncoder
         if (xmp is not null && xmp.Length + xmpPrefix.Length <= 65533)
         {
             Segment(output, 0xE1, [.. xmpPrefix, .. xmp]);
+        }
+
+        // IPTC in a Photoshop APP13 segment, when kept and small enough for one.
+        if (Metadata.MetadataWriter.PrepareIptc(image, options) is { } iptc && iptc.Length + 40 <= 65533)
+        {
+            Segment(output, 0xED, Iptc.ToPhotoshop(iptc));
         }
 
         // The ICC profile in APP2 chunks of at most 65,519 bytes, numbered from 1 (ICC.1, B.4).
@@ -496,7 +503,7 @@ internal static class JpegEncoder
     {
         var output = new ArrayBufferWriter<byte>(4096 + profile.Length);
         (byte[]? exif, byte[]? xmp) = Metadata.MetadataWriter.Prepare(image, options.Metadata);
-        WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, progressive: true);
+        WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, progressive: true, options.Metadata);
 
         // The blocks with samples in each component, for scans of one component (A.2.2), which skip MCU padding.
         int[] usedWide = new int[planes.Length];

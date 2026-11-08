@@ -53,7 +53,7 @@ internal static class WebpDecoder
         PixelFormat format = options.PixelFormat != PixelFormat.None ? options.PixelFormat : picture.HasAlpha ? PixelFormat.Rgba32 : PixelFormat.Rgb24;
         Image image = Argb.ToImage(picture.Pixels, picture.Width, picture.Height, picture.HasAlpha, format);
         image.ColorSpace = file.ColorSpace;
-        image.Metadata = Metadata.ImageMetadata.From(file.Exif, file.Xmp);
+        image.SourceMetadata = Metadata.SourceMetadata.From(file.Exif, file.Xmp);
         if (options.ApplyOrientation && file.Orientation != 1)
         {
             try

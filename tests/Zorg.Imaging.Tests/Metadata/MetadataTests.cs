@@ -131,11 +131,11 @@ public class MetadataTests
             using Image again = Image.Decode(file);
             Assert.Equal((32, 48), (again.Width, again.Height));
             ImageMetadata metadata = again.Metadata!;
-            var (main, exif, gps, _) = Read(metadata.Exif!);
+            var (main, exif, gps, _) = Read(metadata.Exif.ToArray());
             Assert.Equal(1u, Value(main[0x0112], true));
             Assert.Equal(32u, Value(exif[0xA002], true));
             Assert.Equal("N", Text(gps[0x0001]));
-            Assert.Equal(XmpPacket, metadata.Xmp);
+            Assert.Equal(XmpPacket, metadata.Xmp.ToArray());
         }
 
         foreach (byte[] file in new[] { Save(decoded, image => s => image.SaveAsJpeg(s)), Save(decoded, image => s => image.SaveAsPng(s)), Save(decoded, image => s => image.SaveAsWebp(s)) })
@@ -147,10 +147,10 @@ public class MetadataTests
         // A resized copy carries it too, with its own size.
         using Image small = decoded.Resize(16, 0);
         using Image back = Image.Decode(Save(small, image => s => image.SaveAsJpeg(s, new JpegEncoderOptions { Metadata = MetadataOptions.Keep.Without(ExifGroup.Location) })));
-        var (_, smallExif, smallGps, _) = Read(back.Metadata!.Exif!);
+        var (_, smallExif, smallGps, _) = Read(back.Metadata!.Exif.ToArray());
         Assert.Equal(16u, Value(smallExif[0xA002], true));
         Assert.Empty(smallGps);
-        Assert.Null(back.Metadata.Xmp);
+        Assert.True(back.Metadata.Xmp.IsEmpty);
     }
 
     [Fact]

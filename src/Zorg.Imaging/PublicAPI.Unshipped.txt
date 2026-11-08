@@ -410,3 +410,26 @@ Zorg.Imaging.ImagePipeline.SaveAsAsync(System.IO.Stream! stream, Zorg.Imaging.Im
 Zorg.Imaging.ImagePipeline.ToSrgb() -> Zorg.Imaging.ImagePipeline!
 Zorg.Imaging.JpegEncoderOptions.Progressive.get -> bool
 Zorg.Imaging.JpegEncoderOptions.Progressive.init -> void
+Zorg.Imaging.GeoLocation
+Zorg.Imaging.GeoLocation.Altitude.get -> double?
+Zorg.Imaging.GeoLocation.GeoLocation(double latitude, double longitude, double? altitude) -> void
+Zorg.Imaging.GeoLocation.Latitude.get -> double
+Zorg.Imaging.GeoLocation.Longitude.get -> double
+override Zorg.Imaging.GeoLocation.ToString() -> string!
+Zorg.Imaging.Image.Metadata.get -> Zorg.Imaging.ImageMetadata?
+Zorg.Imaging.ImageMetadata
+Zorg.Imaging.ImageMetadata.Artist.get -> string?
+Zorg.Imaging.ImageMetadata.CameraMake.get -> string?
+Zorg.Imaging.ImageMetadata.CameraModel.get -> string?
+Zorg.Imaging.ImageMetadata.Copyright.get -> string?
+Zorg.Imaging.ImageMetadata.DateTaken.get -> System.DateTime?
+Zorg.Imaging.ImageMetadata.DateTakenOffset.get -> System.TimeSpan?
+Zorg.Imaging.ImageMetadata.Description.get -> string?
+Zorg.Imaging.ImageMetadata.Exif.get -> System.ReadOnlyMemory<byte>
+Zorg.Imaging.ImageMetadata.Iptc.get -> System.ReadOnlyMemory<byte>
+Zorg.Imaging.ImageMetadata.Keywords.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Imaging.ImageMetadata.LensModel.get -> string?
+Zorg.Imaging.ImageMetadata.Location.get -> Zorg.Imaging.GeoLocation?
+Zorg.Imaging.ImageMetadata.Orientation.get -> int
+Zorg.Imaging.ImageMetadata.Title.get -> string?
+Zorg.Imaging.ImageMetadata.Xmp.get -> System.ReadOnlyMemory<byte>

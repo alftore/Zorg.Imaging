@@ -140,6 +140,10 @@ internal static class JpegDecoder
                     state.Xmp = data[XmpPrefix.Length..];
                     break;
 
+                case 0xED when data.AsSpan().StartsWith(Iptc.PhotoshopSignature):
+                    state.AddPhotoshop(data.AsSpan(Iptc.PhotoshopSignature.Length));
+                    break;
+
                 case App2 when data.AsSpan().StartsWith(IccPrefix):
                     state.AddIccChunk(data);
                     break;
@@ -165,12 +169,12 @@ internal static class JpegDecoder
 
         reader.Finish();
         ColorSpace colorSpace = state.ResolveColorSpace();
-        Metadata.ImageMetadata? metadata = Metadata.ImageMetadata.From(state.Exif, state.Xmp);
+        Metadata.SourceMetadata? metadata = Metadata.SourceMetadata.From(state.Exif, state.Xmp, state.Iptc);
         Image? image = Output(state, options);
         try
         {
             image.ColorSpace = colorSpace;
-            image.Metadata = metadata;
+            image.SourceMetadata = metadata;
             if (options.ApplyOrientation && state.Orientation != 1)
             {
                 Image upright = Orientation.Apply(image, state.Orientation);
@@ -325,6 +329,22 @@ internal static class JpegDecoder
         public byte[]? Xmp { get; set; }
 
         public int Orientation { get; set; } = 1;
+
+        /// <summary>The IPTC records from the Photoshop APP13 segments, which may split one resource block between them.</summary>
+        public byte[]? Iptc => _photoshop is null ? null : Metadata.Iptc.FromPhotoshop(_photoshop.ToArray());
+
+        private List<byte>? _photoshop;
+
+        public void AddPhotoshop(ReadOnlySpan<byte> resources)
+        {
+            _photoshop ??= [];
+            if (_photoshop.Count + resources.Length > ColorSpace.MaxIccProfileBytes)
+            {
+                return;
+            }
+
+            _photoshop.AddRange(resources);
+        }
 
         /// <summary>While a baseline scan streams: the planes it fills, at <see cref="Scale"/>, and the stream itself.</summary>
         public JpegOutput.Plane[]? Planes { get; set; }

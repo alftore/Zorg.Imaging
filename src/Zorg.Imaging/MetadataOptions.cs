@@ -10,8 +10,9 @@ namespace Zorg.Imaging;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Metadata comes from the file the image was decoded from: EXIF and XMP from JPEG, PNG and WebP. Images made in code
-/// have none. Colour profiles aren't metadata here: see <see cref="ColorSpaceHandling"/>.
+/// Metadata comes from the file the image was decoded from: EXIF and XMP from JPEG, PNG and WebP, and IPTC from JPEG.
+/// Images made in code have none. <see cref="Image.Metadata"/> reads it whatever these options say. Colour profiles
+/// aren't metadata here: see <see cref="ColorSpaceHandling"/>.
 /// </para>
 /// <para>
 /// EXIF is rebuilt, not copied: its orientation becomes 1 when the pixels have been turned upright (the default
@@ -19,6 +20,11 @@ namespace Zorg.Imaging;
 /// camera data, which can't be moved safely and often holds serial numbers) are dropped. A damaged EXIF block is
 /// dropped rather than copied. XMP is copied as it is; it can repeat what EXIF says, location included, so it's kept
 /// only by <see cref="Keep"/> with no group left out.
+/// </para>
+/// <para>
+/// IPTC is written back to JPEG only (PNG and WebP have no standard place for it), and only its descriptive records:
+/// the groups left out drop its place names and the creator's contact details (<see cref="ExifGroup.Location"/>) and
+/// its dates (<see cref="ExifGroup.Dates"/>), and <see cref="CopyrightOnly"/> keeps just the by-line and copyright.
 /// </para>
 /// </remarks>
 /// <example>

@@ -31,7 +31,7 @@ public sealed partial class Image
         }
 
         _ = Buffer;
-        var result = new Image(width, height, PixelFormat) { ColorSpace = ColorSpace, Metadata = Metadata };
+        var result = new Image(width, height, PixelFormat) { ColorSpace = ColorSpace, SourceMetadata = SourceMetadata };
         for (int row = 0; row < height; row++)
         {
             GetRowBytes(y + row).Slice(x * BytesPerPixel, result.Stride).CopyTo(result.GetRowBytes(row));
@@ -127,7 +127,7 @@ public sealed partial class Image
         _ = Buffer;
         (int w, int h) = Inside(width, height);
         using Image inner = Resize(w, h, resampler);
-        var result = new Image(width, height, PixelFormat) { ColorSpace = ColorSpace, Metadata = Metadata };
+        var result = new Image(width, height, PixelFormat) { ColorSpace = ColorSpace, SourceMetadata = SourceMetadata };
         Span<byte> pixel = stackalloc byte[BytesPerPixel];
         Encode(background, PixelFormat, pixel);
         Span<byte> all = result.GetPixelBytes();
@@ -208,7 +208,7 @@ public sealed partial class Image
         {
             case PixelFormat.Rgba32 or PixelFormat.Bgra32:
             {
-                var result = new Image(Width, Height, PixelFormat.Rgb24) { ColorSpace = ColorSpace, Metadata = Metadata };
+                var result = new Image(Width, Height, PixelFormat.Rgb24) { ColorSpace = ColorSpace, SourceMetadata = SourceMetadata };
                 bool bgra = PixelFormat == PixelFormat.Bgra32;
                 for (int y = 0; y < Height; y++)
                 {
@@ -230,7 +230,7 @@ public sealed partial class Image
 
             case PixelFormat.Rgba64:
             {
-                var result = new Image(Width, Height, PixelFormat.Rgb48) { ColorSpace = ColorSpace, Metadata = Metadata };
+                var result = new Image(Width, Height, PixelFormat.Rgb48) { ColorSpace = ColorSpace, SourceMetadata = SourceMetadata };
                 for (int y = 0; y < Height; y++)
                 {
                     ReadOnlySpan<ushort> from = MemoryMarshal.Cast<byte, ushort>(GetRowBytes(y));

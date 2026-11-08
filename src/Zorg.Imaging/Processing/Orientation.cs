@@ -28,7 +28,7 @@ internal static class Orientation
             ColorSpace = source.ColorSpace,
 
             // The pixels are turned, so an EXIF orientation no longer describes them.
-            Metadata = orientation == 1 ? source.Metadata : source.Metadata is { } metadata ? metadata with { OrientationApplied = true } : null,
+            SourceMetadata = orientation == 1 ? source.SourceMetadata : source.SourceMetadata is { } metadata ? metadata with { OrientationApplied = true } : null,
         };
         switch (source.BytesPerPixel)
         {

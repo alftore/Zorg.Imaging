@@ -2,6 +2,8 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 
+using static Zorg.Imaging.Metadata.ExifReader;
+
 namespace Zorg.Imaging.Metadata;
 
 /// <summary>
@@ -22,7 +24,6 @@ internal static class ExifWriter
     private const ushort Orientation = 0x0112;
     private const ushort PixelXDimension = 0xA002;
     private const ushort PixelYDimension = 0xA003;
-    private const int MaxEntries = 512;
 
     // Main IFD tags that only describe image data in a TIFF file, point at blocks not copied, or carry other metadata.
     private static readonly HashSet<ushort> MainDropped =
@@ -140,84 +141,6 @@ internal static class ExifWriter
         }
 
         return writer.Write(mainOut, exifOut, interop, gpsOut);
-    }
-
-    private static List<Entry>? Child(Reader reader, List<Entry> parent, ushort pointer)
-    {
-        Entry? entry = parent.Find(e => e.Tag == pointer);
-        if (entry is null || entry.Type is not (4 or 13) || entry.Value.Length < 4)
-        {
-            return null;
-        }
-
-        return reader.Ifd(reader.U32(entry.Value, 0));
-    }
-
-    private static int TypeSize(ushort type) => type switch
-    {
-        1 or 2 or 6 or 7 => 1,
-        3 or 8 => 2,
-        4 or 9 or 11 or 13 => 4,
-        5 or 10 or 12 => 8,
-        _ => 0,
-    };
-
-    // A tag with its value bytes in the source's byte order.
-    private sealed record Entry(ushort Tag, ushort Type, uint Count, byte[] Value);
-
-    private readonly ref struct Reader(ReadOnlySpan<byte> data, bool little)
-    {
-        private readonly ReadOnlySpan<byte> _data = data;
-
-        public ushort U16(int at) => little ? BinaryPrimitives.ReadUInt16LittleEndian(_data[at..]) : BinaryPrimitives.ReadUInt16BigEndian(_data[at..]);
-
-        public uint U32(int at) => little ? BinaryPrimitives.ReadUInt32LittleEndian(_data[at..]) : BinaryPrimitives.ReadUInt32BigEndian(_data[at..]);
-
-        public ushort U16(byte[] value, int at) => little ? BinaryPrimitives.ReadUInt16LittleEndian(value.AsSpan(at)) : BinaryPrimitives.ReadUInt16BigEndian(value.AsSpan(at));
-
-        public uint U32(byte[] value, int at) => little ? BinaryPrimitives.ReadUInt32LittleEndian(value.AsSpan(at)) : BinaryPrimitives.ReadUInt32BigEndian(value.AsSpan(at));
-
-        // The entries of the IFD at an offset, or null when its header doesn't fit. Entries whose values don't fit are
-        // left out.
-        public List<Entry>? Ifd(uint offset)
-        {
-            if (offset < 8 || offset > _data.Length - 2)
-            {
-                return null;
-            }
-
-            int count = U16((int)offset);
-            if (count > MaxEntries || offset + 2 + (count * 12L) > _data.Length)
-            {
-                return null;
-            }
-
-            var entries = new List<Entry>(count);
-            var seen = new HashSet<ushort>();
-            for (int i = 0; i < count; i++)
-            {
-                int at = (int)offset + 2 + (i * 12);
-                ushort tag = U16(at);
-                ushort type = U16(at + 2);
-                uint items = U32(at + 4);
-                int size = TypeSize(type);
-                long bytes = size * (long)items;
-                if (size == 0 || bytes > _data.Length || !seen.Add(tag))
-                {
-                    continue;
-                }
-
-                long valueAt = bytes <= 4 ? at + 8 : U32(at + 8);
-                if (valueAt + bytes > _data.Length)
-                {
-                    continue;
-                }
-
-                entries.Add(new Entry(tag, type, items, _data.Slice((int)valueAt, (int)bytes).ToArray()));
-            }
-
-            return entries;
-        }
     }
 
     private sealed class Writer(bool little)

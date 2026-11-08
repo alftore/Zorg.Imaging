@@ -74,7 +74,36 @@ public sealed partial class Image : IDisposable
     } = ColorSpace.Srgb;
 
     /// <summary>The metadata from the file this image was decoded from, carried by operations, for the encoders.</summary>
-    internal Metadata.ImageMetadata? Metadata { get; set; }
+    internal Metadata.SourceMetadata? SourceMetadata { get; set; }
+
+    /// <summary>
+    /// The metadata the image was decoded with (EXIF, XMP and IPTC, and the facts most wanted from them), or
+    /// <see langword="null"/> when the file had none or the image was made in code. Operations carry it to the images
+    /// they make. Encoders write it back only when their <see cref="MetadataOptions"/> say so.
+    /// </summary>
+    /// <example><code>string? camera = photo.Metadata?.CameraModel;</code></example>
+    public ImageMetadata? Metadata
+    {
+        get
+        {
+            if (SourceMetadata is not { } source)
+            {
+                return null;
+            }
+
+            // Made once for each source; operations share the source, so their images share the view's work too.
+            ImageMetadata? view = _metadataView;
+            if (view is null || !ReferenceEquals(view.Source, source))
+            {
+                view = new ImageMetadata(source);
+                _metadataView = view;
+            }
+
+            return view;
+        }
+    }
+
+    private ImageMetadata? _metadataView;
 
     /// <summary>How each pixel is laid out.</summary>
     /// <example><code>bool hasAlpha = image.PixelFormat is PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Rgba64;</code></example>
@@ -146,7 +175,7 @@ public sealed partial class Image : IDisposable
     public Image Clone()
     {
         Span<byte> source = GetPixelBytes();
-        var copy = new Image(Width, Height, PixelFormat) { ColorSpace = ColorSpace, Metadata = Metadata };
+        var copy = new Image(Width, Height, PixelFormat) { ColorSpace = ColorSpace, SourceMetadata = SourceMetadata };
         source.CopyTo(copy.GetPixelBytes());
         return copy;
     }
