@@ -291,6 +291,10 @@ internal sealed class Vp8Encoder
         Span<long> subRank = stackalloc long[10];
         Span<byte> original = stackalloc byte[16];
         Span<byte> predictions = stackalloc byte[10 * 16];
+        Span<byte> trialPredictions = stackalloc byte[4 * 16];
+        Span<short> trialLevels = stackalloc short[4 * 16];
+        Span<byte> trialReconstructions = stackalloc byte[4 * 16];
+        Span<long> trialDistortions = stackalloc long[4];
         long subTotal = _subblocks ? _lambda * ModeCost(BPred) : long.MaxValue;
         for (int i = 0; i < 16 && subTotal < best; i++)
         {
@@ -316,20 +320,32 @@ internal sealed class Vp8Encoder
             }
 
             subRank.Sort();
-            for (int k = 0; k < _subblockCandidates; k++)
+
+            // The best few candidates in rank order, four at a time through the vector trial (TrialFour).
+            for (int group = 0; group < _subblockCandidates; group += 4)
             {
-                int mode = (int)(subRank[k] & 0xF);
-                WriteSubblock(_y, bx, by, predictions.Slice(mode * 16, 16));
-                (long distortion, int bits, bool nonZero) = Subblock(bx, by, 3, 0, context, _y1Dc, _y1Ac, blockLevels);
-                bits += modeCosts[mode];
-                long score = distortion + (_lambdaSubblock * bits);
-                if (score < bestSub)
+                int count = Math.Min(4, _subblockCandidates - group);
+                for (int k = 0; k < 4; k++)
                 {
-                    bestSub = score;
-                    bestSubMode = mode;
-                    bestNonZero = nonZero;
-                    blockLevels.CopyTo(subLevels.Slice(i * 16, 16));
-                    Save(_y, bx, by, 4, reconstruction);
+                    int mode = (int)(subRank[group + Math.Min(k, count - 1)] & 0xF);
+                    predictions.Slice(mode * 16, 16).CopyTo(trialPredictions.Slice(k * 16, 16));
+                }
+
+                TrialFour(original, trialPredictions, _y1Dc, _y1Ac, trialLevels, trialReconstructions, trialDistortions);
+                for (int k = 0; k < count; k++)
+                {
+                    int mode = (int)(subRank[group + k] & 0xF);
+                    ReadOnlySpan<short> candidate = trialLevels.Slice(k * 16, 16);
+                    int bits = BlockCost(candidate, 3, 0, context) + modeCosts[mode];
+                    long score = trialDistortions[k] + (_lambdaSubblock * bits);
+                    if (score < bestSub)
+                    {
+                        bestSub = score;
+                        bestSubMode = mode;
+                        bestNonZero = HasLevels(candidate, 0);
+                        candidate.CopyTo(subLevels.Slice(i * 16, 16));
+                        trialReconstructions.Slice(k * 16, 16).CopyTo(reconstruction);
+                    }
                 }
             }
 
@@ -441,6 +457,123 @@ internal sealed class Vp8Encoder
         AddResidual(_y, bx, by, dequantised, any: true);
         return (Distortion(_sourceY, (by * _strideY) + bx, _strideY, _y, bx, by), bits, HasLevels(levels, first));
     }
+
+    // Four candidate predictions of one 4 x 4 luma block (Y type, DC included) at once, one in each lane: the residual,
+    // forward DCT, quantisation and dequantisation, inverse DCT, reconstruction and squared error, in the same integer
+    // steps as ForwardDct, Quantise, AddResidual and Distortion, so each lane's results equal theirs. Levels come out in
+    // scan order, sixteen per candidate; reconstructions as sixteen bytes per candidate, row by row.
+    private static void TrialFour(ReadOnlySpan<byte> original, ReadOnlySpan<byte> predictions, int dc, int ac, Span<short> levelsOut, Span<byte> reconstructions, Span<long> distortions)
+    {
+        Span<Vector128<int>> e = stackalloc Vector128<int>[16];
+        for (int i = 0; i < 16; i++)
+        {
+            int o = original[i];
+            e[i] = Vector128.Create(o - predictions[i], o - predictions[16 + i], o - predictions[32 + i], o - predictions[48 + i]);
+        }
+
+        // Forward DCT: rows (scaled by 8), then columns.
+        Vector128<int> c5352 = Vector128.Create(5352);
+        Vector128<int> c2217 = Vector128.Create(2217);
+        Span<Vector128<int>> temp = stackalloc Vector128<int>[16];
+        for (int r = 0; r < 4; r++)
+        {
+            Vector128<int> d0 = e[r * 4], d1 = e[(r * 4) + 1], d2 = e[(r * 4) + 2], d3 = e[(r * 4) + 3];
+            Vector128<int> a0 = d0 + d3, a1 = d1 + d2, a2 = d1 - d2, a3 = d0 - d3;
+            temp[r * 4] = (a0 + a1) * 8;
+            temp[(r * 4) + 2] = (a0 - a1) * 8;
+            temp[(r * 4) + 1] = Vector128.ShiftRightArithmetic((a3 * c5352) + (a2 * c2217) + Vector128.Create(256), 9);
+            temp[(r * 4) + 3] = Vector128.ShiftRightArithmetic((a3 * c2217) - (a2 * c5352) + Vector128.Create(256), 9);
+        }
+
+        Span<Vector128<int>> coefficients = e;
+        for (int c = 0; c < 4; c++)
+        {
+            Vector128<int> a0 = temp[c] + temp[12 + c], a1 = temp[4 + c] + temp[8 + c], a2 = temp[4 + c] - temp[8 + c], a3 = temp[c] - temp[12 + c];
+            coefficients[c] = Short(Vector128.ShiftRightArithmetic(a0 + a1 + Vector128.Create(8), 4));
+            coefficients[8 + c] = Short(Vector128.ShiftRightArithmetic(a0 - a1 + Vector128.Create(8), 4));
+            coefficients[4 + c] = Short(Vector128.ShiftRightArithmetic((a3 * c5352) + (a2 * c2217) + Vector128.Create(32768), 16));
+            coefficients[12 + c] = Short(Vector128.ShiftRightArithmetic((a3 * c2217) - (a2 * c5352) + Vector128.Create(32768), 16));
+        }
+
+        // Quantise (natural order) and dequantise, with the same 16-bit wrap the scalar code's casts make.
+        Span<Vector128<int>> levels = temp;
+        Span<Vector128<int>> dequantised = stackalloc Vector128<int>[16];
+        for (int n = 0; n < 16; n++)
+        {
+            int q = n == 0 ? dc : ac;
+            (uint multiplier, int shift) = Magic[q];
+            Vector128<int> value = coefficients[n];
+            Vector128<int> magnitude = Vector128.Abs(value) + Vector128.Create(n == 0 ? q / 2 : (q * 3) / 8);
+            Vector128<int> level = Vector128.Min(Vector128.ShiftRightLogical(magnitude.AsUInt32() * Vector128.Create(multiplier), shift).AsInt32(), Vector128.Create(2048));
+            level = Vector128.ConditionalSelect(Vector128.LessThan(value, Vector128<int>.Zero), -level, level);
+            levels[n] = level;
+            dequantised[n] = Short(level * q);
+        }
+
+        ReadOnlySpan<byte> zigzag = ZigZag;
+        for (int c = 0; c < 16; c++)
+        {
+            Vector128<int> level = levels[zigzag[c]];
+            levelsOut[c] = (short)level.GetElement(0);
+            levelsOut[16 + c] = (short)level.GetElement(1);
+            levelsOut[32 + c] = (short)level.GetElement(2);
+            levelsOut[48 + c] = (short)level.GetElement(3);
+        }
+
+        // Inverse DCT (section 14.4): columns, then rows, rounded by 8, added to the prediction and clamped.
+        Vector128<int> cos = Vector128.Create(20091);
+        Vector128<int> sin = Vector128.Create(35468);
+        Span<Vector128<int>> pass = e;
+        for (int i = 0; i < 4; i++)
+        {
+            Vector128<int> i0 = dequantised[i], i4 = dequantised[4 + i], i8 = dequantised[8 + i], i12 = dequantised[12 + i];
+            Vector128<int> a1 = i0 + i8;
+            Vector128<int> b1 = i0 - i8;
+            Vector128<int> c1 = Vector128.ShiftRightArithmetic(i4 * sin, 16) - (i12 + Vector128.ShiftRightArithmetic(i12 * cos, 16));
+            Vector128<int> d1 = i4 + Vector128.ShiftRightArithmetic(i4 * cos, 16) + Vector128.ShiftRightArithmetic(i12 * sin, 16);
+            pass[i] = a1 + d1;
+            pass[12 + i] = a1 - d1;
+            pass[4 + i] = b1 + c1;
+            pass[8 + i] = b1 - c1;
+        }
+
+        // Squared errors fit 32 bits: sixteen of at most 255^2.
+        Vector128<int> four = Vector128.Create(4);
+        Vector128<int> sum = Vector128<int>.Zero;
+        Span<Vector128<int>> residual = stackalloc Vector128<int>[4];
+        for (int i = 0; i < 4; i++)
+        {
+            Vector128<int> t0 = pass[i * 4], t1 = pass[(i * 4) + 1], t2 = pass[(i * 4) + 2], t3 = pass[(i * 4) + 3];
+            Vector128<int> a1 = t0 + t2;
+            Vector128<int> b1 = t0 - t2;
+            Vector128<int> c1 = Vector128.ShiftRightArithmetic(t1 * sin, 16) - (t3 + Vector128.ShiftRightArithmetic(t3 * cos, 16));
+            Vector128<int> d1 = t1 + Vector128.ShiftRightArithmetic(t1 * cos, 16) + Vector128.ShiftRightArithmetic(t3 * sin, 16);
+            residual[0] = Vector128.ShiftRightArithmetic(a1 + d1 + four, 3);
+            residual[1] = Vector128.ShiftRightArithmetic(b1 + c1 + four, 3);
+            residual[2] = Vector128.ShiftRightArithmetic(b1 - c1 + four, 3);
+            residual[3] = Vector128.ShiftRightArithmetic(a1 - d1 + four, 3);
+            for (int x = 0; x < 4; x++)
+            {
+                int at = (i * 4) + x;
+                Vector128<int> prediction = Vector128.Create(predictions[at], predictions[16 + at], predictions[32 + at], predictions[48 + at]);
+                Vector128<int> pixel = Vector128.Min(Vector128.Max(prediction + residual[x], Vector128<int>.Zero), Vector128.Create(255));
+                Vector128<int> error = Vector128.Create((int)original[at]) - pixel;
+                sum += error * error;
+                reconstructions[at] = (byte)pixel.GetElement(0);
+                reconstructions[16 + at] = (byte)pixel.GetElement(1);
+                reconstructions[32 + at] = (byte)pixel.GetElement(2);
+                reconstructions[48 + at] = (byte)pixel.GetElement(3);
+            }
+        }
+
+        distortions[0] = (long)sum.GetElement(0) << 8;
+        distortions[1] = (long)sum.GetElement(1) << 8;
+        distortions[2] = (long)sum.GetElement(2) << 8;
+        distortions[3] = (long)sum.GetElement(3) << 8;
+    }
+
+    // A value as the scalar code's (short) cast leaves it: the low 16 bits, sign-extended.
+    private static Vector128<int> Short(Vector128<int> value) => Vector128.ShiftRightArithmetic(Vector128.ShiftLeft(value, 16), 16);
 
     private void ChooseChroma(ref Macroblock mb, int mx, int my, Span<byte> leftNonZero, Span<byte> aboveNonZero)
     {
