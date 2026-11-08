@@ -23,14 +23,14 @@ internal static class WebpLossy
 {
     public static uint[] Decode(byte[] vp8, byte[]? alpha, int width, int height)
     {
-        Vp8Decoder frame = Vp8Decoder.Decode(vp8);
-        if (frame.Width != width || frame.Height != height)
+        (int frameWidth, int frameHeight) = Vp8Decoder.ReadSize(vp8);
+        if (frameWidth != width || frameHeight != height)
         {
             throw ImageErrors.Corrupt("The WebP lossy image's size doesn't match the canvas or frame.");
         }
 
         uint[] argb = new uint[(long)width * height];
-        ToRgb(frame, argb);
+        Vp8Decoder.Decode(vp8, (frame, row) => ToRgb(frame, row, argb));
         if (alpha is not null)
         {
             byte[] values = DecodeAlpha(alpha, width, height);
@@ -43,20 +43,31 @@ internal static class WebpLossy
         return argb;
     }
 
-    private static void ToRgb(Vp8Decoder frame, uint[] argb)
+    // The output rows of one macroblock row: row 0 sits on chroma row 0 alone; then each pair of rows (2k - 1, 2k)
+    // between chroma rows k - 1 and k, taken by the macroblock row that holds row 2k; an even height's last row on the
+    // last chroma row alone (libwebp's EmitFancyRGB, split by macroblock row).
+    private static void ToRgb(Vp8Decoder frame, int macroblockRow, uint[] argb)
     {
         int width = frame.Width;
         int height = frame.Height;
+        int first = 16 * macroblockRow;
+        int end = Math.Min(first + 16, height);
+        if (first >= height)
+        {
+            return;
+        }
 
-        // Row 0 sits on chroma row 0 alone; then each pair of rows (2k - 1, 2k) between chroma rows k - 1 and k; an
-        // even height's last row on the last chroma row alone (libwebp's EmitFancyRGB).
-        Pair(frame, 0, -1, 0, 0, argb, width);
-        for (int k = 1; 2 * k <= height - 1; k++)
+        if (macroblockRow == 0)
+        {
+            Pair(frame, 0, -1, 0, 0, argb, width);
+        }
+
+        for (int k = Math.Max(1, 8 * macroblockRow); 2 * k < end && 2 * k <= height - 1; k++)
         {
             Pair(frame, (2 * k) - 1, 2 * k, k - 1, k, argb, width);
         }
 
-        if ((height & 1) == 0)
+        if ((height & 1) == 0 && height - 1 >= first && height - 1 < end)
         {
             int last = (height / 2) - 1;
             Pair(frame, height - 1, -1, last, last, argb, width);

@@ -8,6 +8,38 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08, after the second round
+
+Same files and machine, quieter; 15 warm-up rounds so every method reaches its final compiled tier.
+
+| Task | One core | All cores | Native, one core |
+|---|---:|---:|---:|
+| JPEG decode, baseline | 75 ms | 37 ms | djpeg 40 ms |
+| JPEG decode, progressive | 171 ms | 139 ms | djpeg 110 ms |
+| JPEG thumbnail, 400 px | 98 ms | 37 ms | |
+| JPEG to JPEG at 1600 px | 219 ms | 62 ms | |
+| JPEG encode, quality 80 | 116 ms | 77 ms | cjpeg 120 ms |
+| WebP lossy decode | 305 ms | 169 ms | dwebp 160 ms |
+| WebP lossless decode | 239 ms | 255 ms | dwebp 220 ms |
+| PNG decode | 151 ms | 153 ms | |
+| PNG encode, level 6 | 628 ms | 631 ms | |
+
+What changed in this round:
+
+- **PNG encode** (1.5 s to 628 ms): the five row filters run as vectors and are scored in the same pass; what is
+  left is zlib's own time.
+- **JPEG encode** (about 2.3x on one core, now level with cjpeg): RGB to YCbCr by byte shuffles and float vectors,
+  blocks read in place, chroma averaged once per MCU row, vector quantisation, and a bit writer that stores four bytes
+  at a time.
+- **WebP lossless decode** (about 1.6x): two-level prefix-code tables with the bit buffer in locals, vector predictor
+  modes and transforms.
+- **WebP lossy decode on several cores** (about 1.8x): parsing, reconstruction, filtering and colour conversion run as
+  a row pipeline across threads; one core is unchanged.
+
+Left: lossy WebP and baseline JPEG on one core (about 1.9x the native tools: token decoding, reconstruction, and
+Huffman decoding), progressive JPEG's refinement scans, the scalar reduced inverse DCT used by shrink-on-load, and
+zlib's share of PNG encoding (which libpng pays too).
+
 ## 2026-11-08, after the first performance pass (D13)
 
 | Task | One core | All cores | Native, one core | Before the pass, one core |

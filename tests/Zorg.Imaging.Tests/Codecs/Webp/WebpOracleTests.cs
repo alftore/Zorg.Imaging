@@ -36,6 +36,35 @@ public class WebpOracleTests
         return data;
     }
 
+    [Fact]
+    public async Task A_large_lossy_file_decodes_the_same_on_one_core_and_on_many()
+    {
+        // Large enough for the row pipeline to use helper threads; the result must be dwebp's either way.
+        string cwebp = Oracle.Require("cwebp");
+        string dwebp = Oracle.Require("dwebp");
+        using Oracle.TempFolder folder = Oracle.CreateFolder();
+        using Image photo = JpegEncoderTests.Photo(1201, 901, PixelFormat.Rgba32, seed: 9);
+        await File.WriteAllBytesAsync(folder.File("in.png"), PngEncoderTests.Save(photo), TestContext.Current.CancellationToken);
+        (int written, _, string writeErrors) = await Oracle.RunAsync(cwebp, "-q", "75", "-quiet", folder.File("in.png"), "-o", folder.File("out.webp"));
+        Assert.True(written == 0, writeErrors);
+        (int read, _, string readErrors) = await Oracle.RunAsync(dwebp, "-quiet", "-pam", folder.File("out.webp"), "-o", folder.File("out.pam"));
+        Assert.True(read == 0, readErrors);
+
+        byte[] pam = await File.ReadAllBytesAsync(folder.File("out.pam"), TestContext.Current.CancellationToken);
+        byte[] expected = pam[(pam.AsSpan().IndexOf("ENDHDR\n"u8) + 7)..];
+        byte[] webp = await File.ReadAllBytesAsync(folder.File("out.webp"), TestContext.Current.CancellationToken);
+        using Image one = Image.Decode(webp, new DecodeOptions { PixelFormat = PixelFormat.Rgba32, MaxDegreeOfParallelism = 1 });
+        using Image many = Image.Decode(webp, new DecodeOptions { PixelFormat = PixelFormat.Rgba32, MaxDegreeOfParallelism = 8 });
+        Assert.Equal(expected, one.GetPixelBytes().ToArray());
+        Assert.Equal(expected, many.GetPixelBytes().ToArray());
+
+        // A failure in a helper thread reaches the caller as the same exception type.
+        byte[] cut = webp[..(webp.Length * 2 / 3)];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(cut.AsSpan(4), cut.Length - 8);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(cut.AsSpan(16), cut.Length - 20);
+        Assert.Throws<ImageFormatException>(() => Image.Decode(cut, new DecodeOptions { MaxDegreeOfParallelism = 8 }).Dispose());
+    }
+
     [Theory]
     [MemberData(nameof(Cases))]
     public async Task Files_cwebp_writes_decode_exactly_as_dwebp_decodes_them(string options, int width, int height, bool alpha)

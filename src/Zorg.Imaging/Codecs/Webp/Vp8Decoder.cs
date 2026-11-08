@@ -1,7 +1,10 @@
 using System;
+using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using Zorg.Imaging.Formats;
+using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging.Codecs.Webp;
 
@@ -125,7 +128,11 @@ internal sealed class Vp8Decoder
     }
 
     /// <summary>Decodes a whole VP8 chunk. The caller has checked the size against the limits.</summary>
-    public static Vp8Decoder Decode(byte[] data)
+    /// <param name="data">The chunk.</param>
+    /// <param name="convertRow">
+    /// Called once for each macroblock row, in order, as soon as that row's pixels are final, to convert them.
+    /// </param>
+    public static Vp8Decoder Decode(byte[] data, Action<Vp8Decoder, int> convertRow)
     {
         var decoder = new Vp8Decoder();
         (decoder.Width, decoder.Height) = ReadSize(data);
@@ -137,8 +144,7 @@ internal sealed class Vp8Decoder
 
         decoder._header = new Vp8BoolDecoder(data, 10, firstPartition);
         decoder.ReadFrameHeader(data, 10 + firstPartition);
-        decoder.DecodeMacroblocks();
-        decoder.Filter();
+        new RowPipeline(decoder, convertRow).Run();
         return decoder;
     }
 
@@ -271,7 +277,11 @@ internal sealed class Vp8Decoder
         _u = new Plane(_mbWide * 8, _mbHigh * 8, extra: 0);
         _v = new Plane(_mbWide * 8, _mbHigh * 8, extra: 0);
         _macroblocks = new Macroblock[_mbWide * _mbHigh];
+        PrepareRows();
     }
+
+    /// <summary>The number of macroblock rows: the units the row pipeline works in.</summary>
+    public int MacroblockRows => _mbHigh;
 
     private static short Dc(int index) => (short)Vp8Tables.DcQuantiser[Math.Clamp(index, 0, 127)];
 
@@ -282,100 +292,132 @@ internal sealed class Vp8Decoder
     private struct Macroblock
     {
         public int YMode;
+        public int UvMode;
         public int Segment;
         public bool HasCoefficients;
     }
 
-    private void DecodeMacroblocks()
+    // Rows parsed but not yet reconstructed are kept in a ring this deep.
+    private const int Ring = 4;
+
+    private byte[] _aboveModes = [];
+    private byte[] _aboveNonZero = [];
+    private short[][] _ringCoefficients = [];
+    private ulong[][] _ringNonZero = [];
+    private byte[][] _ringModes = [];
+
+    private void PrepareRows()
+    {
+        _aboveModes = new byte[_mbWide * 4];
+        _aboveNonZero = new byte[_mbWide * 9];
+        _ringCoefficients = new short[Ring][];
+        _ringNonZero = new ulong[Ring][];
+        _ringModes = new byte[Ring][];
+        for (int i = 0; i < Ring; i++)
+        {
+            _ringCoefficients[i] = new short[_mbWide * 25 * 16];
+            _ringNonZero[i] = new ulong[_mbWide];
+            _ringModes[i] = new byte[_mbWide * 16];
+        }
+    }
+
+    // Stage 1: one row's modes (first partition) and coefficients (its token partition), into the ring.
+    private void ParseRow(int my)
     {
         // Contexts: the subblock modes above (4 per macroblock) and to the left, and for tokens whether the blocks
         // above and to the left had coefficients: 4 Y, 2 U, 2 V and the Y2 block (section 13.3).
-        byte[] aboveModes = new byte[_mbWide * 4];
-        byte[] aboveNonZero = new byte[_mbWide * 9];
         Span<byte> leftModes = stackalloc byte[4];
         Span<byte> leftNonZero = stackalloc byte[9];
-        Span<byte> modes = stackalloc byte[16];
-        short[] coefficients = new short[25 * 16];
+        leftModes.Clear();
+        leftNonZero.Clear();
+        Vp8BoolDecoder tokens = _partitions[my % _partitions.Length];
+        int slot = my % Ring;
+        short[] rowCoefficients = _ringCoefficients[slot];
+        Array.Clear(rowCoefficients);
 
-        for (int my = 0; my < _mbHigh; my++)
+        for (int mx = 0; mx < _mbWide; mx++)
         {
-            leftModes.Clear();
-            leftNonZero.Clear();
-            Vp8BoolDecoder tokens = _partitions[my % _partitions.Length];
-
-            // The above-right pixels of the last macroblock repeat the last pixel of the row above (section 12.3).
-            if (my > 0)
+            ref Macroblock mb = ref _macroblocks[(my * _mbWide) + mx];
+            Span<byte> modes = _ringModes[slot].AsSpan(mx * 16, 16);
+            Vp8BoolDecoder h = _header;
+            if (_updateSegmentMap)
             {
-                Span<byte> above = _y.Row((my * 16) - 1);
-                above.Slice(_mbWide * 16, 4).Fill(above[(_mbWide * 16) - 1]);
+                mb.Segment = !h.ReadBool(_segmentProbabilities[0])
+                    ? (h.ReadBool(_segmentProbabilities[1]) ? 1 : 0)
+                    : (h.ReadBool(_segmentProbabilities[2]) ? 3 : 2);
             }
 
-            for (int mx = 0; mx < _mbWide; mx++)
+            bool skip = _skipEnabled && h.ReadBool(_skipProbability);
+            mb.YMode = h.ReadTree(YModeTree, YModeProbabilities);
+            Span<byte> above = _aboveModes.AsSpan(mx * 4, 4);
+            if (mb.YMode == BPred)
             {
-                ref Macroblock mb = ref _macroblocks[(my * _mbWide) + mx];
-                Vp8BoolDecoder h = _header;
-                if (_updateSegmentMap)
+                ReadOnlySpan<byte> table = Vp8Tables.KeyFrameSubblockModeProbabilities;
+                for (int i = 0; i < 16; i++)
                 {
-                    mb.Segment = !h.ReadBool(_segmentProbabilities[0])
-                        ? (h.ReadBool(_segmentProbabilities[1]) ? 1 : 0)
-                        : (h.ReadBool(_segmentProbabilities[2]) ? 3 : 2);
+                    int a = i < 4 ? above[i] : modes[i - 4];
+                    int l = (i & 3) == 0 ? leftModes[i >> 2] : modes[i - 1];
+                    modes[i] = (byte)h.ReadTree(SubblockModeTree, table.Slice(((a * 10) + l) * 9, 9));
                 }
 
-                bool skip = _skipEnabled && h.ReadBool(_skipProbability);
-                mb.YMode = h.ReadTree(YModeTree, YModeProbabilities);
-                Span<byte> above = aboveModes.AsSpan(mx * 4, 4);
-                if (mb.YMode == BPred)
+                modes.Slice(12, 4).CopyTo(above);
+                for (int r = 0; r < 4; r++)
                 {
-                    ReadOnlySpan<byte> table = Vp8Tables.KeyFrameSubblockModeProbabilities;
-                    for (int i = 0; i < 16; i++)
-                    {
-                        int a = i < 4 ? above[i] : modes[i - 4];
-                        int l = (i & 3) == 0 ? leftModes[i >> 2] : modes[i - 1];
-                        modes[i] = (byte)h.ReadTree(SubblockModeTree, table.Slice(((a * 10) + l) * 9, 9));
-                    }
-
-                    modes.Slice(12, 4).CopyTo(above);
-                    for (int r = 0; r < 4; r++)
-                    {
-                        leftModes[r] = modes[(r * 4) + 3];
-                    }
+                    leftModes[r] = modes[(r * 4) + 3];
                 }
-                else
-                {
-                    byte implied = mb.YMode switch { VPred => BVePred, HPred => BHePred, TmPred => BTmPred, _ => BDcPred };
-                    above.Fill(implied);
-                    leftModes.Fill(implied);
-                }
-
-                int uvMode = h.ReadTree(UvModeTree, UvModeProbabilities);
-
-                Span<byte> aboveTokens = aboveNonZero.AsSpan(mx * 9, 9);
-                Array.Clear(coefficients);
-                ulong nonZero = 0;
-                if (!skip)
-                {
-                    nonZero = ReadCoefficients(tokens, mb, coefficients, leftNonZero, aboveTokens);
-                }
-                else
-                {
-                    // A skipped macroblock leaves no coefficients; the Y2 context survives only where there's no Y2.
-                    leftNonZero[..8].Clear();
-                    aboveTokens[..8].Clear();
-                    if (mb.YMode != BPred)
-                    {
-                        leftNonZero[8] = 0;
-                        aboveTokens[8] = 0;
-                    }
-                }
-
-                mb.HasCoefficients = nonZero != 0;
-                Reconstruct(mx, my, mb.YMode, uvMode, modes, coefficients, nonZero);
             }
+            else
+            {
+                byte implied = mb.YMode switch { VPred => BVePred, HPred => BHePred, TmPred => BTmPred, _ => BDcPred };
+                above.Fill(implied);
+                leftModes.Fill(implied);
+            }
+
+            mb.UvMode = h.ReadTree(UvModeTree, UvModeProbabilities);
+
+            Span<byte> aboveTokens = _aboveNonZero.AsSpan(mx * 9, 9);
+            ulong nonZero = 0;
+            if (!skip)
+            {
+                nonZero = ReadCoefficients(tokens, mb, rowCoefficients.AsSpan(mx * 25 * 16, 25 * 16), leftNonZero, aboveTokens);
+            }
+            else
+            {
+                // A skipped macroblock leaves no coefficients; the Y2 context survives only where there's no Y2.
+                leftNonZero[..8].Clear();
+                aboveTokens[..8].Clear();
+                if (mb.YMode != BPred)
+                {
+                    leftNonZero[8] = 0;
+                    aboveTokens[8] = 0;
+                }
+            }
+
+            mb.HasCoefficients = nonZero != 0;
+            _ringNonZero[slot][mx] = nonZero;
+        }
+    }
+
+    // Stage 2: one row's prediction and residuals, from the ring.
+    private void ReconstructRow(int my)
+    {
+        // The above-right pixels of the last macroblock repeat the last pixel of the row above (section 12.3).
+        if (my > 0)
+        {
+            Span<byte> above = _y.Row((my * 16) - 1);
+            above.Slice(_mbWide * 16, 4).Fill(above[(_mbWide * 16) - 1]);
+        }
+
+        int slot = my % Ring;
+        for (int mx = 0; mx < _mbWide; mx++)
+        {
+            Macroblock mb = _macroblocks[(my * _mbWide) + mx];
+            Reconstruct(mx, my, mb.YMode, mb.UvMode, _ringModes[slot].AsSpan(mx * 16, 16), _ringCoefficients[slot].AsSpan(mx * 25 * 16, 25 * 16), _ringNonZero[slot][mx]);
         }
     }
 
     // Section 13: the residual tokens of a macroblock. Bit i of the result is set when block i has any coefficient.
-    private ulong ReadCoefficients(Vp8BoolDecoder bits, Macroblock mb, short[] coefficients, Span<byte> left, Span<byte> above)
+    private ulong ReadCoefficients(Vp8BoolDecoder bits, Macroblock mb, Span<short> coefficients, Span<byte> left, Span<byte> above)
     {
         ulong nonZero = 0;
         int segment = mb.Segment;
@@ -384,7 +426,7 @@ internal sealed class Vp8Decoder
         {
             // The Y2 block: the DCs of the 16 luma blocks, through the WHT (type 1).
             int context = left[8] + above[8];
-            int end = ReadBlock(bits, 1, context, 0, coefficients.AsSpan(24 * 16, 16), _dequant[(segment * 6) + 2], _dequant[(segment * 6) + 3]);
+            int end = ReadBlock(bits, 1, context, 0, coefficients.Slice(24 * 16, 16), _dequant[(segment * 6) + 2], _dequant[(segment * 6) + 3]);
             left[8] = above[8] = (byte)(end > 0 ? 1 : 0);
             if (end > 0)
             {
@@ -400,7 +442,7 @@ internal sealed class Vp8Decoder
             int x = i & 3;
             int y = i >> 2;
             int context = left[y] + above[x];
-            int end = ReadBlock(bits, yType, context, firstY, coefficients.AsSpan(i * 16, 16), _dequant[(segment * 6) + 0], _dequant[(segment * 6) + 1]);
+            int end = ReadBlock(bits, yType, context, firstY, coefficients.Slice(i * 16, 16), _dequant[(segment * 6) + 0], _dequant[(segment * 6) + 1]);
             byte flag = (byte)(end > firstY ? 1 : 0);
             left[y] = above[x] = flag;
             if (flag != 0)
@@ -415,7 +457,7 @@ internal sealed class Vp8Decoder
             int x = (i - 16) & 1;
             int y = ((i - 16) >> 1) & 1;
             int context = left[plane + y] + above[plane + x];
-            int end = ReadBlock(bits, 2, context, 0, coefficients.AsSpan(i * 16, 16), _dequant[(segment * 6) + 4], _dequant[(segment * 6) + 5]);
+            int end = ReadBlock(bits, 2, context, 0, coefficients.Slice(i * 16, 16), _dequant[(segment * 6) + 4], _dequant[(segment * 6) + 5]);
             byte flag = (byte)(end > 0 ? 1 : 0);
             left[plane + y] = above[plane + x] = flag;
             if (flag != 0)
@@ -503,7 +545,7 @@ internal sealed class Vp8Decoder
         }
     }
 
-    private void Reconstruct(int mx, int my, int yMode, int uvMode, ReadOnlySpan<byte> modes, short[] coefficients, ulong nonZero)
+    private void Reconstruct(int mx, int my, int yMode, int uvMode, ReadOnlySpan<byte> modes, Span<short> coefficients, ulong nonZero)
     {
         int x0 = mx * 16;
         int y0 = my * 16;
@@ -513,7 +555,7 @@ internal sealed class Vp8Decoder
             {
                 // Section 14.3: the WHT gives each luma block its DC.
                 Span<short> dcs = stackalloc short[16];
-                InverseWht(coefficients.AsSpan(24 * 16, 16), dcs);
+                InverseWht(coefficients.Slice(24 * 16, 16), dcs);
                 for (int i = 0; i < 16; i++)
                 {
                     coefficients[i * 16] = dcs[i];
@@ -527,7 +569,7 @@ internal sealed class Vp8Decoder
             PredictBlock(_y, x0, y0, 16, yMode, mx == 0, my == 0);
             for (int i = 0; i < 16; i++)
             {
-                AddResidual(_y, x0 + ((i & 3) * 4), y0 + ((i >> 2) * 4), coefficients.AsSpan(i * 16, 16), (nonZero & (1UL << i)) != 0);
+                AddResidual(_y, x0 + ((i & 3) * 4), y0 + ((i >> 2) * 4), coefficients.Slice(i * 16, 16), (nonZero & (1UL << i)) != 0);
             }
         }
         else
@@ -538,7 +580,7 @@ internal sealed class Vp8Decoder
                 int bx = x0 + ((i & 3) * 4);
                 int by = y0 + ((i >> 2) * 4);
                 PredictSubblock(bx, by, modes[i], (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
-                AddResidual(_y, bx, by, coefficients.AsSpan(i * 16, 16), (nonZero & (1UL << i)) != 0);
+                AddResidual(_y, bx, by, coefficients.Slice(i * 16, 16), (nonZero & (1UL << i)) != 0);
             }
         }
 
@@ -548,8 +590,8 @@ internal sealed class Vp8Decoder
         PredictBlock(_v, cx, cy, 8, uvMode, mx == 0, my == 0);
         for (int i = 0; i < 4; i++)
         {
-            AddResidual(_u, cx + ((i & 1) * 4), cy + ((i >> 1) * 4), coefficients.AsSpan((16 + i) * 16, 16), (nonZero & (1UL << (16 + i))) != 0);
-            AddResidual(_v, cx + ((i & 1) * 4), cy + ((i >> 1) * 4), coefficients.AsSpan((20 + i) * 16, 16), (nonZero & (1UL << (20 + i))) != 0);
+            AddResidual(_u, cx + ((i & 1) * 4), cy + ((i >> 1) * 4), coefficients.Slice((16 + i) * 16, 16), (nonZero & (1UL << (16 + i))) != 0);
+            AddResidual(_v, cx + ((i & 1) * 4), cy + ((i >> 1) * 4), coefficients.Slice((20 + i) * 16, 16), (nonZero & (1UL << (20 + i))) != 0);
         }
     }
 
@@ -889,7 +931,8 @@ internal sealed class Vp8Decoder
 
     // Section 15 and the reference dixie_loopfilter.c: macroblocks in raster order, each its left edge, inner vertical
     // edges, top edge and inner horizontal edges.
-    private void Filter()
+    // Stage 3: one row's loop filter (section 15), macroblock by macroblock in the reference order.
+    private void FilterRow(int my)
     {
         // A frame level of 0 turns the filter off, whatever the segments say (as libvpx and libwebp do).
         if (_filterLevel == 0)
@@ -897,7 +940,6 @@ internal sealed class Vp8Decoder
             return;
         }
 
-        for (int my = 0; my < _mbHigh; my++)
         {
             for (int mx = 0; mx < _mbWide; mx++)
             {
@@ -1112,6 +1154,148 @@ internal sealed class Vp8Decoder
     }
 
     private static int SaturateInt8(int x) => x < -128 ? -128 : x > 127 ? 127 : x;
+
+    /// <summary>
+    /// The four row stages (parse, reconstruct, filter, convert) run as a pipeline: each stage handles its rows in
+    /// order, one thread at a time, and any thread may take whichever stage has a row ready.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A row can be reconstructed once parsed; filtered once the row below is reconstructed (filtering changes the
+    /// bottom of the row above it, which the row below predicts from unfiltered); converted once the row below is
+    /// filtered (that changes this row's bottom three lines). Each stage's own order is the sequential order, so the
+    /// output is the same whatever the number of threads.
+    /// </para>
+    /// <para>
+    /// The calling thread works too, so the decode finishes even if no helper ever gets a thread from the pool; helpers
+    /// only shorten it. A failure in any stage stops every worker and is rethrown on the calling thread.
+    /// </para>
+    /// </remarks>
+    private sealed class RowPipeline(Vp8Decoder decoder, Action<Vp8Decoder, int> convertRow)
+    {
+        private const int Stages = 4;
+        private readonly int[] _next = new int[Stages];
+        private readonly int[] _busy = new int[Stages];
+        private readonly int _rows = decoder._mbHigh;
+        private int _activeHelpers;
+        private volatile ExceptionDispatchInfo? _failure;
+
+        public void Run()
+        {
+            long pixels = (long)decoder.Width * decoder.Height;
+            int helpers = pixels < Parallelism.Threshold ? 0 : Math.Min(Parallelism.Degree - 1, Stages - 1);
+            for (int i = 0; i < helpers; i++)
+            {
+                ThreadPool.UnsafeQueueUserWorkItem(static pipeline => pipeline.Help(), this, preferLocal: false);
+            }
+
+            Work();
+
+            // Helpers that started finish their row (or see the failure) and leave; none starts a stage after this.
+            var spin = default(SpinWait);
+            while (Volatile.Read(ref _activeHelpers) > 0)
+            {
+                spin.SpinOnce(sleep1Threshold: -1);
+            }
+
+            _failure?.Throw();
+        }
+
+        private void Help()
+        {
+            Interlocked.Increment(ref _activeHelpers);
+            try
+            {
+                Work();
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeHelpers);
+            }
+        }
+
+        private void Work()
+        {
+            var spin = default(SpinWait);
+            while (_failure is null && Volatile.Read(ref _next[Stages - 1]) < _rows)
+            {
+                // Later stages first: they free ring slots and finish rows.
+                bool worked = false;
+                for (int stage = Stages - 1; stage >= 0 && !worked; stage--)
+                {
+                    if (Interlocked.CompareExchange(ref _busy[stage], 1, 0) != 0)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        int row = _next[stage];
+                        if (Ready(stage, row))
+                        {
+                            RunStage(stage, row);
+                            Volatile.Write(ref _next[stage], row + 1);
+                            worked = true;
+                        }
+                    }
+#pragma warning disable CA1031 // Any failure is captured here and rethrown, unchanged, on the calling thread by Run.
+                    catch (Exception ex)
+#pragma warning restore CA1031
+                    {
+                        _failure ??= ExceptionDispatchInfo.Capture(ex);
+                    }
+                    finally
+                    {
+                        Volatile.Write(ref _busy[stage], 0);
+                    }
+                }
+
+                if (worked)
+                {
+                    spin.Reset();
+                }
+                else
+                {
+                    spin.SpinOnce(sleep1Threshold: -1);
+                }
+            }
+        }
+
+        private bool Ready(int stage, int row)
+        {
+            if (row >= _rows)
+            {
+                return false;
+            }
+
+            int done = stage == 0 ? 0 : Volatile.Read(ref _next[stage - 1]);
+            return stage switch
+            {
+                0 => row < Volatile.Read(ref _next[1]) + Ring,
+                1 => row < done,
+                _ => row < done - 1 || done == _rows,
+            };
+        }
+
+        private void RunStage(int stage, int row)
+        {
+            switch (stage)
+            {
+                case 0:
+                    decoder.ParseRow(row);
+                    break;
+                case 1:
+                    decoder.ReconstructRow(row);
+                    break;
+                case 2:
+                    decoder.FilterRow(row);
+                    break;
+                default:
+                    convertRow(decoder, row);
+                    break;
+            }
+        }
+    }
 
     /// <summary>A plane with a one-pixel border above and to the left (127 above, 129 left) and spare columns right.</summary>
     private sealed class Plane

@@ -121,6 +121,24 @@ where it was measured. `docs/performance.md` has the current numbers.
   through an `AsyncLocal` scope, so everything a pipeline calls follows one setting without passing it everywhere.
 - **Results must not depend on the number of threads.** A test runs the same work on 1 and 8 cores and compares bytes.
 
+- **When rows depend on rows, pipeline the stages instead of splitting the rows.** A VP8 frame can't be cut into
+  bands (each row predicts from the row above, and filtering a row changes the one above it), but its four stages per
+  row (parse, reconstruct, filter, convert) can overlap: each stage takes its rows in order, one thread at a time, and
+  any thread takes whichever stage has a row ready. Lossy WebP went from 315 to 169 ms on 16 cores, with identical
+  output because each stage keeps its sequential order.
+- **Let the caller's thread work too, and never wait for a pool thread to start.** If helpers are queued to the thread
+  pool and the caller only waits for them, a busy pool can stall or deadlock the decode. Here the caller runs the same
+  loop as the helpers, so it finishes alone if no helper ever starts; it waits only for helpers that are already
+  inside a stage. A failure in any stage is captured (`ExceptionDispatchInfo`) and rethrown on the caller's thread.
+- **Spin without sleeping for short waits.** `SpinWait.SpinOnce(sleep1Threshold: -1)` yields but never calls
+  `Thread.Sleep(1)`, which on Windows can sleep for 15 ms.
+
+## Measuring, again
+
+- **Give BenchmarkDotNet enough warm-up for big methods.** With the short job's three warm-up rounds, the JPEG encoder
+  measured bimodally (mean 272 ms, median 336 ms) because its long methods were still in tier 0 or on-stack
+  replacement; with 15 warm-up rounds it was a steady 116 ms.
+
 ## Memory
 
 - **Rent big buffers from `ArrayPool<T>.Shared`, `stackalloc` small ones**, and never allocate per pixel or per block.
