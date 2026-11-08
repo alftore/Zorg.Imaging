@@ -6,6 +6,7 @@
   - Lossy encoding takes 1.4 s, down from 2.3 s, the same as cwebp. The output is unchanged.
   - Lossless encoding at the default effort takes 3.0 s, down from 5.9 s, and makes a file 1.6% smaller.
   - Lossless effort 2 now makes smaller files than effort 1. Before, its files were larger.
+- Faster JPEG encoding on several cores: the 12-megapixel photo takes 27 ms on 16 cores, down from 77 ms. Symbol counting and the entropy-coded scan now run in parallel and produce the same bytes. A cheaper forward DCT rounds rare ties differently, so files differ by a few bytes at the same quality.
 
 ## 0.1.0-preview.3
 

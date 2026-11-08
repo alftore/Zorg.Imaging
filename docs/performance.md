@@ -8,6 +8,23 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-09: JPEG encoding on many cores
+
+The 12-megapixel photo at quality 80, 4:2:0, timed by the same harness as the WebP section below:
+
+| | One core | 16 cores |
+|---|---:|---:|
+| Before | 115 ms | 77 ms |
+| After | 116 ms | 27 ms |
+| cjpeg `-optimize` (gate image) | 120 ms | |
+
+The transform already ran in parallel; counting the symbols and writing the scan didn't. The AC symbols are now
+counted per band as each block is made, and the scan is coded in bands of MCU rows as plain bits, each band starting
+from the DC values of the band before (all known by then), then joined with the stuffed zeros added: the same bytes
+as one pass. The pass down the columns of the forward DCT is split into even and odd butterflies (about 50 vector
+operations instead of 128), which rounds rare ties differently: 49 bytes smaller at the same PSNR. None of it moved
+the one-core time measurably.
+
 ## 2026-11-08: WebP encoding at libwebp's speed
 
 The 12-megapixel photo decoded from `photo.jpg`, on one core (`MaxDegreeOfParallelism = 1`), timed by a small
