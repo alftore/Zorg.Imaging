@@ -691,6 +691,21 @@ internal sealed class Vp8Encoder
     // Levels in scan order from first, and the dequantised coefficients in natural order (as the decoder rebuilds them).
     // Magnitudes round down after adding a bias of 3/8 of a step, or half a step for the DC, which suits the cost of
     // larger levels; at most 2048.
+    // floor(x / q) as (x * (2^32 / q + 1)) >> 32, exact for x and q below 2^16, which the values here are: a multiply
+    // where a division cost tens of cycles for each coefficient.
+    private static readonly ulong[] Reciprocals = BuildReciprocals();
+
+    private static ulong[] BuildReciprocals()
+    {
+        ulong[] reciprocals = new ulong[4096];
+        for (int q = 1; q < reciprocals.Length; q++)
+        {
+            reciprocals[q] = (1UL << 32) / (ulong)q + 1;
+        }
+
+        return reciprocals;
+    }
+
     private static void Quantise(ReadOnlySpan<short> coefficients, int first, int dc, int ac, Span<short> levels, Span<short> dequantised)
     {
         levels.Clear();
@@ -702,7 +717,7 @@ internal sealed class Vp8Encoder
             int value = coefficients[zigzag[c]];
             int magnitude = Math.Abs(value);
             int bias = c == 0 ? q / 2 : (q * 3) / 8;
-            int level = Math.Min((magnitude + bias) / q, 2048);
+            int level = (int)Math.Min(((ulong)(magnitude + bias) * Reciprocals[q]) >> 32, 2048);
             if (level == 0)
             {
                 continue;
