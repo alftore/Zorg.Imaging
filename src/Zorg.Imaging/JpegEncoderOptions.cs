@@ -53,6 +53,14 @@ public sealed class JpegEncoderOptions
         }
     } = DefaultQuality;
 
+    /// <summary>
+    /// Whether to write a progressive JPEG: a coarse picture first, refined by later scans, so a browser can show the
+    /// whole image early while it loads. The pixels decode exactly as baseline's would, and the file is usually a few
+    /// percent smaller; encoding takes longer. Defaults to <see langword="false"/> (baseline).
+    /// </summary>
+    /// <example><code>var web = new JpegEncoderOptions { Progressive = true };</code></example>
+    public bool Progressive { get; init; }
+
     /// <summary>How much colour detail to keep. Defaults to <see cref="JpegChromaSubsampling.Yuv420"/>. Grey images ignore it.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The value isn't one of the enumeration's.</exception>
     /// <example><code>var crisp = new JpegEncoderOptions { ChromaSubsampling = JpegChromaSubsampling.Yuv444 };</code></example>

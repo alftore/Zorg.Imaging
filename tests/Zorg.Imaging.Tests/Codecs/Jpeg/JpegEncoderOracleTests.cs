@@ -41,6 +41,27 @@ public class JpegEncoderOracleTests
     }
 
     [Theory]
+    [InlineData(80, JpegChromaSubsampling.Yuv420, 517, 389, PixelFormat.Rgb24)]
+    [InlineData(100, JpegChromaSubsampling.Yuv444, 31, 7, PixelFormat.Rgb24)]
+    [InlineData(10, JpegChromaSubsampling.Yuv420, 300, 200, PixelFormat.L8)]
+    public async Task Djpeg_decodes_our_progressive_files_exactly_as_our_baseline_ones(int quality, JpegChromaSubsampling subsampling, int width, int height, PixelFormat format)
+    {
+        string djpeg = Oracle.Require("djpeg");
+        using Oracle.TempFolder folder = Oracle.CreateFolder();
+        using Image photo = JpegEncoderTests.Photo(width, height, format);
+        byte[] baseline = JpegEncoderTests.Save(photo, new JpegEncoderOptions { Quality = quality, ChromaSubsampling = subsampling });
+        byte[] progressive = JpegEncoderTests.Save(photo, new JpegEncoderOptions { Quality = quality, ChromaSubsampling = subsampling, Progressive = true });
+        await File.WriteAllBytesAsync(folder.File("baseline.jpg"), baseline, TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(folder.File("progressive.jpg"), progressive, TestContext.Current.CancellationToken);
+
+        (int exit, byte[] fromBaseline, string errors) = await Oracle.RunAsync(djpeg, "-pnm", folder.File("baseline.jpg"));
+        Assert.True(exit == 0 && errors.Length == 0, errors);
+        (exit, byte[] fromProgressive, errors) = await Oracle.RunAsync(djpeg, "-pnm", folder.File("progressive.jpg"));
+        Assert.True(exit == 0 && errors.Length == 0, errors);
+        Assert.Equal(fromBaseline, fromProgressive);
+    }
+
+    [Theory]
     [InlineData(50)]
     [InlineData(80)]
     [InlineData(95)]

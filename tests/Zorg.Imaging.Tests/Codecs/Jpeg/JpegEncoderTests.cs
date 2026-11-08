@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -73,6 +74,53 @@ public class JpegEncoderTests
         Assert.Equal((PixelFormat.Rgb24, 203, 131), (decoded.PixelFormat, decoded.Width, decoded.Height));
         double psnr = Psnr(decoded.GetPixelBytes(), photo.GetPixelBytes());
         Assert.True(psnr >= minimumPsnr, $"PSNR {psnr:0.0} dB");
+    }
+
+    [Theory]
+    [InlineData(80, JpegChromaSubsampling.Yuv420, 120, 90, PixelFormat.Rgb24)]
+    [InlineData(80, JpegChromaSubsampling.Yuv444, 37, 23, PixelFormat.Rgb24)]
+    [InlineData(100, JpegChromaSubsampling.Yuv420, 17, 9, PixelFormat.Rgb24)]
+    [InlineData(5, JpegChromaSubsampling.Yuv420, 131, 77, PixelFormat.Rgb24)]
+    [InlineData(60, JpegChromaSubsampling.Yuv420, 1, 1, PixelFormat.Rgb24)]
+    [InlineData(80, JpegChromaSubsampling.Yuv420, 45, 33, PixelFormat.L8)]
+    [InlineData(100, JpegChromaSubsampling.Yuv420, 8, 64, PixelFormat.L8)]
+    public void Progressive_files_decode_to_exactly_the_baseline_pixels(int quality, JpegChromaSubsampling subsampling, int width, int height, PixelFormat format)
+    {
+        using Image photo = Photo(width, height, format, seed: quality);
+        byte[] baseline = Save(photo, new JpegEncoderOptions { Quality = quality, ChromaSubsampling = subsampling });
+        byte[] progressive = Save(photo, new JpegEncoderOptions { Quality = quality, ChromaSubsampling = subsampling, Progressive = true });
+
+        // SOF2 marks a progressive frame.
+        List<(int Offset, byte Marker)> segments = JpegTestFiles.Segments(progressive);
+        Assert.Contains(segments, s => s.Marker == 0xC2);
+        Assert.DoesNotContain(segments, s => s.Marker == 0xC0);
+
+        using Image fromBaseline = Image.Decode(baseline);
+        using Image fromProgressive = Image.Decode(progressive);
+        Assert.Equal(fromBaseline.ToString(), fromProgressive.ToString());
+        Assert.True(fromBaseline.GetPixelBytes().SequenceEqual(fromProgressive.GetPixelBytes()));
+    }
+
+    [Fact]
+    public void A_progressive_flat_image_needs_end_of_band_runs_past_their_limit()
+    {
+        // 40,000 blocks with nothing in their AC bands: more than one run of at most 32,767 blocks codes them.
+        using var flat = new Image(1600, 1600, PixelFormat.L8);
+        flat.GetPixelBytes().Fill(77);
+        byte[] progressive = Save(flat, new JpegEncoderOptions { Progressive = true });
+        using Image decoded = Image.Decode(progressive);
+        Assert.All(decoded.GetPixelBytes().ToArray(), sample => Assert.Equal(77, sample));
+        // About a bit a block for the DC differences and another for the DC refinement: 40,000 blocks, about 10 KB.
+        Assert.True(progressive.Length < 12_000, $"{progressive.Length} bytes");
+    }
+
+    [Fact]
+    public void A_progressive_photo_is_no_larger_than_baseline()
+    {
+        using Image photo = Photo(640, 480);
+        byte[] baseline = Save(photo, new JpegEncoderOptions());
+        byte[] progressive = Save(photo, new JpegEncoderOptions { Progressive = true });
+        Assert.True(progressive.Length <= baseline.Length, $"progressive {progressive.Length}, baseline {baseline.Length}");
     }
 
     [Fact]

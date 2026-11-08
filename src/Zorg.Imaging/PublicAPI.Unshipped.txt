@@ -408,3 +408,5 @@ Zorg.Imaging.PngFilter.Up = 3 -> Zorg.Imaging.PngFilter
 Zorg.Imaging.ImagePipeline.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.ImagePipeline.SaveAsAsync(System.IO.Stream! stream, Zorg.Imaging.ImageFormat! format, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.ImagePipeline.ToSrgb() -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.JpegEncoderOptions.Progressive.get -> bool
+Zorg.Imaging.JpegEncoderOptions.Progressive.init -> void

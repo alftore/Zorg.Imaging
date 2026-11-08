@@ -92,6 +92,11 @@ internal static class JpegEncoder
 
         Transform(image, options.Background, components, mcusWide, mcusHigh, factor, Reciprocals(luminance), Reciprocals(chrominance));
 
+        if (options.Progressive)
+        {
+            return EncodeProgressive(image, options, profile, grey, factor, mcusWide, mcusHigh, luminance, chrominance, components);
+        }
+
         // Count the symbols each table will code, then build tables that code them in the fewest bits.
         long[][] counts = [new long[256], new long[256], new long[256], new long[256]];
         Walk(components, mcusWide, mcusHigh, factor, (component, block, previous) =>
@@ -106,7 +111,11 @@ internal static class JpegEncoder
 
         var output = new ArrayBufferWriter<byte>(4096 + profile.Length);
         (byte[]? exif, byte[]? xmp) = Metadata.MetadataWriter.Prepare(image, options.Metadata);
-        WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, dcLuma, acLuma, dcChroma, acChroma);
+        WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, progressive: false);
+        WriteTables(output, dcLuma, acLuma, dcChroma, acChroma);
+
+        // SOS: every component, full spectrum, no approximation.
+        Segment(output, 0xDA, grey ? [1, 1, 0x00, 0, 63, 0] : [3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]);
 
         var bits = new BitWriter(Math.Max(4096, image.Width * image.Height / 4));
         Walk(components, mcusWide, mcusHigh, factor, (component, block, previous) =>
@@ -397,10 +406,7 @@ internal static class JpegEncoder
         int factor,
         byte[] luminance,
         byte[] chrominance,
-        JpegHuffmanEncoder dcLuma,
-        JpegHuffmanEncoder acLuma,
-        JpegHuffmanEncoder? dcChroma,
-        JpegHuffmanEncoder? acChroma)
+        bool progressive)
     {
         output.Write<byte>([0xFF, 0xD8]);
 
@@ -453,22 +459,141 @@ internal static class JpegEncoder
         byte[] sof = grey
             ? [8, (byte)(image.Height >> 8), (byte)image.Height, (byte)(image.Width >> 8), (byte)image.Width, 1, 1, 0x11, 0]
             : [8, (byte)(image.Height >> 8), (byte)image.Height, (byte)(image.Width >> 8), (byte)image.Width, 3, 1, sampling, 0, 2, 0x11, 1, 3, 0x11, 1];
-        Segment(output, 0xC0, sof);
+        Segment(output, progressive ? (byte)0xC2 : (byte)0xC0, sof);
+    }
 
-        // DHT: DC then AC, luma (table 0) and chroma (table 1).
+    // One DHT segment with the tables given: DC and AC in slot 0 (luma), DC and AC in slot 1 (chroma); nulls are left out.
+    private static void WriteTables(ArrayBufferWriter<byte> output, JpegHuffmanEncoder? dc0, JpegHuffmanEncoder? ac0, JpegHuffmanEncoder? dc1, JpegHuffmanEncoder? ac1)
+    {
         var dht = new ArrayBufferWriter<byte>();
-        AddTable(dht, 0x00, dcLuma);
-        AddTable(dht, 0x10, acLuma);
-        if (dcChroma is not null && acChroma is not null)
+        ReadOnlySpan<byte> slots = [0x00, 0x10, 0x01, 0x11];
+        JpegHuffmanEncoder?[] tables = [dc0, ac0, dc1, ac1];
+        for (int i = 0; i < 4; i++)
         {
-            AddTable(dht, 0x01, dcChroma);
-            AddTable(dht, 0x11, acChroma);
+            if (tables[i] is { } table)
+            {
+                AddTable(dht, slots[i], table);
+            }
         }
 
-        Segment(output, 0xC4, dht.WrittenSpan);
+        if (dht.WrittenCount > 0)
+        {
+            Segment(output, 0xC4, dht.WrittenSpan);
+        }
+    }
 
-        // SOS: every component, full spectrum, no approximation.
-        Segment(output, 0xDA, grey ? [1, 1, 0x00, 0, 63, 0] : [3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]);
+    private static byte[] EncodeProgressive(
+        Image image,
+        JpegEncoderOptions options,
+        ReadOnlySpan<byte> profile,
+        bool grey,
+        int factor,
+        int mcusWide,
+        int mcusHigh,
+        byte[] luminance,
+        byte[] chrominance,
+        Plane[] planes)
+    {
+        var output = new ArrayBufferWriter<byte>(4096 + profile.Length);
+        (byte[]? exif, byte[]? xmp) = Metadata.MetadataWriter.Prepare(image, options.Metadata);
+        WriteHeaders(output, image, profile, exif, xmp, grey, factor, luminance, chrominance, progressive: true);
+
+        // The blocks with samples in each component, for scans of one component (A.2.2), which skip MCU padding.
+        int[] usedWide = new int[planes.Length];
+        int[] usedHigh = new int[planes.Length];
+        for (int c = 0; c < planes.Length; c++)
+        {
+            int divide = c == 0 ? 1 : factor;
+            usedWide[c] = (((image.Width + divide - 1) / divide) + 7) / 8;
+            usedHigh[c] = (((image.Height + divide - 1) / divide) + 7) / 8;
+        }
+
+        // Each scan is counted, fitted with its own tables and coded on its own, so the scans run in parallel when
+        // there are cores for them; they are written in order, so the file is the same either way.
+        JpegProgressive.Scan[] script = JpegProgressive.Script(planes.Length);
+        var coded = new (JpegHuffmanEncoder? DcLuma, JpegHuffmanEncoder? DcChroma, JpegHuffmanEncoder? Ac, BitWriter Bits)[script.Length];
+        int bands = Parallelism.Bands((long)image.Width * image.Height, script.Length);
+        Parallelism.For(bands, band =>
+        {
+            for (int s = band; s < script.Length; s += bands)
+            {
+                JpegProgressive.Scan scan = script[s];
+                JpegProgressive.BlockOrder order = scan.Components.Length > 1
+                    ? visit => Walk(planes, mcusWide, mcusHigh, factor, (component, block, _) => visit(component, block))
+                    : visit =>
+                    {
+                        int c = scan.Components[0];
+                        for (int y = 0; y < usedHigh[c]; y++)
+                        {
+                            for (int x = 0; x < usedWide[c]; x++)
+                            {
+                                visit(c, planes[c].Block(x, y));
+                            }
+                        }
+                    };
+
+                var counting = new CountSink();
+                JpegProgressive.Encode(ref counting, scan, order);
+                JpegHuffmanEncoder? dcLuma = counting.Used(0) ? JpegHuffmanEncoder.Optimal(counting.Counts[0]) : null;
+                JpegHuffmanEncoder? dcChroma = counting.Used(1) ? JpegHuffmanEncoder.Optimal(counting.Counts[1]) : null;
+                JpegHuffmanEncoder? ac = counting.Used(2) ? JpegHuffmanEncoder.Optimal(counting.Counts[2]) : null;
+                var writing = new WriteSink(new BitWriter(4096), dcLuma, dcChroma, ac);
+                JpegProgressive.Encode(ref writing, scan, order);
+                writing.Writer.Flush();
+                coded[s] = (dcLuma, dcChroma, ac, writing.Writer);
+            }
+        });
+
+        for (int s = 0; s < script.Length; s++)
+        {
+            JpegProgressive.Scan scan = script[s];
+            (JpegHuffmanEncoder? dcLuma, JpegHuffmanEncoder? dcChroma, JpegHuffmanEncoder? ac, BitWriter bits) = coded[s];
+            WriteTables(output, dcLuma, ac, dcChroma, null);
+
+            byte[] sos = new byte[1 + (2 * scan.Components.Length) + 3];
+            sos[0] = (byte)scan.Components.Length;
+            for (int i = 0; i < scan.Components.Length; i++)
+            {
+                int c = scan.Components[i];
+                sos[1 + (2 * i)] = (byte)(c + 1);
+                sos[2 + (2 * i)] = (byte)(c == 0 ? 0x00 : 0x10);
+            }
+
+            sos[^3] = (byte)scan.Start;
+            sos[^2] = (byte)scan.End;
+            sos[^1] = (byte)((scan.High << 4) | scan.Low);
+            Segment(output, 0xDA, sos);
+            output.Write(bits.Data);
+        }
+
+        output.Write<byte>([0xFF, 0xD9]);
+        return output.WrittenSpan.ToArray();
+    }
+
+    private readonly struct CountSink() : JpegProgressive.ISink
+    {
+        public long[][] Counts { get; } = [new long[256], new long[256], new long[256]];
+
+        public bool Used(int table) => Array.Exists(Counts[table], count => count != 0);
+
+        public void Symbol(int table, int symbol) => Counts[table][symbol]++;
+
+        public void Bits(int value, int length)
+        {
+        }
+    }
+
+    private readonly struct WriteSink(BitWriter writer, JpegHuffmanEncoder? dcLuma, JpegHuffmanEncoder? dcChroma, JpegHuffmanEncoder? ac) : JpegProgressive.ISink
+    {
+        public BitWriter Writer { get; } = writer;
+
+        public void Symbol(int table, int symbol)
+        {
+            JpegHuffmanEncoder huffman = (table == 0 ? dcLuma : table == 1 ? dcChroma : ac)!;
+            Writer.Write(huffman.Code(symbol), huffman.Length(symbol));
+        }
+
+        public void Bits(int value, int length) => Writer.Write(value, length);
     }
 
     private static void AddTable(ArrayBufferWriter<byte> dht, byte classAndSlot, JpegHuffmanEncoder table)
