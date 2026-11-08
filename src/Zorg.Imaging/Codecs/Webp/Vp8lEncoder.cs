@@ -95,7 +95,7 @@ internal static class Vp8lEncoder
     {
         var bits = new Vp8lBitWriter((argb.Length / 2) + 1024);
         uint[] pixels = (uint[])argb.Clone();
-        if (effort < 2)
+        if (SubtractGreenHelps(pixels, width))
         {
             bits.Write(1, 1);
             bits.Write((uint)Vp8lDecoder.TransformType.SubtractGreen, 2);
@@ -108,7 +108,7 @@ internal static class Vp8lEncoder
         bits.Write((uint)(tileBits - 2), 3);
         (pixels, uint[] modes) = Predict(pixels, width, height, tileBits, effort);
         EncodeImage(bits, modes, DivideUp(width, tileBits), effort, main: false);
-        if (effort >= 2)
+        if (effort >= 1)
         {
             int colourBits = 5;
             bits.Write(1, 1);
@@ -121,6 +121,52 @@ internal static class Vp8lEncoder
         bits.Write(0, 1);
         EncodeImage(bits, pixels, width, effort, main: true);
         return bits.Finish();
+    }
+
+    // Whether subtracting green makes the image cheaper, judged as libwebp's analysis does: the entropy of each pixel's
+    // difference from its left neighbour, channel by channel, with and without green taken from red and blue. Photos,
+    // whose channels move together, gain; flat graphics often lose.
+    internal static bool SubtractGreenHelps(uint[] pixels, int width)
+    {
+        int[] plain = new int[4 * 256];
+        int[] subtracted = new int[4 * 256];
+        uint previous = 0;
+        uint previousSubtracted = 0;
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            uint p = pixels[i];
+            uint g = (p >> 8) & 0xFF;
+            uint sub = (p & 0xFF00FF00u) | ((((p >> 16) - g) & 0xFF) << 16) | ((p - g) & 0xFF);
+            if (i % width != 0)
+            {
+                uint d = Subtract(p, previous);
+                uint ds = Subtract(sub, previousSubtracted);
+                plain[(int)(d >> 24)]++;
+                plain[256 + (int)((d >> 16) & 0xFF)]++;
+                plain[512 + (int)((d >> 8) & 0xFF)]++;
+                plain[768 + (int)(d & 0xFF)]++;
+                subtracted[(int)(ds >> 24)]++;
+                subtracted[256 + (int)((ds >> 16) & 0xFF)]++;
+                subtracted[512 + (int)((ds >> 8) & 0xFF)]++;
+                subtracted[768 + (int)(ds & 0xFF)]++;
+            }
+
+            previous = p;
+            previousSubtracted = sub;
+        }
+
+        return Bits(subtracted) < Bits(plain);
+
+        static double Bits(int[] counts)
+        {
+            double total = 0;
+            for (int channel = 0; channel < 4; channel++)
+            {
+                total += Entropy(counts.AsSpan(channel * 256, 256).ToArray());
+            }
+
+            return total;
+        }
     }
 
     private static int DivideUp(int value, int bits) => (value + (1 << bits) - 1) >> bits;
@@ -719,7 +765,7 @@ internal static class Vp8lEncoder
     private static int EntropyBits(int width, int height, int effort)
     {
         long pixels = (long)width * height;
-        if (effort < 3 || pixels < 4096)
+        if (effort < 1 || pixels < 4096)
         {
             return 0;
         }
@@ -1455,7 +1501,10 @@ internal static class Vp8lEncoder
             for (int c = 0; c < (_quick ? 2 : candidates.Length); c++)
             {
                 int distance = candidates[c];
-                if (distance > i || (c == 1 && distance == 1))
+
+                // Only a candidate that matches one pixel past the best so far can beat it: most fail at once in a
+                // photo, so the pixel is compared before the full match is measured.
+                if (distance > i || (c == 1 && distance == 1) || bestLength >= most || p[i + bestLength] != p[i - distance + bestLength])
                 {
                     continue;
                 }
@@ -1507,7 +1556,7 @@ internal static class Vp8lEncoder
             ReadOnlySpan<int> candidates = [_last, _beforeLast, i >= _width ? _used[i - _width] : 0];
             foreach (int d in candidates)
             {
-                if (d == 0 || d > i || d > MaxDistance || d == distance || length >= most)
+                if (d == 0 || d > i || d > MaxDistance || d == distance || length >= most || p[i + length] != p[i - d + length])
                 {
                     continue;
                 }
