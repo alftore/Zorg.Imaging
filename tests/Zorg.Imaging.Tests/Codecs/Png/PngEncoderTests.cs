@@ -29,7 +29,7 @@ public class PngEncoderTests
     {
         using Image image = Smooth(37, 23, format, seed: level);
 
-        byte[] png = Save(image, new PngEncoderOptions { CompressionLevel = level });
+        byte[] png = Save(image, new PngEncoderOptions { CompressionLevel = level, ReduceColorType = false });
         using Image decoded = Image.Decode(png, new DecodeOptions { PixelFormat = format == PixelFormat.Bgra32 ? PixelFormat.Bgra32 : PixelFormat.None });
 
         Assert.Equal(format, decoded.PixelFormat);
@@ -37,12 +37,12 @@ public class PngEncoderTests
     }
 
     [Fact]
-    public void The_file_is_8_bit_grey_RGB_or_RGBA_with_no_metadata()
+    public void Unreduced_the_file_is_8_bit_grey_RGB_or_RGBA_with_no_metadata()
     {
         foreach ((PixelFormat format, byte colourType) in new[] { (PixelFormat.L8, (byte)0), (PixelFormat.Rgb24, (byte)2), (PixelFormat.Rgba32, (byte)6), (PixelFormat.Bgra32, (byte)6) })
         {
             using var image = new Image(3, 2, format);
-            byte[] png = Save(image);
+            byte[] png = Save(image, new PngEncoderOptions { ReduceColorType = false });
 
             Assert.Equal(8, png[24]);
             Assert.Equal(colourType, png[25]);
@@ -59,7 +59,7 @@ public class PngEncoderTests
             using var image = new Image(3, 2, format);
             image.GetPixelBytes()[0] = 0x34;
             image.GetPixelBytes()[1] = 0x12;
-            byte[] png = Save(image, new PngEncoderOptions { CompressionLevel = 0 });
+            byte[] png = Save(image, new PngEncoderOptions { CompressionLevel = 0, ReduceColorType = false });
 
             Assert.Equal(16, png[24]);
             Assert.Equal(colourType, png[25]);

@@ -147,8 +147,9 @@ public class ImagePipelineTests
         using var output = new MemoryStream();
         await ImagePipeline.From(wide).Fit(20, 20).SaveAsPngAsync(output, new PngEncoderOptions { CompressionLevel = 9 }, Token);
 
-        using Image decoded = Image.Decode(output.ToArray());
-        Assert.Equal((PixelFormat.Rgba64, 20, 15), (decoded.PixelFormat, decoded.Width, decoded.Height));
+        // One colour, so the file is a palette; decoded at 16 bits it is the same.
+        using Image decoded = Image.Decode(output.ToArray(), new DecodeOptions { PixelFormat = PixelFormat.Rgba64 });
+        Assert.Equal((20, 15), (decoded.Width, decoded.Height));
         Assert.Equal(ColorSpace.DisplayP3, decoded.ColorSpace);
         Assert.Equal(new Rgba64(0x9090, 0x9090, 0x9090, 0x9090), decoded.GetRow<Rgba64>(14)[19]);
     }

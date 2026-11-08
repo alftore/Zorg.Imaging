@@ -88,6 +88,23 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     using Image decoded = Image.Decode(file);
     Check("png round trip", decoded.PixelFormat == PixelFormat.Rgba32 && decoded.GetPixelBytes().SequenceEqual(picture.GetPixelBytes()));
 
+    using (var few = new Image(40, 20, PixelFormat.Rgba32))
+    {
+        for (int y = 0; y < few.Height; y++)
+        {
+            Span<Rgba32> pixels = few.GetRow<Rgba32>(y);
+            for (int x = 0; x < pixels.Length; x++)
+            {
+                pixels[x] = new Rgba32((byte)(x % 3 * 100), 50, 9, 255);
+            }
+        }
+
+        using var small = new MemoryStream();
+        few.SaveAsPng(small, new PngEncoderOptions { Optimize = true, Filter = PngFilter.Entropy });
+        using Image back = Image.Decode(small.ToArray());
+        Check("png reduced to a 2-bit palette", small.ToArray()[24] == 2 && small.ToArray()[25] == 3 && back.GetRow<Rgb24>(0)[2] == new Rgb24(200, 50, 9));
+    }
+
     using Image streamed = Image.DecodeAsync(new ForwardOnlyStream(file), new DecodeOptions { PixelFormat = PixelFormat.Bgra32 }).AsTask().GetAwaiter().GetResult();
     Check("png decode stream bgra32", streamed.GetRow<Bgra32>(0)[1] == new Bgra32(1, 0, 6, 254));
 

@@ -8,6 +8,34 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: PNG optimiser and banded compression
+
+The 12-megapixel photo (`photo.png`, RGB), BenchmarkDotNet short job, same busy machine for both columns:
+
+| PNG encode, level 6 | One core | All cores (16) | Allocated |
+|---|---:|---:|---:|
+| Before (one zlib stream) | 682 ms | 649 ms | 64 MB |
+| After (bands of 1 MiB) | 689 ms | 134 ms | 118 MB |
+
+Rows are filtered and compressed in independent bands of about 1 MiB, each a raw deflate stream ended by a sync
+flush, then joined into one zlib stream with the Adler-32 values combined, as pigz does. The bands depend only on the
+image size, so the file is the same on any number of cores. Losing the window across band edges cost nothing
+measurable here: 24,221,525 bytes against 24,223,014 before.
+
+Sizes against oxipng 9 (`-o 2 --strip safe`, libdeflate) in the gate image, ours with `Optimize`:
+
+| Image | Default | `Optimize` | oxipng -o2 | oxipng -o4 |
+|---|---:|---:|---:|---:|
+| 800 x 600 photo crop, RGB | 979,681 | 973,356 | 970,541 | 970,541 |
+| 400 x 300 smooth gradient with noise | 144,133 | 121,774 | 123,644 | 121,797 |
+| 400 x 300 with 64 colours (palette) | 12,303 | 12,163 | 10,736 | 10,732 |
+| 600 x 400 RGBA graphic | 8,968 | 5,251 | 5,700 | 5,321 |
+
+Layouts and filters match oxipng's; where it is ahead, it is libdeflate at level 11 against zlib at 9 (oxipng's
+palette file has the same filter, None). `Optimize` takes about 2.5 s for the 12-megapixel photo on 16 cores and saves
+1%; on noisy rows zlib's Huffman-only and RLE strategies often beat level 9, which is why they are among the trials.
+Zopfli-class deflate is the planned next step for size.
+
 ## 2026-11-08: colour conversion to sRGB
 
 `ToSrgb_DisplayP3`: the 12-megapixel photo tagged Display P3, converted to sRGB as encoders do by default.

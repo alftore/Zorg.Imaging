@@ -1,22 +1,21 @@
 using System;
-using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Compression;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging.Codecs.Png;
 
 /// <summary>
-/// Writes an image as a PNG: grey, RGB or RGBA, 8 or 16 bits, as the image holds it, with its colour space. No other
-/// metadata is written.
+/// Writes an image as a PNG: in the smallest layout that holds it exactly (<see cref="PngLayout"/>) or its own, with
+/// its colour space and, when asked, its EXIF and XMP.
 /// </summary>
 /// <remarks>
-/// Each row gets the filter whose output has the smallest sum of absolute values, read as signed bytes: the heuristic
-/// the PNG specification suggests. Level 0 stores rows unfiltered. Choosing a smaller colour type is the optimiser's job.
+/// Rows are filtered and compressed in bands of about a megabyte on as many cores as allowed
+/// (<see cref="PngDeflate"/>), and written in order as each group of bands is done. Level 0 stores rows unfiltered.
 /// </remarks>
 internal static class PngEncoder
 {
@@ -32,137 +31,95 @@ internal static class PngEncoder
     [SuppressMessage("Performance", "CA1849:Call async methods when in an async method", Justification = "The synchronous branches serve SaveAsPng, which must not block on async.")]
     public static async ValueTask EncodeAsync(Image image, Stream output, PngEncoderOptions options, bool sync, CancellationToken cancellationToken)
     {
-        byte colourType = image.PixelFormat switch
-        {
-            PixelFormat.L8 or PixelFormat.L16 => 0,
-            PixelFormat.Rgb24 or PixelFormat.Rgb48 => 2,
-            _ => 6,
-        };
-        bool wide = image.PixelFormat is PixelFormat.L16 or PixelFormat.Rgb48 or PixelFormat.Rgba64;
+        using Parallelism.Scope scope = Parallelism.Use(options.MaxDegreeOfParallelism);
+        PngLayout layout = options.ReduceColorType
+            ? PngLayout.Choose(image, options.CleanTransparentPixels)
+            : PngLayout.Of(image, options.CleanTransparentPixels);
 
         byte[] header = new byte[8 + 12 + 13];
         Signature.CopyTo(header);
         Span<byte> ihdr = header.AsSpan(8 + 8, 13);
         BinaryPrimitives.WriteUInt32BigEndian(ihdr, (uint)image.Width);
         BinaryPrimitives.WriteUInt32BigEndian(ihdr[4..], (uint)image.Height);
-        ihdr[8] = wide ? (byte)16 : (byte)8;
-        ihdr[9] = colourType;
+        ihdr[8] = layout.BitDepth;
+        ihdr[9] = layout.ColourType;
         PngChunkWriter.Frame(header.AsSpan(8), "IHDR"u8, 13);
         await WriteAsync(output, header, sync, cancellationToken).ConfigureAwait(false);
 
-        byte[] colour = ColourChunks(image.ColorSpace);
-        if (colour.Length > 0)
+        // Colour chunks come before PLTE, and tRNS after it; all before the image data.
+        using (var chunks = new MemoryStream())
         {
-            await WriteAsync(output, colour, sync, cancellationToken).ConfigureAwait(false);
-        }
-
-        byte[] metadata = MetadataChunks(image, options.Metadata);
-        if (metadata.Length > 0)
-        {
-            await WriteAsync(output, metadata, sync, cancellationToken).ConfigureAwait(false);
-        }
-
-        int bytesPerPixel = image.PixelFormat == PixelFormat.Bgra32 ? 4 : image.BytesPerPixel;
-        int rowBytes = image.Width * bytesPerPixel;
-        byte[] raw = ArrayPool<byte>.Shared.Rent(rowBytes);
-        byte[] previous = ArrayPool<byte>.Shared.Rent(rowBytes);
-        byte[] best = ArrayPool<byte>.Shared.Rent(rowBytes + 1);
-        byte[] trial = ArrayPool<byte>.Shared.Rent(rowBytes + 1);
-        var chunks = new PngChunkWriter(output, sync);
-        var zlib = new ZLibStream(chunks, new ZLibCompressionOptions { CompressionLevel = options.CompressionLevel }, leaveOpen: true);
-        try
-        {
-            previous.AsSpan(0, rowBytes).Clear();
-            for (int y = 0; y < image.Height; y++)
+            chunks.Write(ColourChunks(image.ColorSpace));
+            if (layout.Palette is not null)
             {
-                byte[] chosen = FilterRow(image, y, raw.AsSpan(0, rowBytes), previous.AsSpan(0, rowBytes), bytesPerPixel, options.CompressionLevel, best, trial);
+                WriteChunk(chunks, "PLTE"u8, layout.Palette);
+            }
+
+            if (layout.Transparency is not null)
+            {
+                WriteChunk(chunks, "tRNS"u8, layout.Transparency);
+            }
+
+            chunks.Write(MetadataChunks(image, options.Metadata));
+            if (chunks.Length > 0)
+            {
+                await WriteAsync(output, chunks.ToArray(), sync, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        int level = options.Optimize ? 9 : options.CompressionLevel;
+        PngFilter filter = PngDeflate.Resolve(options.Filter, layout, level);
+        int rowsPerBand = PngDeflate.RowsPerBand(layout.RowBytes(image.Width));
+        int bands = (image.Height + rowsPerBand - 1) / rowsPerBand;
+        int group = Math.Max(1, Parallelism.Degree) * 2;
+        using var idat = new PngChunkWriter(output, sync);
+        await idat.WriteAsync(PngDeflate.ZlibHeader(level), cancellationToken).ConfigureAwait(false);
+        uint adler = 1;
+        var done = new PngDeflate.Band[Math.Min(group, bands)];
+        for (int start = 0; start < bands; start += group)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int count = Math.Min(group, bands - start);
+            Parallelism.For(count, i =>
+            {
+                int band = start + i;
+                int first = band * rowsPerBand;
+                done[i] = PngDeflate.Compress(image, layout, first, Math.Min(rowsPerBand, image.Height - first), filter, level, options.Optimize, last: band == bands - 1);
+            });
+
+            for (int i = 0; i < count; i++)
+            {
+                PngDeflate.Band band = done[i];
+                adler = PngDeflate.CombineAdler(adler, band.Adler, band.RawLength);
                 if (sync)
                 {
-                    zlib.Write(chosen, 0, rowBytes + 1);
+                    idat.Write(band.Bytes, 0, band.Length);
                 }
                 else
                 {
-                    await zlib.WriteAsync(chosen.AsMemory(0, rowBytes + 1), cancellationToken).ConfigureAwait(false);
+                    await idat.WriteAsync(band.Bytes.AsMemory(0, band.Length), cancellationToken).ConfigureAwait(false);
                 }
 
-                (raw, previous) = (previous, raw);
-            }
-
-            if (sync)
-            {
-                zlib.Dispose();
-            }
-            else
-            {
-                await zlib.DisposeAsync().ConfigureAwait(false);
-            }
-
-            await chunks.FinishAsync(cancellationToken).ConfigureAwait(false);
-
-            byte[] end = new byte[12];
-            PngChunkWriter.Frame(end, "IEND"u8, 0);
-            await WriteAsync(output, end, sync, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            await zlib.DisposeAsync().ConfigureAwait(false);
-            ArrayPool<byte>.Shared.Return(raw);
-            ArrayPool<byte>.Shared.Return(previous);
-            ArrayPool<byte>.Shared.Return(best);
-            ArrayPool<byte>.Shared.Return(trial);
-        }
-    }
-
-    // Fills `raw` and returns the buffer (best or trial) that holds the chosen filter byte and filtered row.
-    private static byte[] FilterRow(
-        Image image, int y, Span<byte> raw, ReadOnlySpan<byte> previous, int bytesPerPixel, int level, byte[] best, byte[] trial)
-    {
-        ReadOnlySpan<byte> pixels = image.GetRowBytes(y);
-        if (image.PixelFormat is PixelFormat.L16 or PixelFormat.Rgb48 or PixelFormat.Rgba64)
-        {
-            // PNG samples are big-endian; the image's are in the machine's order.
-            ReadOnlySpan<ushort> samples = MemoryMarshal.Cast<byte, ushort>(pixels);
-            for (int i = 0; i < samples.Length; i++)
-            {
-                BinaryPrimitives.WriteUInt16BigEndian(raw[(i * 2)..], samples[i]);
+                done[i] = default;
             }
         }
-        else if (image.PixelFormat == PixelFormat.Bgra32)
+
+        byte[] trailer = new byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(trailer, adler);
+        if (sync)
         {
-            for (int i = 0; i < raw.Length; i += 4)
-            {
-                raw[i] = pixels[i + 2];
-                raw[i + 1] = pixels[i + 1];
-                raw[i + 2] = pixels[i];
-                raw[i + 3] = pixels[i + 3];
-            }
+            idat.Write(trailer);
         }
         else
         {
-            pixels.CopyTo(raw);
+            await idat.WriteAsync(trailer, cancellationToken).ConfigureAwait(false);
         }
 
-        best[0] = 0;
-        raw.CopyTo(best.AsSpan(1));
-        if (level == 0)
-        {
-            return best;
-        }
+        await idat.FinishAsync(cancellationToken).ConfigureAwait(false);
 
-        // Each filter scored in the same pass that applies it; the winner swaps into `best`, so nothing is copied.
-        long bestScore = PngFilters.Score(raw);
-        for (int filter = 1; filter <= 4; filter++)
-        {
-            long score = PngFilters.FilterAndScore(filter, raw, previous, bytesPerPixel, trial.AsSpan(1, raw.Length));
-            if (score < bestScore)
-            {
-                bestScore = score;
-                trial[0] = (byte)filter;
-                (best, trial) = (trial, best);
-            }
-        }
-
-        return best;
+        byte[] end = new byte[12];
+        PngChunkWriter.Frame(end, "IEND"u8, 0);
+        await WriteAsync(output, end, sync, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

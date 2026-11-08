@@ -114,6 +114,58 @@ public class PngOracleTests
         Assert.Equal(asRgba64.GetPixelBytes().ToArray(), BigEndian(rgba64));
     }
 
+    public static TheoryData<string> Layouts() => PngOptimiserTests.Layouts();
+
+    [Theory]
+    [MemberData(nameof(Layouts))]
+    public async Task Reduced_files_read_back_in_ImageMagick_as_the_image(string name)
+    {
+        string magick = Oracle.Require("magick");
+        using Oracle.TempFolder folder = Oracle.CreateFolder();
+        (Image image, PngEncoderOptions options) = PngOptimiserTests.Build(name);
+        using (image)
+        {
+            await File.WriteAllBytesAsync(folder.File("ours.png"), PngEncoderTests.Save(image, options), TestContext.Current.CancellationToken);
+
+            (int exit, byte[] rgba64, string errors) = await Oracle.RunAsync(magick, folder.File("ours.png"), "-depth", "16", "-endian", "MSB", "rgba:-");
+
+            Assert.True(exit == 0, errors);
+            Assert.Equal("", errors.Trim());
+            Assert.Equal(PngOptimiserTests.Expected(image, options.CleanTransparentPixels), BigEndian(rgba64));
+        }
+    }
+
+    [Theory]
+    [InlineData(PixelFormat.Rgb24, 0)]
+    [InlineData(PixelFormat.Rgba32, 0)]
+    [InlineData(PixelFormat.Rgb24, 40)]
+    [InlineData(PixelFormat.L8, 0)]
+    public async Task Optimized_files_are_close_to_oxipng(PixelFormat format, int colours)
+    {
+        string oxipng = Oracle.Require("oxipng");
+        using Oracle.TempFolder folder = Oracle.CreateFolder();
+        using Image image = PngEncoderTests.Smooth(400, 300, format, seed: 9);
+        if (colours > 0)
+        {
+            Span<byte> pixels = image.GetPixelBytes();
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = (byte)(pixels[i] / (256 / 4) * 60);
+            }
+        }
+
+        byte[] plain = PngEncoderTests.Save(image, new PngEncoderOptions { ReduceColorType = false });
+        byte[] ours = PngEncoderTests.Save(image, new PngEncoderOptions { Optimize = true });
+        await File.WriteAllBytesAsync(folder.File("in.png"), plain, TestContext.Current.CancellationToken);
+
+        (int exit, _, string errors) = await Oracle.RunAsync(oxipng, "-o", "2", "--strip", "safe", "--out", folder.File("out.png"), folder.File("in.png"));
+
+        Assert.True(exit == 0, errors);
+        long theirs = new FileInfo(folder.File("out.png")).Length;
+        // oxipng compresses with libdeflate at level 11, a few per cent ahead of zlib at 9; layouts and filters match.
+        Assert.True(ours.Length <= theirs * 1.15, $"ours {ours.Length}, oxipng {theirs}");
+    }
+
     // ImageMagick's 16-bit samples, big-endian, into the machine's order as an Rgba64 image holds them.
     private static byte[] BigEndian(byte[] samples)
     {

@@ -23,9 +23,10 @@ public sealed partial class Image
     /// <exception cref="IOException">The stream itself fails.</exception>
     /// <remarks>
     /// <para>
-    /// The file is grey (<see cref="PixelFormat.L8"/>, <see cref="PixelFormat.L16"/>), RGB (<see cref="PixelFormat.Rgb24"/>,
-    /// <see cref="PixelFormat.Rgb48"/>) or RGBA (<see cref="PixelFormat.Rgba32"/>, <see cref="PixelFormat.Bgra32"/>,
-    /// <see cref="PixelFormat.Rgba64"/>), 8 or 16 bits as the image holds it.
+    /// The file is lossless and, by default, in the smallest layout that holds the pixels exactly: an opaque RGBA image
+    /// is written as RGB, a grey one as grey, one of up to 256 colours as a palette, and so on
+    /// (<see cref="PngEncoderOptions.ReduceColorType"/>). Turned off, the file is grey, RGB or RGBA at 8 or 16 bits as
+    /// the image holds it. <see cref="PngEncoderOptions.Optimize"/> searches harder for a smaller file, as oxipng does.
     /// </para>
     /// <para>
     /// The <see cref="ColorSpace"/> is written so the file shows the same colours: nothing for sRGB, a <c>cICP</c> chunk

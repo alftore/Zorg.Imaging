@@ -37,6 +37,71 @@ public sealed class PngEncoderOptions
     } = DefaultCompressionLevel;
 
     /// <summary>
+    /// Whether to write the image in the smallest PNG layout that holds it exactly (the default): RGBA whose alpha is
+    /// all opaque as RGB, colour where every pixel is grey as grey, up to 256 colours as a palette, 16-bit samples that
+    /// are all exact 8-bit values as 8-bit, and grey or palette indices in 1, 2 or 4 bits when they fit. With
+    /// <see langword="false"/>, the file has the image's own layout: grey, RGB or RGBA at 8 or 16 bits.
+    /// </summary>
+    /// <remarks>
+    /// Every pixel decodes to the same value either way. A file read back may have a different
+    /// <see cref="Image.PixelFormat"/> from the image saved, for example <see cref="PixelFormat.Rgb24"/> for an opaque
+    /// <see cref="PixelFormat.Rgba32"/> image. When the image has a colour space other than sRGB, grey stays grey and
+    /// colour stays colour, since a profile describes one or the other.
+    /// </remarks>
+    /// <example><code>var options = new PngEncoderOptions { ReduceColorType = false };</code></example>
+    public bool ReduceColorType { get; init; } = true;
+
+    /// <summary>
+    /// Whether fully transparent pixels may be written as transparent black. Their colour can't be seen, but it costs
+    /// bytes, and when the colours differ they stop transparency being written as a single <c>tRNS</c> colour or a
+    /// palette entry. Off by default, since some programs read the hidden colour back.
+    /// </summary>
+    /// <example><code>var options = new PngEncoderOptions { CleanTransparentPixels = true };</code></example>
+    public bool CleanTransparentPixels { get; init; }
+
+    /// <summary>How each row's filter is chosen. Defaults to <see cref="PngFilter.Adaptive"/>.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value isn't a <see cref="PngFilter"/>.</exception>
+    /// <example><code>var options = new PngEncoderOptions { Filter = PngFilter.Paeth };</code></example>
+    public PngFilter Filter
+    {
+        get;
+        init
+        {
+            if (!Enum.IsDefined(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "Not a PngFilter value.");
+            }
+
+            field = value;
+        }
+    }
+
+    /// <summary>
+    /// Whether to search for the smallest file, as oxipng does: each band of rows is compressed with several filter
+    /// strategies and zlib strategies at level 9, and the smallest kept. <see cref="Filter"/> and
+    /// <see cref="CompressionLevel"/> are then not used. Many times slower than a plain encode; meant for files that are
+    /// written once and served many times.
+    /// </summary>
+    /// <example><code>var options = new PngEncoderOptions { Optimize = true, CleanTransparentPixels = true };</code></example>
+    public bool Optimize { get; init; }
+
+    /// <summary>
+    /// How many cores this encode may use, or 0 (the default) for <see cref="ImageDefaults.MaxDegreeOfParallelism"/>.
+    /// The file is the same, byte for byte, whatever the value.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    /// <example><code>var options = new PngEncoderOptions { MaxDegreeOfParallelism = 1 };</code></example>
+    public int MaxDegreeOfParallelism
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            field = value;
+        }
+    }
+
+    /// <summary>
     /// What to do when the image's <see cref="Image.ColorSpace"/> isn't sRGB. Defaults to
     /// <see cref="ColorSpaceHandling.Keep"/>: PNG keeps any colour space exactly, for a few bytes.
     /// </summary>

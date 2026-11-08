@@ -384,3 +384,24 @@ Zorg.Imaging.PngEncoderOptions.Metadata.init -> void
 Zorg.Imaging.WebpEncoderOptions.Metadata.get -> Zorg.Imaging.MetadataOptions!
 Zorg.Imaging.WebpEncoderOptions.Metadata.init -> void
 static Zorg.Imaging.MetadataOptions.KeepNonPersonal.get -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.PngEncoderOptions.CleanTransparentPixels.get -> bool
+Zorg.Imaging.PngEncoderOptions.CleanTransparentPixels.init -> void
+Zorg.Imaging.PngEncoderOptions.Filter.get -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngEncoderOptions.Filter.init -> void
+Zorg.Imaging.PngEncoderOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.PngEncoderOptions.MaxDegreeOfParallelism.init -> void
+Zorg.Imaging.PngEncoderOptions.Optimize.get -> bool
+Zorg.Imaging.PngEncoderOptions.Optimize.init -> void
+Zorg.Imaging.PngEncoderOptions.ReduceColorType.get -> bool
+Zorg.Imaging.PngEncoderOptions.ReduceColorType.init -> void
+Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Adaptive = 0 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Average = 4 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.BigramEntropy = 9 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Bigrams = 8 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Entropy = 7 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.MinimumSum = 6 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.None = 1 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Paeth = 5 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Sub = 2 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Up = 3 -> Zorg.Imaging.PngFilter
