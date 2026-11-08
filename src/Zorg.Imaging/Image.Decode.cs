@@ -22,7 +22,7 @@ public sealed partial class Image
     /// <returns>The image, which the caller disposes.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="data"/> is <see langword="null"/>.</exception>
     /// <exception cref="UnsupportedImageFormatException">
-    /// The data isn't an image format this version can decode. So far that is PNG (and an APNG's still image), JPEG, GIF (its first frame) and WebP.
+    /// The data isn't an image format this version can decode. So far that is PNG, JPEG, GIF and WebP; of an animation, the first frame.
     /// </exception>
     /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
     /// <exception cref="ImageLimitException">The image is larger than <see cref="ImageLimits"/> allows.</exception>

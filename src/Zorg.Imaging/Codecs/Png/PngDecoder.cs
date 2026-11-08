@@ -12,8 +12,14 @@ using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging.Codecs.Png;
 
-/// <summary>Decodes a PNG file (W3C PNG Specification, Third Edition), or an APNG's default image.</summary>
+/// <summary>Decodes a PNG file (W3C PNG Specification, Third Edition), or an APNG's first frame.</summary>
 /// <remarks>
+/// <para>
+/// An APNG's first frame is its default image (IDAT) when an fcTL chunk comes before the image data. Otherwise the
+/// default image is only for viewers without APNG support, and isn't part of the animation: it's checked and passed
+/// over, and the first fcTL and fdAT frame is decoded instead, on a transparent canvas the size of IHDR, as browsers
+/// show it.
+/// </para>
 /// <para>
 /// Hostile input: the header is checked against <see cref="ImageLimits.MaxPixels"/> before anything is allocated, and
 /// inflating stops once the image's rows are full, so a zlib bomb costs no more than the image itself. Ancillary
@@ -38,6 +44,9 @@ internal static class PngDecoder
     private const uint SrgbChunk = 0x73524742;
     private const uint Gama = 0x67414D41;
     private const uint Chrm = 0x6348524D;
+    private const uint Actl = 0x6163544C;
+    private const uint Fctl = 0x6663544C;
+    private const uint Fdat = 0x66644154;
 
     private const int IhdrLength = 13;
     private const int CrcLength = 4;
@@ -94,6 +103,8 @@ internal static class PngDecoder
         byte[]? transparency = null;
         int orientation = 1;
         bool sawExif = false;
+        bool animated = false;
+        bool defaultIsFrame = false;
         var colour = new ColourChunks();
 
         while (true)
@@ -132,6 +143,16 @@ internal static class PngDecoder
                     await reader.SkipAsync(length - take + CrcLength, cancellationToken).ConfigureAwait(false);
                     break;
 
+                case Actl:
+                    animated = true;
+                    await reader.SkipAsync(length + CrcLength, cancellationToken).ConfigureAwait(false);
+                    break;
+
+                case Fctl:
+                    defaultIsFrame = true;
+                    await reader.SkipAsync(length + CrcLength, cancellationToken).ConfigureAwait(false);
+                    break;
+
                 case Cicp or Iccp or SrgbChunk or Gama or Chrm:
                     await colour.ReadAsync(reader, type, length, cancellationToken).ConfigureAwait(false);
                     break;
@@ -146,6 +167,11 @@ internal static class PngDecoder
         if (header.ColourType == 3 && palette is null)
         {
             throw ImageErrors.Corrupt("The PNG file is a palette image with no PLTE chunk.");
+        }
+
+        if (animated && !defaultIsFrame)
+        {
+            return await DecodeFirstFrameAsync(reader, length, header, palette, transparency, colour.Resolve(), orientation, options, sync, head, cancellationToken).ConfigureAwait(false);
         }
 
         var converter = new PngRowConverter(header, palette, transparency, options.PixelFormat);
@@ -170,6 +196,115 @@ internal static class PngDecoder
         catch
         {
             image.Dispose();
+            throw;
+        }
+    }
+
+    // An APNG whose default image isn't part of the animation: pass over the IDAT run, then decode the first fcTL frame
+    // from its fdAT chunks onto a transparent canvas.
+    private static async ValueTask<Image> DecodeFirstFrameAsync(
+        DataReader reader,
+        long idatLength,
+        PngHeader header,
+        byte[]? palette,
+        byte[]? transparency,
+        ColorSpace colorSpace,
+        int orientation,
+        DecodeOptions options,
+        bool sync,
+        byte[] head,
+        CancellationToken cancellationToken)
+    {
+        long length;
+        uint type;
+        using (var hidden = new IdatStream(reader, idatLength, sync))
+        {
+            (length, type) = await hidden.SkipRestAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        while (type != Fctl)
+        {
+            if (type is Iend or Idat or Fdat or Plte or Ihdr)
+            {
+                throw ImageErrors.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The APNG file has a {ChunkName(type)} chunk where its first frame's fcTL chunk should be."));
+            }
+
+            RefuseUnknownCritical(type);
+            await reader.SkipAsync(length + CrcLength, cancellationToken).ConfigureAwait(false);
+            (length, type) = await ReadChunkHeaderAsync(reader, head, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (length != 26)
+        {
+            throw ImageErrors.Corrupt("The APNG file's fcTL chunk isn't 26 bytes long.");
+        }
+
+        byte[] fctl = await ReadChunkDataAsync(reader, Fctl, length, cancellationToken).ConfigureAwait(false);
+        uint width = BinaryPrimitives.ReadUInt32BigEndian(fctl.AsSpan(4));
+        uint height = BinaryPrimitives.ReadUInt32BigEndian(fctl.AsSpan(8));
+        uint left = BinaryPrimitives.ReadUInt32BigEndian(fctl.AsSpan(12));
+        uint top = BinaryPrimitives.ReadUInt32BigEndian(fctl.AsSpan(16));
+        if (width == 0 || height == 0 || (long)left + width > header.Width || (long)top + height > header.Height)
+        {
+            throw ImageErrors.Corrupt(string.Create(
+                CultureInfo.InvariantCulture,
+                $"The APNG file's first frame, {width} x {height} at ({left}, {top}), doesn't fit its {header.Width} x {header.Height} canvas."));
+        }
+
+        (length, type) = await ReadChunkHeaderAsync(reader, head, cancellationToken).ConfigureAwait(false);
+        if (type != Fdat)
+        {
+            throw ImageErrors.Corrupt("The APNG file's first frame has no fdAT chunk after its fcTL chunk.");
+        }
+
+        // A frame that fills the canvas is the image; a smaller one is placed on a transparent canvas, so the image
+        // needs alpha.
+        PngHeader frameHeader = header with { Width = (int)width, Height = (int)height };
+        bool fills = width == header.Width && height == header.Height;
+        PixelFormat requested = options.PixelFormat;
+        if (!fills && requested == PixelFormat.None)
+        {
+            requested = header.BitDepth == 16 ? PixelFormat.Rgba64 : PixelFormat.Rgba32;
+        }
+
+        var converter = new PngRowConverter(frameHeader, palette, transparency, requested);
+        Image frame = frameHeader.CreateImage(converter.Target);
+        Image? canvas = null;
+        try
+        {
+            var fdat = new IdatStream(reader, length, sync, frameData: true);
+            await DecodeImageDataAsync(fdat, frameHeader, converter, frame, sync, cancellationToken).ConfigureAwait(false);
+            await ReadToEndAsync(reader, fdat, head, cancellationToken).ConfigureAwait(false);
+            reader.Finish();
+
+            if (!fills)
+            {
+                canvas = header.CreateImage(frame.PixelFormat);
+                int bytes = frame.BytesPerPixel;
+                for (int y = 0; y < frame.Height; y++)
+                {
+                    frame.GetRowBytes(y).CopyTo(canvas.GetRowBytes((int)top + y)[((int)left * bytes)..]);
+                }
+
+                frame.Dispose();
+                frame = canvas;
+                canvas = null;
+            }
+
+            frame.ColorSpace = colorSpace;
+            if (options.ApplyOrientation && orientation != 1)
+            {
+                Image upright = Orientation.Apply(frame, orientation);
+                frame.Dispose();
+                frame = upright;
+            }
+
+            return frame;
+        }
+        catch
+        {
+            frame.Dispose();
+            canvas?.Dispose();
             throw;
         }
     }

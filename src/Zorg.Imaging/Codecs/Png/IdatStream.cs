@@ -9,17 +9,21 @@ using Zorg.Imaging.Formats;
 namespace Zorg.Imaging.Codecs.Png;
 
 /// <summary>
-/// The data of a run of consecutive IDAT chunks as one stream, for <see cref="System.IO.Compression.ZLibStream"/>.
-/// Each chunk's CRC is checked as its end is reached. The stream ends at the first chunk that isn't IDAT, whose
-/// header is kept for the decoder.
+/// The data of a run of consecutive IDAT chunks, or an APNG frame's fdAT chunks, as one stream, for
+/// <see cref="System.IO.Compression.ZLibStream"/>. Each chunk's CRC is checked as its end is reached, and an fdAT
+/// chunk's sequence number is passed over. The stream ends at the first chunk of another type, whose header is kept
+/// for the decoder.
 /// </summary>
 internal sealed class IdatStream : Stream
 {
     private const uint IdatType = 0x49444154;
+    private const uint FdatType = 0x66644154;
 
     private readonly DataReader _reader;
     private readonly bool _sync;
     private readonly byte[] _head = new byte[8];
+    private readonly uint _type;
+    private bool _sequencePending;
     private long _remaining;
     private uint _crc;
     private bool _ended;
@@ -29,10 +33,12 @@ internal sealed class IdatStream : Stream
     /// <param name="reader">The reader, positioned at the chunk's data.</param>
     /// <param name="length">The first chunk's data length.</param>
     /// <param name="sync">Whether the reader is over memory, so the synchronous read path may be used.</param>
-    public IdatStream(DataReader reader, long length, bool sync)
+    /// <param name="frameData">Whether the chunks are fdAT rather than IDAT.</param>
+    public IdatStream(DataReader reader, long length, bool sync, bool frameData = false)
     {
         _reader = reader;
         _sync = sync;
+        _type = frameData ? FdatType : IdatType;
         StartChunk(length);
     }
 
@@ -114,8 +120,22 @@ internal sealed class IdatStream : Stream
             return 0;
         }
 
-        while (_remaining == 0)
+        while (_remaining == 0 || _sequencePending)
         {
+            if (_sequencePending)
+            {
+                if (_remaining < 4)
+                {
+                    throw ImageErrors.Corrupt("The PNG file's fdAT chunk is too short for its sequence number.");
+                }
+
+                await _reader.ReadExactlyAsync(_head.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
+                _crc = Crc32.Append(_crc, _head.AsSpan(0, 4));
+                _remaining -= 4;
+                _sequencePending = false;
+                continue;
+            }
+
             if (_ended)
             {
                 return 0;
@@ -124,11 +144,11 @@ internal sealed class IdatStream : Stream
             await _reader.ReadExactlyAsync(_head.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
             if (_crc != BinaryPrimitives.ReadUInt32BigEndian(_head))
             {
-                throw ImageErrors.Corrupt("The PNG file's IDAT chunk fails its CRC check.");
+                throw ImageErrors.Corrupt(_type == IdatType ? "The PNG file's IDAT chunk fails its CRC check." : "The PNG file's fdAT chunk fails its CRC check.");
             }
 
             (long length, uint type) = await PngDecoder.ReadChunkHeaderAsync(_reader, _head, cancellationToken).ConfigureAwait(false);
-            if (type != IdatType)
+            if (type != _type)
             {
                 _ended = true;
                 _next = (length, type);
@@ -152,6 +172,7 @@ internal sealed class IdatStream : Stream
     private void StartChunk(long length)
     {
         _remaining = length;
-        _crc = Crc32.Compute("IDAT"u8);
+        _crc = Crc32.Compute(_type == IdatType ? "IDAT"u8 : "fdAT"u8);
+        _sequencePending = _type == FdatType;
     }
 }
