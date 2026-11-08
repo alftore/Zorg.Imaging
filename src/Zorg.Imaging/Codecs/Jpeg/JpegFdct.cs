@@ -18,44 +18,53 @@ internal static class JpegFdct
     private static readonly float[] Basis = MakeBasis();
 
     /// <summary>Transforms and quantises a block.</summary>
-    /// <param name="samples">64 samples, row by row, already shifted to -128..127.</param>
+    /// <param name="samples">The block's samples, already centred on 0, row y at <paramref name="stride"/> * y.</param>
+    /// <param name="stride">The distance between rows in <paramref name="samples"/>.</param>
     /// <param name="reciprocals">1 / quantisation value for each natural position.</param>
     /// <param name="output">The 64 quantised coefficients, in zigzag order.</param>
-    public static void Transform(ReadOnlySpan<float> samples, ReadOnlySpan<float> reciprocals, Span<short> output)
+    public static void Transform(ReadOnlySpan<float> samples, int stride, ReadOnlySpan<float> reciprocals, Span<short> output)
     {
         ReadOnlySpan<Vector256<float>> columns = MemoryMarshal.Cast<float, Vector256<float>>(Transposed);
         Span<Vector256<float>> rows = stackalloc Vector256<float>[8];
 
-        // Across: row y becomes Σx f(y, x) · (contribution of x to each u).
+        // Across: row y becomes the sum over x of f(y, x) times the contribution of x to each u.
         for (int y = 0; y < 8; y++)
         {
-            ReadOnlySpan<float> f = samples.Slice(y * 8, 8);
-            Vector256<float> sum = Vector256<float>.Zero;
-            for (int x = 0; x < 8; x++)
-            {
-                sum += columns[x] * f[x];
-            }
-
+            ReadOnlySpan<float> f = samples.Slice(y * stride, 8);
+            Vector256<float> sum = columns[0] * f[0];
+            sum += columns[1] * f[1];
+            sum += columns[2] * f[2];
+            sum += columns[3] * f[3];
+            sum += columns[4] * f[4];
+            sum += columns[5] * f[5];
+            sum += columns[6] * f[6];
+            sum += columns[7] * f[7];
             rows[y] = sum;
         }
 
-        // Down: frequency row v is Σy basis(v, y) · row y; then quantise, rounding to nearest.
-        Span<float> coefficients = stackalloc float[64];
+        // Down: frequency row v is the sum over y of basis(v, y) times row y; then quantise, rounding to nearest even
+        // (as MathF.Round does), and narrow eight coefficients at once.
+        Span<short> natural = stackalloc short[64];
+        ReadOnlySpan<Vector256<float>> q = MemoryMarshal.Cast<float, Vector256<float>>(reciprocals[..64]);
         for (int v = 0; v < 8; v++)
         {
-            Vector256<float> sum = Vector256<float>.Zero;
-            for (int y = 0; y < 8; y++)
-            {
-                sum += rows[y] * Basis[(v * 8) + y];
-            }
-
-            (sum * Vector256.Create(reciprocals.Slice(v * 8, 8))).CopyTo(coefficients.Slice(v * 8, 8));
+            ReadOnlySpan<float> b = Basis.AsSpan(v * 8, 8);
+            Vector256<float> sum = rows[0] * b[0];
+            sum += rows[1] * b[1];
+            sum += rows[2] * b[2];
+            sum += rows[3] * b[3];
+            sum += rows[4] * b[4];
+            sum += rows[5] * b[5];
+            sum += rows[6] * b[6];
+            sum += rows[7] * b[7];
+            Vector256<int> ints = Vector256.ConvertToInt32(Vector256.Round(sum * q[v]));
+            Vector128.Narrow(ints.GetLower(), ints.GetUpper()).CopyTo(natural.Slice(v * 8, 8));
         }
 
         ReadOnlySpan<byte> zigZag = JpegIdct.ZigZag;
         for (int k = 0; k < 64; k++)
         {
-            output[k] = (short)MathF.Round(coefficients[zigZag[k]]);
+            output[k] = natural[zigZag[k]];
         }
     }
 

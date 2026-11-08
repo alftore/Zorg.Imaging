@@ -18,6 +18,9 @@ internal static class JpegColour
     // For output vector o (0..2) and channel c: which of the 16 pixels each output byte takes, 0x80 for none.
     private static readonly Vector128<byte>[] Interleave = MakeMasks();
 
+    // For channel c (0..2) and input vector o (0..2): which byte of that vector each of the 16 pixels takes, 0x80 for none.
+    private static readonly Vector128<byte>[] Deinterleave = MakeDeinterleave();
+
     /// <summary>Converts as many whole groups of 16 pixels as the hardware allows; returns how many pixels it did.</summary>
     public static int YccToRgb24(ReadOnlySpan<byte> luma, ReadOnlySpan<byte> blue, ReadOnlySpan<byte> red, Span<byte> output, int width)
     {
@@ -149,6 +152,49 @@ internal static class JpegColour
         }
     }
 
+    /// <summary>
+    /// RGB to YCbCr centred on 0 (Y - 128, Cb - 128, Cr - 128), 16 pixels at a time: the three channels pulled apart
+    /// with byte shuffles, then converted in float vectors. Returns how many pixels it did, a multiple of 16.
+    /// </summary>
+    public static int Rgb24ToYcc(ReadOnlySpan<byte> rgb, Span<float> luma, Span<float> blue, Span<float> red, int width)
+    {
+        if (!Vector256.IsHardwareAccelerated || !(Ssse3.IsSupported || AdvSimd.Arm64.IsSupported))
+        {
+            return 0;
+        }
+
+        ref byte source = ref MemoryMarshal.GetReference(rgb);
+        int x = 0;
+        for (; x + 16 <= width && (3 * x) + 48 <= rgb.Length && x + 16 <= luma.Length; x += 16)
+        {
+            Vector128<byte> v0 = Vector128.LoadUnsafe(ref source, (nuint)(3 * x));
+            Vector128<byte> v1 = Vector128.LoadUnsafe(ref source, (nuint)((3 * x) + 16));
+            Vector128<byte> v2 = Vector128.LoadUnsafe(ref source, (nuint)((3 * x) + 32));
+            Vector128<byte> r = Shuffle(v0, Deinterleave[0]) | Shuffle(v1, Deinterleave[1]) | Shuffle(v2, Deinterleave[2]);
+            Vector128<byte> g = Shuffle(v0, Deinterleave[3]) | Shuffle(v1, Deinterleave[4]) | Shuffle(v2, Deinterleave[5]);
+            Vector128<byte> b = Shuffle(v0, Deinterleave[6]) | Shuffle(v1, Deinterleave[7]) | Shuffle(v2, Deinterleave[8]);
+            for (int half = 0; half < 2; half++)
+            {
+                Vector256<float> rf = ToFloat(r, half);
+                Vector256<float> gf = ToFloat(g, half);
+                Vector256<float> bf = ToFloat(b, half);
+                int at = x + (8 * half);
+                ((rf * 0.299f) + (gf * 0.587f) + (bf * 0.114f) - Vector256.Create(128f)).CopyTo(luma.Slice(at, 8));
+                ((rf * -0.168736f) - (gf * 0.331264f) + (bf * 0.5f)).CopyTo(blue.Slice(at, 8));
+                ((rf * 0.5f) - (gf * 0.418688f) - (bf * 0.081312f)).CopyTo(red.Slice(at, 8));
+            }
+        }
+
+        return x;
+    }
+
+    // Eight of the 16 bytes (the low or high half) as floats.
+    private static Vector256<float> ToFloat(Vector128<byte> bytes, int half)
+    {
+        Vector128<ushort> shorts = half == 0 ? Vector128.WidenLower(bytes) : Vector128.WidenUpper(bytes);
+        return Vector256.ConvertToSingle(Vector256.Create(Vector128.WidenLower(shorts), Vector128.WidenUpper(shorts)).AsInt32());
+    }
+
     private static (Vector256<int> Low, Vector256<int> High) Widen(Vector128<byte> bytes)
     {
         Vector256<ushort> shorts = Vector256.Create(Vector128.WidenLower(bytes), Vector128.WidenUpper(bytes));
@@ -167,6 +213,27 @@ internal static class JpegColour
 
     private static Vector128<byte> Shuffle(Vector128<byte> source, Vector128<byte> mask) =>
         Ssse3.IsSupported ? Ssse3.Shuffle(source, mask) : AdvSimd.Arm64.VectorTableLookup(source, mask);
+
+    private static Vector128<byte>[] MakeDeinterleave()
+    {
+        var masks = new Vector128<byte>[9];
+        Span<byte> mask = stackalloc byte[16];
+        for (int c = 0; c < 3; c++)
+        {
+            for (int o = 0; o < 3; o++)
+            {
+                for (int j = 0; j < 16; j++)
+                {
+                    int at = (3 * j) + c;
+                    mask[j] = at / 16 == o ? (byte)(at % 16) : (byte)0x80;
+                }
+
+                masks[(c * 3) + o] = Vector128.Create((ReadOnlySpan<byte>)mask);
+            }
+        }
+
+        return masks;
+    }
 
     private static Vector128<byte>[] MakeMasks()
     {

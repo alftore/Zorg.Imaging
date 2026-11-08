@@ -85,5 +85,30 @@ public class JpegSimdTests
         }
     }
 
+    [Theory]
+    [InlineData(16)]
+    [InlineData(47)]
+    [InlineData(512)]
+    public void Rgb_to_centred_ycc_matches_the_scalar_formula(int width)
+    {
+        var random = new Random(width);
+        byte[] rgb = new byte[3 * width];
+        random.NextBytes(rgb);
+        float[] y = new float[width];
+        float[] cb = new float[width];
+        float[] cr = new float[width];
+        int done = JpegColour.Rgb24ToYcc(rgb, y, cb, cr, width);
+        Assert.InRange(done, 0, width);
+        for (int x = 0; x < done; x++)
+        {
+            float r = rgb[3 * x];
+            float g = rgb[(3 * x) + 1];
+            float b = rgb[(3 * x) + 2];
+            Assert.Equal((0.299f * r) + (0.587f * g) + (0.114f * b) - 128, y[x], 0.001f);
+            Assert.Equal((-0.168736f * r) - (0.331264f * g) + (0.5f * b), cb[x], 0.001f);
+            Assert.Equal((0.5f * r) - (0.418688f * g) - (0.081312f * b), cr[x], 0.001f);
+        }
+    }
+
     private static byte Clamp(int value) => (byte)Math.Clamp(value, 0, 255);
 }

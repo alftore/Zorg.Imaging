@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Globalization;
 using System.IO;
 using System.Numerics;
@@ -146,7 +147,7 @@ internal static class JpegEncoder
         return reciprocals;
     }
 
-    // Converts, level-shifts, transforms and quantises every block, a band of MCU rows per thread.
+    // Converts, centres, transforms and quantises every block, a band of MCU rows per thread.
     private static void Transform(Image image, Rgba32 background, Plane[] planes, int mcusWide, int mcusHigh, int factor, float[] lumaQ, float[] chromaQ)
     {
         bool grey = planes.Length == 1;
@@ -158,7 +159,9 @@ internal static class JpegEncoder
             float[] y = new float[width * mcuSide];
             float[] cb = grey ? [] : new float[width * mcuSide];
             float[] cr = grey ? [] : new float[width * mcuSide];
-            float[] block = new float[64];
+            int halfWidth = width / factor;
+            float[] cbHalf = grey || factor == 1 ? cb : new float[halfWidth * 8];
+            float[] crHalf = grey || factor == 1 ? cr : new float[halfWidth * 8];
             int end = (int)((long)mcusHigh * (band + 1) / bands);
             for (int row = (int)((long)mcusHigh * band / bands); row < end; row++)
             {
@@ -168,13 +171,12 @@ internal static class JpegEncoder
                     ConvertRow(image, source, background, y.AsSpan(line * width, width), grey ? default : cb.AsSpan(line * width, width), grey ? default : cr.AsSpan(line * width, width));
                 }
 
-                // Luma: every block of the MCU row.
+                // Luma: every block of the MCU row, read in place.
                 for (int by = 0; by < factor; by++)
                 {
                     for (int bx = 0; bx < mcusWide * factor; bx++)
                     {
-                        Gather(y, width, bx * 8, by * 8, 1, block);
-                        JpegFdct.Transform(block, lumaQ, planes[0].Block(bx, (row * factor) + by));
+                        JpegFdct.Transform(y.AsSpan((by * 8 * width) + (bx * 8)), width, lumaQ, planes[0].Block(bx, (row * factor) + by));
                     }
                 }
 
@@ -183,42 +185,39 @@ internal static class JpegEncoder
                     continue;
                 }
 
-                // Chroma: one block per MCU, averaged over factor x factor samples.
+                // Chroma: averaged over 2 x 2 once for the whole MCU row when subsampled, then one block per MCU.
+                if (factor == 2)
+                {
+                    Halve(cb, width, cbHalf);
+                    Halve(cr, width, crHalf);
+                }
+
                 for (int mx = 0; mx < mcusWide; mx++)
                 {
-                    Gather(cb, width, mx * mcuSide, 0, factor, block);
-                    JpegFdct.Transform(block, chromaQ, planes[1].Block(mx, row));
-                    Gather(cr, width, mx * mcuSide, 0, factor, block);
-                    JpegFdct.Transform(block, chromaQ, planes[2].Block(mx, row));
+                    JpegFdct.Transform(cbHalf.AsSpan(mx * 8), halfWidth, chromaQ, planes[1].Block(mx, row));
+                    JpegFdct.Transform(crHalf.AsSpan(mx * 8), halfWidth, chromaQ, planes[2].Block(mx, row));
                 }
             }
         });
     }
 
-    // One 8 x 8 block from a plane of the MCU row, each sample the mean of factor x factor, shifted by -128.
-    private static void Gather(float[] plane, int width, int x0, int y0, int factor, float[] block)
+    // The mean of each 2 x 2 square of a 16-row plane: 8 rows of half the width.
+    private static void Halve(float[] plane, int width, float[] half)
     {
-        float scale = 1f / (factor * factor);
+        int halfWidth = width / 2;
         for (int y = 0; y < 8; y++)
         {
-            for (int x = 0; x < 8; x++)
+            ReadOnlySpan<float> top = plane.AsSpan(2 * y * width, width);
+            ReadOnlySpan<float> bottom = plane.AsSpan(((2 * y) + 1) * width, width);
+            Span<float> output = half.AsSpan(y * halfWidth, halfWidth);
+            for (int x = 0; x < halfWidth; x++)
             {
-                float sum = 0;
-                for (int dy = 0; dy < factor; dy++)
-                {
-                    int at = ((y0 + (y * factor) + dy) * width) + x0 + (x * factor);
-                    for (int dx = 0; dx < factor; dx++)
-                    {
-                        sum += plane[at + dx];
-                    }
-                }
-
-                block[(y * 8) + x] = (sum * scale) - 128;
+                output[x] = (top[2 * x] + top[(2 * x) + 1] + bottom[2 * x] + bottom[(2 * x) + 1]) * 0.25f;
             }
         }
     }
 
-    // One source row as Y, Cb and Cr (JFIF), padded to the MCU width by repeating the last pixel.
+    // One source row as Y, Cb and Cr (JFIF), centred on 0, padded to the MCU width by repeating the last pixel.
     private static void ConvertRow(Image image, int y, Rgba32 background, Span<float> luma, Span<float> cb, Span<float> cr)
     {
         ReadOnlySpan<byte> row = image.GetRowBytes(y);
@@ -226,17 +225,19 @@ internal static class JpegEncoder
             ? MemoryMarshal.Cast<byte, ushort>(row)
             : default;
         int width = image.Width;
+        int start = 0;
         if (image.PixelFormat == PixelFormat.Rgb24 && !cb.IsEmpty)
         {
-            for (int x = 0; x < luma.Length; x++)
+            start = JpegColour.Rgb24ToYcc(row, luma, cb, cr, width);
+            for (int x = start; x < luma.Length; x++)
             {
                 int at = 3 * Math.Min(x, width - 1);
                 float r = row[at];
                 float g = row[at + 1];
                 float b = row[at + 2];
-                luma[x] = (0.299f * r) + (0.587f * g) + (0.114f * b);
-                cb[x] = (-0.168736f * r) - (0.331264f * g) + (0.5f * b) + 128;
-                cr[x] = (0.5f * r) - (0.418688f * g) - (0.081312f * b) + 128;
+                luma[x] = (0.299f * r) + (0.587f * g) + (0.114f * b) - 128;
+                cb[x] = (-0.168736f * r) - (0.331264f * g) + (0.5f * b);
+                cr[x] = (0.5f * r) - (0.418688f * g) - (0.081312f * b);
             }
 
             return;
@@ -258,13 +259,13 @@ internal static class JpegEncoder
 
             if (cb.IsEmpty)
             {
-                luma[x] = r;
+                luma[x] = r - 128;
                 continue;
             }
 
-            luma[x] = (0.299f * r) + (0.587f * g) + (0.114f * b);
-            cb[x] = (-0.168736f * r) - (0.331264f * g) + (0.5f * b) + 128;
-            cr[x] = (0.5f * r) - (0.418688f * g) - (0.081312f * b) + 128;
+            luma[x] = (0.299f * r) + (0.587f * g) + (0.114f * b) - 128;
+            cb[x] = (-0.168736f * r) - (0.331264f * g) + (0.5f * b);
+            cr[x] = (0.5f * r) - (0.418688f * g) - (0.081312f * b);
         }
     }
 
@@ -353,8 +354,9 @@ internal static class JpegEncoder
     {
         int difference = block[0] - previous;
         int size = Category(difference);
-        bits.Write(dc.Code(size), dc.Length(size));
-        bits.Write(Magnitude(difference, size), size);
+
+        // A code and its value bits go out together: at most 16 + 11 bits.
+        bits.Write((dc.Code(size) << size) | Magnitude(difference, size), dc.Length(size) + size);
         ulong mask = NonZero(block) & ~1UL;
         int last = 0;
         while (mask != 0)
@@ -371,8 +373,7 @@ internal static class JpegEncoder
             int value = block[k];
             size = Category(value);
             int symbol = (run << 4) | size;
-            bits.Write(ac.Code(symbol), ac.Length(symbol));
-            bits.Write(Magnitude(value, size), size);
+            bits.Write((ac.Code(symbol) << size) | Magnitude(value, size), ac.Length(symbol) + size);
             last = k;
         }
 
@@ -499,15 +500,25 @@ internal static class JpegEncoder
 
             _buffer = (_buffer << length) | (uint)(value & ((1 << length) - 1));
             _count += length;
-            if (_count < 8)
+            if (_count < 32)
             {
                 return;
             }
 
-            // At most four bytes come out, each perhaps with a stuffed zero.
-            if (Length + 8 > _data.Length)
+            // Four or more bytes are ready: at most eight come out, each perhaps with a stuffed zero.
+            if (Length + 16 > _data.Length)
             {
                 Array.Resize(ref _data, (int)Math.Min((long)_data.Length * 2, Array.MaxLength));
+            }
+
+            // Usually none of the next four bytes is 0xFF, and they go out in one store.
+            uint four = (uint)(_buffer >> (_count - 32));
+            if (((four & 0x80808080u) & ~(four + 0x01010101u)) == 0 || !HasFF(four))
+            {
+                BinaryPrimitives.WriteUInt32BigEndian(_data.AsSpan(Length, 4), four);
+                Length += 4;
+                _count -= 32;
+                return;
             }
 
             while (_count >= 8)
@@ -522,13 +533,35 @@ internal static class JpegEncoder
             }
         }
 
-        // Pads the last byte with ones (F.1.2.3).
+        // Pads the last byte with ones (F.1.2.3), after writing out whole bytes still held.
         public void Flush()
         {
-            if (_count > 0)
+            if (Length + 16 > _data.Length)
             {
-                Write((1 << (8 - _count)) - 1, 8 - _count);
+                Array.Resize(ref _data, _data.Length + 16);
+            }
+
+            if (_count % 8 != 0)
+            {
+                int pad = 8 - (_count % 8);
+                _buffer = (_buffer << pad) | (uint)((1 << pad) - 1);
+                _count += pad;
+            }
+
+            while (_count >= 8)
+            {
+                _count -= 8;
+                byte b = (byte)(_buffer >> _count);
+                _data[Length++] = b;
+                if (b == 0xFF)
+                {
+                    _data[Length++] = 0;
+                }
             }
         }
+
+        private static bool HasFF(uint four) =>
+            (four & 0xFF000000u) == 0xFF000000u || (four & 0x00FF0000u) == 0x00FF0000u
+            || (four & 0x0000FF00u) == 0x0000FF00u || (four & 0x000000FFu) == 0x000000FFu;
     }
 }

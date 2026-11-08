@@ -187,9 +187,15 @@ public class FormatSignaturesTests
     {
         byte[][] samples = [.. SignatureSamples.Signatures.Values.Select(v => v.Bytes), .. SignatureSamples.NonImages.Values];
         int detected = 0;
-        foreach (byte[] sample in samples)
+
+        // Warm up past tiered compilation's call counting, so the measured rounds see the final code and nothing the
+        // JIT does on this thread (it allocated a little on one run with SIMD switched off) is counted.
+        for (int round = 0; round < 50; round++)
         {
-            detected += FormatSignatures.Detect(sample) is null ? 0 : 1; // warm-up
+            foreach (byte[] sample in samples)
+            {
+                detected += FormatSignatures.Detect(sample) is null ? 0 : 1;
+            }
         }
 
         long before = GC.GetAllocatedBytesForCurrentThread();

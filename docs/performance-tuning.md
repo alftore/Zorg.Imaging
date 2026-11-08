@@ -72,6 +72,21 @@ where it was measured. `docs/performance.md` has the current numbers.
 - **Not every knob helps.** zlib's `Z_FILTERED` strategy (`ZLibCompressionOptions.CompressionStrategy`), which libpng
   uses for filtered rows, gave the same bytes as the default with .NET's zlib-ng on our photos; the change was dropped.
 
+- **Pull interleaved channels apart with the same shuffles.** RGB24 to separate R, G and B planes is three `pshufb`
+  (or `tbl`) per output vector, ORed together, with a mask table built once. The JPEG encoder converts 16 pixels per
+  step that way, then widens to floats.
+- **Read blocks where they lie.** Passing a span and a row stride to the forward DCT, instead of copying each 8 x 8
+  block into a buffer first, and averaging chroma once per row of blocks, took the encoder's transform stage from 160
+  to 52 ms on one core.
+- **`Vector256.Round` rounds half to even, like `MathF.Round`**, so vectorising rounding kept the output identical.
+
+## Bit writing
+
+- **Write a code and its extra bits as one value** (`code << size | bits`, at most 27 bits) instead of two calls.
+- **Let bits pile up, then store four bytes at once** when none of them is 0xFF (JPEG must follow 0xFF with 0x00):
+  a branch-free test for 0xFF in a word decides, and the rare word that has one goes byte by byte. JPEG encoding's
+  bit writing went from 55 to 41 ms.
+
 ## Arithmetic
 
 - **Rewrite an algorithm into an equivalent form only with a proof.** The VP8 boolean decoder keeps the range as range
@@ -81,6 +96,10 @@ where it was measured. `docs/performance.md` has the current numbers.
 - **Compute shared terms once.** The chroma upsampler computed each column's vertical sum twice per output pixel;
   computing all column sums first, then the outputs (and then both as vectors), took colour output from 125 to 22 ms
   together with SIMD colour conversion.
+
+- **Allocation tests need a real warm-up.** A test that `GC.GetAllocatedBytesForCurrentThread()` is unchanged by a
+  call failed once (6,800 bytes over 100 rounds) when run with SIMD switched off: one warm-up call left the method
+  inside tiered compilation's call counting during the measured rounds. Fifty warm-up rounds fixed it.
 
 ## Threads
 
