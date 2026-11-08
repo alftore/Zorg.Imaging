@@ -162,7 +162,16 @@ where it was measured. `docs/performance.md` has the current numbers.
   first and testing only the best three fully halved the time on one core, and the files came out a little smaller,
   not larger: the error ranking agrees with the full test almost always.
 
+- **LZW strings are already in the output.** A GIF decoder usually walks each code's chain of prefixes to write its
+  string backwards. Every string in the table was written to the output once before, though, so the table needs only
+  where that was and how long: each code becomes one span copy. With decoding straight into the image rows, this
+  halved GIF decoding.
+
 ## Memory
+
+- **Small tables beat direct ones when they fit in cache.** The GIF encoder's LZW table started as a direct array,
+  4096 codes by 256 indices (4 MB), with generation stamps so it never needed clearing. A 16K-entry hash table (64 KB)
+  that is cleared on every reset was faster: a probe or two in L1 or L2 costs less than one miss to memory.
 
 - **Size hash tables to the input.** A fixed 2^18-bucket table for a 12-megapixel image puts about 46 pixels in each
   bucket, and walking a chain becomes a run of cache misses. One bucket per pixel (2^22 at most) halved the WebP

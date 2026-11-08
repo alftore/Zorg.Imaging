@@ -21,6 +21,7 @@ public class ImageSharpBenchmarks
     private byte[] _jpeg = [];
     private byte[] _progressive = [];
     private byte[] _png = [];
+    private byte[] _gif = [];
     private byte[] _lossy = [];
     private byte[] _lossless = [];
     private Sharp.Image<SharpRgb24> _decoded = null!;
@@ -33,6 +34,7 @@ public class ImageSharpBenchmarks
         _jpeg = File.ReadAllBytes(Path.Combine(folder, "photo.jpg"));
         _progressive = File.ReadAllBytes(Path.Combine(folder, "photo-progressive.jpg"));
         _png = File.ReadAllBytes(Path.Combine(folder, "photo.png"));
+        _gif = File.ReadAllBytes(Path.Combine(folder, "photo.gif"));
         _lossy = File.ReadAllBytes(Path.Combine(folder, "photo-lossy.webp"));
         _lossless = File.ReadAllBytes(Path.Combine(folder, "photo-lossless.webp"));
         _decoded = Sharp.Image.Load<SharpRgb24>(_jpeg);
@@ -51,6 +53,9 @@ public class ImageSharpBenchmarks
     public int Sharp_Decode_Png() => Decode(_png);
 
     [Benchmark]
+    public int Sharp_Decode_Gif() => Decode(_gif);
+
+    [Benchmark]
     public int Sharp_Decode_WebpLossy() => Decode(_lossy);
 
     [Benchmark]
@@ -61,6 +66,14 @@ public class ImageSharpBenchmarks
     {
         using var output = new MemoryStream();
         _decoded.Save(output, new JpegEncoder { Quality = 80, ColorType = JpegColorType.YCbCrRatio420 });
+        return output.Length;
+    }
+
+    [Benchmark]
+    public long Sharp_Encode_Gif()
+    {
+        using var output = new MemoryStream();
+        _decoded.Save(output, new SixLabors.ImageSharp.Formats.Gif.GifEncoder());
         return output.Length;
     }
 

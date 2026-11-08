@@ -339,3 +339,16 @@ Zorg.Imaging.WebpEncoderOptions.MaxDegreeOfParallelism.init -> void
 Zorg.Imaging.WebpEncoderOptions.Quality.get -> int
 Zorg.Imaging.WebpEncoderOptions.Quality.init -> void
 Zorg.Imaging.WebpEncoderOptions.WebpEncoderOptions() -> void
+const Zorg.Imaging.GifEncoderOptions.DefaultMaxColors = 256 -> int
+static Zorg.Imaging.GifEncoderOptions.Default.get -> Zorg.Imaging.GifEncoderOptions!
+Zorg.Imaging.GifEncoderOptions
+Zorg.Imaging.GifEncoderOptions.Dithering.get -> double
+Zorg.Imaging.GifEncoderOptions.Dithering.init -> void
+Zorg.Imaging.GifEncoderOptions.GifEncoderOptions() -> void
+Zorg.Imaging.GifEncoderOptions.MaxColors.get -> int
+Zorg.Imaging.GifEncoderOptions.MaxColors.init -> void
+Zorg.Imaging.GifEncoderOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.GifEncoderOptions.MaxDegreeOfParallelism.init -> void
+Zorg.Imaging.Image.SaveAsGif(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null) -> void
+Zorg.Imaging.Image.SaveAsGifAsync(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.SaveAsGifAsync(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask

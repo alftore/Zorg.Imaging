@@ -1,7 +1,6 @@
 using System;
 using System.Buffers.Binary;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Imaging.Formats;
@@ -51,7 +50,7 @@ internal static class WebpDecoder
 
         reader.Finish();
         PixelFormat format = options.PixelFormat != PixelFormat.None ? options.PixelFormat : picture.HasAlpha ? PixelFormat.Rgba32 : PixelFormat.Rgb24;
-        Image image = ToImage(picture, format);
+        Image image = Argb.ToImage(picture.Pixels, picture.Width, picture.Height, picture.HasAlpha, format);
         image.ColorSpace = file.ColorSpace;
         if (options.ApplyOrientation && file.Orientation != 1)
         {
@@ -80,66 +79,6 @@ internal static class WebpDecoder
                 CultureInfo.InvariantCulture,
                 $"The WebP image is {width} x {height}, {pixels} pixels, more than the {limits.MaxPixels}-pixel limit (ImageLimits.MaxPixels)."));
         }
-    }
-
-    private static Image ToImage(Picture picture, PixelFormat format)
-    {
-        var image = new Image(picture.Width, picture.Height, format);
-        uint[] argb = picture.Pixels;
-        for (int y = 0; y < picture.Height; y++)
-        {
-            ReadOnlySpan<uint> row = argb.AsSpan(y * picture.Width, picture.Width);
-            Span<byte> output = image.GetRowBytes(y);
-            switch (format)
-            {
-                case PixelFormat.Rgb24:
-                    for (int x = 0; x < row.Length; x++)
-                    {
-                        uint p = row[x];
-                        output[3 * x] = (byte)(p >> 16);
-                        output[(3 * x) + 1] = (byte)(p >> 8);
-                        output[(3 * x) + 2] = (byte)p;
-                    }
-
-                    break;
-
-                case PixelFormat.Rgba32:
-                    for (int x = 0; x < row.Length; x++)
-                    {
-                        uint p = picture.HasAlpha ? row[x] : row[x] | 0xFF000000u;
-                        output[4 * x] = (byte)(p >> 16);
-                        output[(4 * x) + 1] = (byte)(p >> 8);
-                        output[(4 * x) + 2] = (byte)p;
-                        output[(4 * x) + 3] = (byte)(p >> 24);
-                    }
-
-                    break;
-
-                case PixelFormat.Bgra32:
-                    // ARGB in a little-endian word is B, G, R, A in memory: the layout itself.
-                    for (int x = 0; x < row.Length; x++)
-                    {
-                        BinaryPrimitives.WriteUInt32LittleEndian(output[(4 * x)..], picture.HasAlpha ? row[x] : row[x] | 0xFF000000u);
-                    }
-
-                    break;
-
-                default:
-                    Span<ushort> wide = MemoryMarshal.Cast<byte, ushort>(output);
-                    for (int x = 0; x < row.Length; x++)
-                    {
-                        uint p = picture.HasAlpha ? row[x] : row[x] | 0xFF000000u;
-                        wide[4 * x] = (ushort)(((p >> 16) & 0xFF) * 257);
-                        wide[(4 * x) + 1] = (ushort)(((p >> 8) & 0xFF) * 257);
-                        wide[(4 * x) + 2] = (ushort)((p & 0xFF) * 257);
-                        wide[(4 * x) + 3] = (ushort)((p >> 24) * 257);
-                    }
-
-                    break;
-            }
-        }
-
-        return image;
     }
 
     /// <summary>Decoded pixels, ARGB, and whether alpha is meant.</summary>

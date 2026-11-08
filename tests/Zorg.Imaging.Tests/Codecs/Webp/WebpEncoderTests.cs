@@ -24,7 +24,7 @@ public class WebpEncoderTests
     /// <summary>The image's pixels as RGBA, 8 bits a sample, as a lossless file should give them back.</summary>
     internal static byte[] Rgba(Image image)
     {
-        (uint[] argb, _) = WebpEncoder.ToArgb(image);
+        (uint[] argb, _) = Zorg.Imaging.Processing.Argb.FromImage(image);
         byte[] rgba = new byte[argb.Length * 4];
         for (int i = 0; i < argb.Length; i++)
         {

@@ -8,6 +8,32 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: GIF
+
+Decoding `photo.gif` (ImageMagick's default reduction of the photo, 8.7 MB) and encoding the photo decoded from
+`photo.jpg` at 256 colours (BenchmarkDotNet, short job).
+
+| | One core | All cores | Allocated |
+|---|---:|---:|---:|
+| Decode, ours | 100 ms | 68 ms | 0.3 MB |
+| Decode, SkiaSharp (giflib-derived) | | 51 ms | |
+| Decode, ImageSharp 2.1 | | 123 ms | |
+| Decode, ImageMagick 7 `magick photo.gif ppm:` (gate image) | 270 ms | | |
+| Encode, ours, dithered (default) | 0.46 to 0.59 s | 0.30 s | 116 MB |
+| Encode, ours, no dithering | 241 ms | 157 ms | 100 MB |
+| Encode, ImageSharp 2.1 | | 2.8 s | 154 MB |
+| Encode, ImageMagick 7 `magick photo.ppm gif:` (gate image) | 3.8 s | | |
+
+SkiaSharp can't write GIF. Without dithering our reduction is within a dB of ImageMagick's `-dither None -colors`
+PSNR at 16, 64 and 256 colours (`GifOracleTests`).
+
+What made decoding fast: writing each LZW code as one copy of an earlier stretch of the output (every string in the
+table has been written once already), and turning a first frame that fills the canvas straight into the image, in
+bands of rows, without a canvas (136 to 68 ms, 46 MB to 0.3 MB allocated). For encoding: a 16K-entry hash table for
+LZW that stays in the fastest cache, sub-blocks written as the codes are, and a nearest-colour search that sorts the
+palette by green and stops once green alone is further than the best so far. Still to do: Floyd–Steinberg dithering
+is one thread (about 150 ms here); a wavefront over rows, as the lossy WebP encoder uses, would spread it.
+
 ## 2026-11-08: lossy WebP encoding
 
 The 12-megapixel photo decoded from `photo.jpg`, quality 80, effort 4 (BenchmarkDotNet, short job).

@@ -16,6 +16,7 @@ public class SkiaBenchmarks
     private byte[] _jpeg = [];
     private byte[] _progressive = [];
     private byte[] _png = [];
+    private byte[] _gif = [];
     private byte[] _lossy = [];
     private byte[] _lossless = [];
     private SKBitmap _decoded = null!;
@@ -28,6 +29,7 @@ public class SkiaBenchmarks
         _jpeg = File.ReadAllBytes(Path.Combine(folder, "photo.jpg"));
         _progressive = File.ReadAllBytes(Path.Combine(folder, "photo-progressive.jpg"));
         _png = File.ReadAllBytes(Path.Combine(folder, "photo.png"));
+        _gif = File.ReadAllBytes(Path.Combine(folder, "photo.gif"));
         _lossy = File.ReadAllBytes(Path.Combine(folder, "photo-lossy.webp"));
         _lossless = File.ReadAllBytes(Path.Combine(folder, "photo-lossless.webp"));
         _decoded = SKBitmap.Decode(_jpeg);
@@ -44,6 +46,9 @@ public class SkiaBenchmarks
 
     [Benchmark]
     public int Skia_Decode_Png() => Decode(_png);
+
+    [Benchmark]
+    public int Skia_Decode_Gif() => Decode(_gif);
 
     [Benchmark]
     public int Skia_Decode_WebpLossy() => Decode(_lossy);

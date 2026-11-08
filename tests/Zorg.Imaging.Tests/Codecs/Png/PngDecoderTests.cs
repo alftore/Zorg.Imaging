@@ -303,14 +303,14 @@ public class PngDecoderTests
     [Fact]
     public void Formats_without_a_decoder_say_so()
     {
-        byte[] gif = [.. "GIF89a"u8, 1, 0, 1, 0, 0, 0, 0];
+        byte[] qoi = [.. "qoif"u8, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0];
 
-        UnsupportedImageFormatException notYet = Assert.Throws<UnsupportedImageFormatException>(() => Image.Decode(gif));
+        UnsupportedImageFormatException notYet = Assert.Throws<UnsupportedImageFormatException>(() => Image.Decode(qoi));
         UnsupportedImageFormatException notImage = Assert.Throws<UnsupportedImageFormatException>(() => Image.Decode("%PDF-1.7"u8.ToArray()));
         Assert.Throws<UnsupportedImageFormatException>(() => Image.Decode([]));
 
-        Assert.Same(ImageFormat.Gif, notYet.Format);
-        Assert.Contains("GIF", notYet.Message, StringComparison.Ordinal);
+        Assert.Same(ImageFormat.Qoi, notYet.Format);
+        Assert.Contains("QOI", notYet.Message, StringComparison.Ordinal);
         Assert.Null(notImage.Format);
     }
 

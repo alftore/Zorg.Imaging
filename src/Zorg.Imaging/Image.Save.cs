@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Imaging.Codecs.Jpeg;
 using Zorg.Imaging.Codecs.Png;
+using Zorg.Imaging.Codecs.Gif;
 using Zorg.Imaging.Codecs.Webp;
 
 namespace Zorg.Imaging;
@@ -190,6 +191,64 @@ public sealed partial class Image
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
         return WebpEncoder.EncodeAsync(this, stream, options ?? WebpEncoderOptions.Default, sync: false, cancellationToken);
+    }
+
+    /// <summary>Writes the image as a GIF file.</summary>
+    /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
+    /// <param name="options">The options, or <see langword="null"/> for <see cref="GifEncoderOptions.Default"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="stream"/> can't write; a side is longer than 65,535 pixels; or the <see cref="ColorSpace"/> is HDR
+    /// (PQ or HLG), or one that can't be described as an ICC profile yet.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <exception cref="IOException">The stream itself fails.</exception>
+    /// <remarks>
+    /// <para>
+    /// A GIF holds at most 256 colours. An image with no more than <see cref="GifEncoderOptions.MaxColors"/> is stored
+    /// exactly, which suits logos, icons and pixel art; one with more is reduced with Wu's quantiser and dithered
+    /// (<see cref="GifEncoderOptions.Dithering"/>). PNG or WebP keep photos better and smaller. Transparency is one bit:
+    /// pixels with alpha below 128 are transparent, the rest opaque.
+    /// </para>
+    /// <para>
+    /// The <see cref="ColorSpace"/> is written as an ICC profile in an <c>ICCRGBG1012</c> extension when it isn't sRGB.
+    /// Few viewers read it, so convert wide-gamut images to sRGB first for the web. No other metadata is written.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// using FileStream file = File.Create("icon.gif");
+    /// image.SaveAsGif(file);
+    /// </code>
+    /// </example>
+    public void SaveAsGif(Stream stream, GifEncoderOptions? options = null)
+    {
+        CheckWritable(stream);
+        ObjectDisposedException.ThrowIf(_buffer is null, this);
+        ValueTask task = GifEncoder.EncodeAsync(this, stream, options ?? GifEncoderOptions.Default, sync: true, CancellationToken.None);
+        Debug.Assert(task.IsCompleted, "A synchronous encode must complete synchronously.");
+        task.GetAwaiter().GetResult();
+    }
+
+    /// <summary>Writes the image as a GIF file, asynchronously.</summary>
+    /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
+    /// <param name="options">The options, or <see langword="null"/> for <see cref="GifEncoderOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>A task that completes when the file is written.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="stream"/> can't write, the picture is too large for GIF, or the colour space can't be written.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <exception cref="IOException">The stream itself fails.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    /// <remarks>The file is the same as <see cref="SaveAsGif"/> writes.</remarks>
+    /// <example><code>await image.SaveAsGifAsync(response.Body, cancellationToken: cancellationToken);</code></example>
+    public ValueTask SaveAsGifAsync(Stream stream, GifEncoderOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        CheckWritable(stream);
+        ObjectDisposedException.ThrowIf(_buffer is null, this);
+        return GifEncoder.EncodeAsync(this, stream, options ?? GifEncoderOptions.Default, sync: false, cancellationToken);
     }
 
     private static void CheckWritable(Stream stream)

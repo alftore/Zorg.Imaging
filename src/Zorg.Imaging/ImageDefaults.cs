@@ -21,8 +21,8 @@ public static class ImageDefaults
     /// </para>
     /// <para>
     /// <see cref="DecodeOptions.MaxDegreeOfParallelism"/>, <see cref="JpegEncoderOptions.MaxDegreeOfParallelism"/>,
-    /// <see cref="WebpEncoderOptions.MaxDegreeOfParallelism"/> and <see cref="ImagePipeline.WithMaxDegreeOfParallelism"/>
-    /// override it for one call. Results are the same, byte for
+    /// <see cref="WebpEncoderOptions.MaxDegreeOfParallelism"/>, <see cref="GifEncoderOptions.MaxDegreeOfParallelism"/> and
+    /// <see cref="ImagePipeline.WithMaxDegreeOfParallelism"/> override it for one call. Results are the same, byte for
     /// byte, whatever the setting.
     /// </para>
     /// </remarks>

@@ -19,6 +19,7 @@ public class CodecBenchmarks
     private byte[] _lossless = [];
     private byte[] _lossy = [];
     private byte[] _png = [];
+    private byte[] _gif = [];
 
     [GlobalSetup]
     public void Setup()
@@ -34,6 +35,8 @@ public class CodecBenchmarks
         _lossy = File.Exists(lossy) ? File.ReadAllBytes(lossy) : [];
         string png = Path.Combine(folder, "photo.png");
         _png = File.Exists(png) ? File.ReadAllBytes(png) : [];
+        string gif = Path.Combine(folder, "photo.gif");
+        _gif = File.Exists(gif) ? File.ReadAllBytes(gif) : [];
     }
 
     [Benchmark]
@@ -80,6 +83,35 @@ public class CodecBenchmarks
 
         using Image image = Image.Decode(_lossless);
         return image.Width;
+    }
+
+    /// <summary>A GIF of the same photo (<c>photo.gif</c>, from ImageMagick's default reduction), when present.</summary>
+    [Benchmark]
+    public int Decode_Gif()
+    {
+        if (_gif.Length == 0)
+        {
+            return 0;
+        }
+
+        using Image image = Image.Decode(_gif);
+        return image.Width;
+    }
+
+    [Benchmark]
+    public int Encode_Gif()
+    {
+        using var output = new MemoryStream();
+        _decoded.SaveAsGif(output);
+        return (int)output.Length;
+    }
+
+    [Benchmark]
+    public int Encode_GifNoDither()
+    {
+        using var output = new MemoryStream();
+        _decoded.SaveAsGif(output, new GifEncoderOptions { Dithering = 0 });
+        return (int)output.Length;
     }
 
     [GlobalCleanup]

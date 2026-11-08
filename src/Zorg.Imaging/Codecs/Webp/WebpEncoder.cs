@@ -2,7 +2,6 @@ using System;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Zorg.Imaging.Metadata;
@@ -27,7 +26,7 @@ internal static class WebpEncoder
         byte[] file;
         using (Parallelism.Use(options.MaxDegreeOfParallelism))
         {
-            (uint[] argb, bool alpha) = ToArgb(image);
+            (uint[] argb, bool alpha) = Argb.FromImage(image);
             if (options.Lossless)
             {
                 byte[] vp8l = Vp8lEncoder.Encode(argb, image.Width, image.Height, alpha, options.Effort);
@@ -51,41 +50,6 @@ internal static class WebpEncoder
             await stream.WriteAsync(file, cancellationToken).ConfigureAwait(false);
         }
     }
-
-    /// <summary>The pixels as ARGB words (alpha in the top byte), 16-bit samples rounded to 8, and whether any isn't opaque.</summary>
-    internal static (uint[] Argb, bool Alpha) ToArgb(Image image)
-    {
-        int width = image.Width;
-        uint[] argb = new uint[(long)width * image.Height];
-        uint opaque = 0xFF;
-        for (int y = 0; y < image.Height; y++)
-        {
-            ReadOnlySpan<byte> row = image.GetRowBytes(y);
-            ReadOnlySpan<ushort> wide = image.PixelFormat is PixelFormat.L16 or PixelFormat.Rgb48 or PixelFormat.Rgba64
-                ? MemoryMarshal.Cast<byte, ushort>(row)
-                : default;
-            Span<uint> output = argb.AsSpan(y * width, width);
-            for (int x = 0; x < width; x++)
-            {
-                (uint r, uint g, uint b, uint a) = image.PixelFormat switch
-                {
-                    PixelFormat.L8 => (row[x], row[x], row[x], 255u),
-                    PixelFormat.L16 => (To8(wide[x]), To8(wide[x]), To8(wide[x]), 255u),
-                    PixelFormat.Rgb24 => (row[3 * x], row[(3 * x) + 1], row[(3 * x) + 2], 255u),
-                    PixelFormat.Rgb48 => (To8(wide[3 * x]), To8(wide[(3 * x) + 1]), To8(wide[(3 * x) + 2]), 255u),
-                    PixelFormat.Rgba32 => (row[4 * x], row[(4 * x) + 1], row[(4 * x) + 2], row[(4 * x) + 3]),
-                    PixelFormat.Bgra32 => (row[(4 * x) + 2], row[(4 * x) + 1], row[4 * x], row[(4 * x) + 3]),
-                    _ => (To8(wide[4 * x]), To8(wide[(4 * x) + 1]), To8(wide[(4 * x) + 2]), To8(wide[(4 * x) + 3])),
-                };
-                opaque &= a;
-                output[x] = (a << 24) | (r << 16) | (g << 8) | b;
-            }
-        }
-
-        return (argb, opaque != 0xFF);
-    }
-
-    private static uint To8(ushort value) => (uint)((value + 128) / 257);
 
     /// <summary>The largest side a VP8 frame header can hold.</summary>
     private const int MaxLossySide = 16383;

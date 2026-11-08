@@ -19,6 +19,7 @@ cjpeg -quality 85 -sample 2x2 -progressive photo.ppm > photo-progressive.jpg
 cwebp -quiet -lossless -z 6 photo.ppm -o photo-lossless.webp
 cwebp -quiet -q 80 photo.ppm -o photo-lossy.webp
 magick photo.ppm -define png:compression-level=6 png24:photo.png
+magick photo.ppm photo.gif
 # Best of three, in seconds, from busybox time.
 t() {
   best=
@@ -40,8 +41,10 @@ t() {
   t cwebp -quiet -lossless -z 6 photo.ppm -o /dev/null
   t magick photo.png ppm:/dev/null
   t magick photo.ppm -resize 400x300 ppm:/dev/null
+  t magick photo.gif ppm:/dev/null
+  t magick photo.ppm gif:/dev/null
 } > native-times.txt
-tar -cf - photo.jpg photo-progressive.jpg photo-lossless.webp photo-lossy.webp photo.png native-times.txt
+tar -cf - photo.jpg photo-progressive.jpg photo-lossless.webp photo-lossy.webp photo.png photo.gif native-times.txt
 ' | tar -xf - -C "$out"
 ls -l "$out"
 cat "$out/native-times.txt"

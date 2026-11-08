@@ -1,6 +1,6 @@
 # Working on Zorg.Imaging
 
-Managed image decoding, resizing and encoding for .NET 10, in C# only. Early development: the public API so far is the format check (`ImageFormats`, `Image.Identify`), the pixel buffer (`Image`, `PixelFormat`, the 8- and 16-bit pixel types), colour spaces (`ColorSpace`, `Image.ColorSpace`), resizing and the everyday operations (`Resize`, `Fit`, `Fill`, `Pad`, `Crop`, `Rotate`, `Flip...`, `Flatten`), the pipeline (`ImagePipeline`), the exception types, PNG decode and encode (`Image.Decode`, `SaveAsPng`), and JPEG decode (with shrink-on-load) and encode (`SaveAsJpeg`). WebP decode and encode, lossy and lossless (`SaveAsWebp`). No GIF yet.
+Managed image decoding, resizing and encoding for .NET 10, in C# only. Early development: the public API so far is the format check (`ImageFormats`, `Image.Identify`), the pixel buffer (`Image`, `PixelFormat`, the 8- and 16-bit pixel types), colour spaces (`ColorSpace`, `Image.ColorSpace`), resizing and the everyday operations (`Resize`, `Fit`, `Fill`, `Pad`, `Crop`, `Rotate`, `Flip...`, `Flatten`), the pipeline (`ImagePipeline`), the exception types, PNG decode and encode (`Image.Decode`, `SaveAsPng`), and JPEG decode (with shrink-on-load) and encode (`SaveAsJpeg`). WebP decode and encode, lossy and lossless (`SaveAsWebp`). GIF decode (first frame) and encode (`SaveAsGif`).
 
 ## Working on the repo
 

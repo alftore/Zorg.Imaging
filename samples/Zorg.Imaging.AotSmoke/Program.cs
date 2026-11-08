@@ -256,6 +256,17 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     Check(
         "webp lossy encode",
         Math.Abs(original.R - coded.R) <= 40 && Math.Abs(original.G - coded.G) <= 40 && Math.Abs(original.B - coded.B) <= 40 && original.A == coded.A);
+
+    // GIF: reduced to 256 colours and dithered, decoded back near the original with one-bit alpha.
+    using var gifWritten = new MemoryStream();
+    webp.SaveAsGif(gifWritten);
+    using Image gifBack = Image.Decode(gifWritten.ToArray(), new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+    Rgba32 gifPixel = gifBack.GetRow<Rgba32>(8)[16];
+    Check(
+        "gif encode and decode",
+        gifBack.Width == webp.Width && original.A >= 128
+            ? gifPixel.A == 255 && Math.Abs(original.R - gifPixel.R) <= 60 && Math.Abs(original.G - gifPixel.G) <= 60
+            : gifPixel.A == 0);
 }
 
 return failures == 0 ? 0 : 1;

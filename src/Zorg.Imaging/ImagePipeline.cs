@@ -390,6 +390,36 @@ public sealed class ImagePipeline
         await image.SaveAsWebpAsync(stream, options, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Runs the pipeline and writes the result as a GIF file.</summary>
+    /// <param name="stream">A writable stream. The file is written at its current position; the stream stays open.</param>
+    /// <param name="options">The GIF options, or <see langword="null"/> for <see cref="GifEncoderOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Cancels reading, stops between steps, and cancels the write.</param>
+    /// <returns>A task that completes when the file is written.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="stream"/> can't write, the result is too large for GIF, or its colour space can't be written.
+    /// </exception>
+    /// <exception cref="UnsupportedImageFormatException">The source isn't an image format this version can decode.</exception>
+    /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
+    /// <exception cref="ImageLimitException">The image is larger than the decode limits allow.</exception>
+    /// <exception cref="InvalidOperationException">The pipeline was loaded from a stream and has already run.</exception>
+    /// <exception cref="IOException">Reading or writing fails.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    /// <remarks>See <see cref="Image.SaveAsGif"/> for what is written.</remarks>
+    /// <example><code>await ImagePipeline.Load(upload).Fit(64, 64).SaveAsGifAsync(output, cancellationToken: cancellationToken);</code></example>
+    public async ValueTask SaveAsGifAsync(Stream stream, GifEncoderOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanWrite)
+        {
+            throw new NotSupportedException("SaveAsGifAsync needs a writable stream.");
+        }
+
+        using Parallelism.Scope scope = Parallelism.Use(_parallelism);
+        using Image image = await ToImageAsync(cancellationToken).ConfigureAwait(false);
+        await image.SaveAsGifAsync(stream, options, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Describes the source and the steps, such as <c>bytes → Fit(320, 320) → Flatten(Rgba32(255, 255, 255, 255))</c>.</summary>
     /// <returns>A short description.</returns>
     /// <example><code>Console.WriteLine(pipeline);</code></example>
