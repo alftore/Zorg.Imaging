@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added effects, on `Image` and as pipeline steps: `Blur` (Gaussian, in linear light), `Sharpen` (unsharp mask), `DrawImage` (draw one image over another, for watermarks, with opacity) and `Trim` (crop away a uniform border). Also `Image.ToBlurHash` for BlurHash placeholder strings.
 - Added animations: `AnimationReader` reads every frame of an animated GIF or WebP, already composited, one at a time. `AnimationWriter` writes animated GIF or WebP from whole frames, coding only what changed. Any other image reads as one frame. See docs/animation.md.
 - Faster WebP encoding, measured on a 12-megapixel photo on one core:
   - Lossy encoding takes 1.4 s, down from 2.3 s, the same as cwebp. The output is unchanged.

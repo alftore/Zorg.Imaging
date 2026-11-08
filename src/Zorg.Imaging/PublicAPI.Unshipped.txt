@@ -461,3 +461,13 @@ static Zorg.Imaging.AnimationReader.Open(byte[]! data, Zorg.Imaging.DecodeOption
 static Zorg.Imaging.AnimationReader.OpenAsync(System.IO.Stream! stream, Zorg.Imaging.DecodeOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.AnimationReader!>
 static Zorg.Imaging.AnimationWriter.CreateGif(System.IO.Stream! stream, int loopCount = 0, Zorg.Imaging.GifEncoderOptions? options = null) -> Zorg.Imaging.AnimationWriter!
 static Zorg.Imaging.AnimationWriter.CreateWebp(System.IO.Stream! stream, int loopCount = 0, Zorg.Imaging.WebpEncoderOptions? options = null) -> Zorg.Imaging.AnimationWriter!
+Zorg.Imaging.Image.Blur(double sigma) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.DrawImage(Zorg.Imaging.Image! overlay, int x, int y, double opacity = 1) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Sharpen(double sigma = 1, double amount = 1) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.ToBlurHash(int componentsX = 4, int componentsY = 3) -> string!
+Zorg.Imaging.Image.Trim(int threshold = 10) -> Zorg.Imaging.Image!
+Zorg.Imaging.ImagePipeline.Blur(double sigma) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.DrawImage(Zorg.Imaging.Image! overlay, int x, int y, double opacity = 1) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Sharpen(double sigma = 1, double amount = 1) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Trim(int threshold = 10) -> Zorg.Imaging.ImagePipeline!
+const Zorg.Imaging.Image.MaxSigma = 1000 -> double

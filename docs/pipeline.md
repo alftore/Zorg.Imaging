@@ -37,6 +37,10 @@ and a step's arguments are checked when it is added, not when the pipeline runs.
 | `FlipHorizontal()`, `FlipVertical()` | Mirrors the image |
 | `Flatten(background)` | Draws the image over a solid colour, removing transparency |
 | `ToSrgb()` | Converts the pixels to sRGB, clipping colours outside it |
+| `Blur(sigma)` | Gaussian blur in linear light, alpha premultiplied; `sigma` in pixels of the image the step gets |
+| `Sharpen(sigma, amount)` | Unsharp mask on the stored values; 0.7 and 0.5 suit a resized photo |
+| `DrawImage(overlay, x, y, opacity)` | Draws another image over this one, as a watermark; the overlay must outlive the pipeline run |
+| `Trim(threshold)` | Crops away borders matching the top-left pixel, within `threshold` (0 to 255) per channel |
 
 The resizing steps take an optional `Resampler`. Without one, shrinking uses Lanczos3 and enlarging uses Mitchell. Resizing works in
 linear light with premultiplied alpha, so dark edges and halos around transparent areas don't appear.

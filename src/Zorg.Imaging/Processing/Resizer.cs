@@ -41,6 +41,19 @@ internal static class Resizer
         return result;
     }
 
+    /// <summary>
+    /// A Gaussian blur of standard deviation <paramref name="sigma"/> pixels, as two passes of the resize machinery
+    /// at the same size: alpha premultiplied, and in linear light when <paramref name="linear"/> is set. At the edges the
+    /// weights that fall inside the image are renormalised, so the edge isn't darkened or repeated.
+    /// </summary>
+    public static Image Blur(Image source, double sigma, bool linear)
+    {
+        var result = new Image(source.Width, source.Height, source.PixelFormat) { ColorSpace = source.ColorSpace, SourceMetadata = source.SourceMetadata };
+        TransferFunction transfer = linear ? TransferFunction.For(source.ColorSpace) : TransferFunction.Identity;
+        new Pass(source, result, transfer, Weights.Gaussian(source.Width, sigma), Weights.Gaussian(source.Height, sigma)).Run();
+        return result;
+    }
+
     private static void Nearest(Image source, Image result)
     {
         int[] columns = NearestIndices(source.Width, result.Width);
@@ -115,6 +128,37 @@ internal static class Resizer
 
         /// <summary>Whether output index i is source index i with weight 1.</summary>
         public bool IsIdentity { get; private init; }
+
+        /// <summary>A Gaussian of standard deviation <paramref name="sigma"/>, out to three of them, at the same size.</summary>
+        public static Weights Gaussian(int size, double sigma)
+        {
+            int radius = Math.Max((int)Math.Ceiling(3 * sigma), 1);
+            int stride = (int)Math.Min((2L * radius) + 1, size);
+            var weights = new Weights(size, stride);
+            double[] scratch = new double[stride];
+            for (int i = 0; i < size; i++)
+            {
+                int start = Math.Max(i - radius, 0);
+                int stop = Math.Min(i + radius + 1, size);
+                double sum = 0;
+                Span<float> values = weights.Values.AsSpan(i * stride, stride);
+                for (int j = start; j < stop; j++)
+                {
+                    double d = j - i;
+                    scratch[j - start] = Math.Exp(-(d * d) / (2 * sigma * sigma));
+                    sum += scratch[j - start];
+                }
+
+                weights.Start[i] = start;
+                weights.Length[i] = stop - start;
+                for (int j = 0; j < stop - start; j++)
+                {
+                    values[j] = (float)(scratch[j] / sum);
+                }
+            }
+
+            return weights;
+        }
 
         public static Weights For(int from, int to, Resampler filter)
         {

@@ -250,6 +250,67 @@ public sealed class ImagePipeline
     public ImagePipeline Flatten(Rgba32 background) =>
         Then(string.Create(CultureInfo.InvariantCulture, $"Flatten({background})"), image => image.Flatten(background), Shape.Same);
 
+    /// <summary>Adds <see cref="Image.Blur"/>: a Gaussian blur in linear light.</summary>
+    /// <param name="sigma">The standard deviation in pixels, more than 0 and at most <see cref="Image.MaxSigma"/>.</param>
+    /// <returns>A new pipeline with the step added.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> is out of range.</exception>
+    /// <remarks>The radius is in the pixels the step gets, so a blur after a resize is measured at the new size.</remarks>
+    /// <example><code>ImagePipeline backdrop = ImagePipeline.Load(bytes).Fit(800, 800).Blur(12);</code></example>
+    public ImagePipeline Blur(double sigma)
+    {
+        CheckSigma(sigma);
+        return Then(string.Create(CultureInfo.InvariantCulture, $"Blur({sigma})"), image => image.Blur(sigma), Shape.Other);
+    }
+
+    /// <summary>Adds <see cref="Image.Sharpen"/>: an unsharp mask.</summary>
+    /// <param name="sigma">The blur's standard deviation in pixels, more than 0 and at most <see cref="Image.MaxSigma"/>.</param>
+    /// <param name="amount">How far to move from the blur, more than 0 and at most 10.</param>
+    /// <returns>A new pipeline with the step added.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sigma"/> or <paramref name="amount"/> is out of range.</exception>
+    /// <example><code>ImagePipeline crisp = ImagePipeline.Load(bytes).Fit(800, 800).Sharpen(0.7, 0.5);</code></example>
+    public ImagePipeline Sharpen(double sigma = 1, double amount = 1)
+    {
+        CheckSigma(sigma);
+        if (!(amount > 0 && amount <= 10))
+        {
+            throw new ArgumentOutOfRangeException(nameof(amount), amount, "The amount must be more than 0 and at most 10.");
+        }
+
+        return Then(string.Create(CultureInfo.InvariantCulture, $"Sharpen({sigma}, {amount})"), image => image.Sharpen(sigma, amount), Shape.Other);
+    }
+
+    /// <summary>Adds <see cref="Image.DrawImage"/>: draw another image over this one, as a watermark.</summary>
+    /// <param name="overlay">The image to draw. The pipeline uses it when it runs, so it must not be disposed before then; it isn't changed.</param>
+    /// <param name="x">Where its left edge goes, in the image the step gets.</param>
+    /// <param name="y">Where its top edge goes.</param>
+    /// <param name="opacity">How opaque to draw it, more than 0 and at most 1.</param>
+    /// <returns>A new pipeline with the step added.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="overlay"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="opacity"/> is out of range.</exception>
+    /// <example><code>ImagePipeline marked = ImagePipeline.Load(bytes).Fit(1200, 1200).DrawImage(logo, 16, 16, opacity: 0.6);</code></example>
+    public ImagePipeline DrawImage(Image overlay, int x, int y, double opacity = 1)
+    {
+        ArgumentNullException.ThrowIfNull(overlay);
+        if (!(opacity > 0 && opacity <= 1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(opacity), opacity, "The opacity must be more than 0 and at most 1.");
+        }
+
+        return Then(string.Create(CultureInfo.InvariantCulture, $"DrawImage({overlay}, {x}, {y}, {opacity})"), image => image.DrawImage(overlay, x, y, opacity), Shape.Other);
+    }
+
+    /// <summary>Adds <see cref="Image.Trim"/>: crop away borders of the top-left pixel's colour.</summary>
+    /// <param name="threshold">How far a channel may be from the border colour and still match, 0 to 255.</param>
+    /// <returns>A new pipeline with the step added.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="threshold"/> is out of range.</exception>
+    /// <example><code>ImagePipeline tight = ImagePipeline.Load(bytes).Trim().Fit(800, 800);</code></example>
+    public ImagePipeline Trim(int threshold = 10)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(threshold);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(threshold, 255);
+        return Then(string.Create(CultureInfo.InvariantCulture, $"Trim({threshold})"), image => image.Trim(threshold), Shape.Other);
+    }
+
     /// <summary>
     /// Adds <see cref="Image.ToSrgb"/>: convert the pixels to sRGB, clipping colours outside it. Saving doesn't need
     /// this step, since the encoders follow their <see cref="ColorSpaceHandling"/>; add it when the pixels themselves
@@ -566,6 +627,14 @@ public sealed class ImagePipeline
 
         using Image image = await ToImageAsync(cancellationToken).ConfigureAwait(false);
         await save(image, stream, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void CheckSigma(double sigma)
+    {
+        if (!(sigma > 0 && sigma <= Image.MaxSigma))
+        {
+            throw new ArgumentOutOfRangeException(nameof(sigma), sigma, "The standard deviation must be more than 0 and at most Image.MaxSigma pixels.");
+        }
     }
 
     private static void CheckBox(int width, int height)
