@@ -1,4 +1,6 @@
 using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Jpeg;
@@ -58,6 +60,12 @@ internal sealed class JpegScan
         foreach (JpegComponent component in _components)
         {
             component.DcPredictor = 0;
+        }
+
+        if (!_frame.Progressive)
+        {
+            DecodeSequentialScan(bits, stream);
+            return;
         }
 
         if (_components.Length == 1)
@@ -153,11 +161,7 @@ internal sealed class JpegScan
 
     private void DecodeBlockCore(JpegBitReader bits, JpegComponent component, Span<short> block)
     {
-        if (!_frame.Progressive)
-        {
-            DecodeSequential(bits, component, block);
-        }
-        else if (_start == 0)
+        if (_start == 0)
         {
             if (_high == 0)
             {
@@ -178,13 +182,84 @@ internal sealed class JpegScan
         }
     }
 
-    // The hot loop of baseline decoding: the bit buffer lives in locals, codes of up to 9 bits (and most AC
-    // coefficients with their value bits) decode with one table lookup, and the reader is only called for longer codes.
-    private static void DecodeSequential(JpegBitReader bits, JpegComponent component, Span<short> block)
+    // Baseline and extended sequential scans: the bit buffer, its count and the read position stay in locals for a
+    // whole row of MCUs, so the blocks in between never go back through the reader; they are stored at restart markers
+    // and at the end of each row, where running past the data is caught (the data is padded, and a refill past the
+    // padding throws, so nothing is read out of bounds in between).
+    private void DecodeSequentialScan(JpegBitReader bits, JpegStream? stream)
     {
         (ulong buffer, int count, int position) = bits.State;
         byte[] data = bits.Data;
         int length = bits.Length;
+        if (_components.Length == 1)
+        {
+            JpegComponent component = _components[0];
+            int wide = component.UsedWide;
+            int high = component.UsedHigh;
+            for (int y = 0; y < high; y++)
+            {
+                BeginBand(stream, y);
+                for (int x = 0; x < wide; x++)
+                {
+                    if (_restartInterval > 0 && (((long)y * wide) + x) is long mcu && mcu > 0 && mcu % _restartInterval == 0)
+                    {
+                        bits.Store(buffer, count, position);
+                        RestartIfDue(bits, mcu);
+                        (buffer, count, position) = bits.State;
+                    }
+
+                    DecodeSequential(ref buffer, ref count, ref position, data, length, component, component.Block(x, y));
+                }
+
+                bits.Store(buffer, count, position);
+                EndBand(stream, y, high);
+            }
+
+            stream?.Finish();
+            return;
+        }
+
+        int mcusWide = _frame.McusWide;
+        int mcusHigh = _frame.McusHigh;
+        JpegComponent[] components = _components;
+        for (int my = 0; my < mcusHigh; my++)
+        {
+            BeginBand(stream, my);
+            for (int mx = 0; mx < mcusWide; mx++)
+            {
+                long mcu = ((long)my * mcusWide) + mx;
+                if (_restartInterval > 0 && mcu > 0 && mcu % _restartInterval == 0)
+                {
+                    bits.Store(buffer, count, position);
+                    RestartIfDue(bits, mcu);
+                    (buffer, count, position) = bits.State;
+                }
+
+                foreach (JpegComponent component in components)
+                {
+                    int v0 = my * component.V;
+                    int h0 = mx * component.H;
+                    for (int v = 0; v < component.V; v++)
+                    {
+                        for (int h = 0; h < component.H; h++)
+                        {
+                            DecodeSequential(ref buffer, ref count, ref position, data, length, component, component.Block(h0 + h, v0 + v));
+                        }
+                    }
+                }
+            }
+
+            bits.Store(buffer, count, position);
+            EndBand(stream, my, mcusHigh);
+        }
+
+        stream?.Finish();
+    }
+
+    // The hot loop of baseline decoding: codes of up to 9 bits (and most AC coefficients with their value bits) decode
+    // with one table lookup, longer codes with a search of the next 16 bits, all on the caller's locals.
+    private static void DecodeSequential(ref ulong buffer, ref int count, ref int position, byte[] data, int length, JpegComponent component, Span<short> block)
+    {
         const int Shift = 64 - JpegHuffman.FastBits;
 
         // DC: a size category, then that many bits of difference.
@@ -204,9 +279,10 @@ internal sealed class JpegScan
         }
         else
         {
-            bits.Store(buffer, count, position);
-            dcSize = dc.Decode(bits);
-            (buffer, count, position) = bits.State;
+            (int used, int value) = dc.DecodeLong((int)(buffer >> 48));
+            buffer <<= used;
+            count -= used;
+            dcSize = value;
         }
 
         if (dcSize > 11)
@@ -229,8 +305,13 @@ internal sealed class JpegScan
 
         block[0] = (short)component.DcPredictor;
         JpegHuffman ac = component.Ac!;
-        int[] fast = ac.FastAc;
-        ReadOnlySpan<byte> zigZag = ZigZag;
+
+        // Without bounds checks, each proven: the table index is the buffer's top FastBits bits, so below the table's
+        // 1 << FastBits entries; k is checked to be at most 63 before it indexes the zigzag order; and the block is
+        // 64 coefficients, which the natural positions (0 to 63) index.
+        ref int fast = ref MemoryMarshal.GetArrayDataReference(ac.FastAc);
+        ref byte zigZag = ref MemoryMarshal.GetReference(ZigZag);
+        ref short coefficients = ref MemoryMarshal.GetReference(block[..64]);
         for (int k = 1; k < 64;)
         {
             if (count < 32)
@@ -238,7 +319,7 @@ internal sealed class JpegScan
                 JpegBitReader.Refill(ref buffer, ref count, ref position, data, length);
             }
 
-            int entry = fast[(int)(buffer >> Shift)];
+            int entry = Unsafe.Add(ref fast, (nint)(buffer >> Shift));
             if (entry != 0)
             {
                 int used = entry & 0xFF;
@@ -250,13 +331,13 @@ internal sealed class JpegScan
                     throw ImageErrors.Corrupt("The JPEG image data has a coefficient outside its block.");
                 }
 
-                block[zigZag[k++]] = (short)(entry >> 16);
+                Unsafe.Add(ref coefficients, Unsafe.Add(ref zigZag, k++)) = (short)(entry >> 16);
                 continue;
             }
 
-            bits.Store(buffer, count, position);
-            int rs = ac.Decode(bits);
-            (buffer, count, position) = bits.State;
+            (int codeLength, int rs) = ac.DecodeLong((int)(buffer >> 48));
+            buffer <<= codeLength;
+            count -= codeLength;
             int run = rs >> 4;
             int size = rs & 15;
             if (size == 0)
@@ -285,10 +366,8 @@ internal sealed class JpegScan
             int value = (int)(buffer >> (64 - size));
             buffer <<= size;
             count -= size;
-            block[zigZag[k++]] = (short)(value < (1 << (size - 1)) ? value - (1 << size) + 1 : value);
+            Unsafe.Add(ref coefficients, Unsafe.Add(ref zigZag, k++)) = (short)(value < (1 << (size - 1)) ? value - (1 << size) + 1 : value);
         }
-
-        bits.Store(buffer, count, position);
     }
 
     private static int DecodeDcDifference(JpegBitReader bits, JpegHuffman dc)

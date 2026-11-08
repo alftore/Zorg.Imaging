@@ -226,6 +226,7 @@ internal static class JpegOutput
         private int _factorY;
 
         private float[] _quantisation = [];
+        private float[]? _reducedWeights;
         private int _blockWide;
         private int _blockHigh;
 
@@ -271,6 +272,12 @@ internal static class JpegOutput
                 plane._quantisation[JpegIdct.ZigZag[k]] = zigzag[k];
             }
 
+            // Below full size, quantisation and both passes fold into one weight row per coefficient.
+            if (wide != 8 || high != 8)
+            {
+                plane._reducedWeights = JpegIdct.ReducedWeights(plane._quantisation, wide, high);
+            }
+
             return plane;
         }
 
@@ -292,6 +299,7 @@ internal static class JpegOutput
             int wide = _blockWide;
             int high = _blockHigh;
             float[] quantisation = _quantisation;
+            float[]? reduced = _reducedWeights;
 
             // Each block row writes its own rows of the plane, so large components are transformed in parallel.
             int bands = Parallelism.Bands((long)component.UsedWide * (last - first) * 64, (last - first) / 4);
@@ -303,7 +311,15 @@ internal static class JpegOutput
                     for (int bx = 0; bx < component.UsedWide; bx++)
                     {
                         ReadOnlySpan<short> block = coefficients.AsSpan((((by - coefficientsFirstRow) * component.BlocksWide) + bx) * 64, 64);
-                        JpegIdct.Transform(block, quantisation, wide, high, samples.AsSpan((by * high * stride) + (bx * wide)), stride);
+                        Span<byte> target = samples.AsSpan((by * high * stride) + (bx * wide));
+                        if (reduced is not null)
+                        {
+                            JpegIdct.TransformReduced(block, reduced, wide, high, target, stride);
+                        }
+                        else
+                        {
+                            JpegIdct.Transform(block, quantisation, wide, high, target, stride);
+                        }
                     }
                 }
             });

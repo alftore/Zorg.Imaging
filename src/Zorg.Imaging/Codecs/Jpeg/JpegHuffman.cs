@@ -97,6 +97,31 @@ internal sealed class JpegHuffman
         }
     }
 
+    /// <summary>
+    /// A code from the next 16 bits: the bits it used and its value. For the paths that missed a combined lookup, which
+    /// includes short codes whose value bits didn't fit and the end-of-block and run codes.
+    /// </summary>
+    /// <exception cref="ImageFormatException">The bits aren't a code in this table.</exception>
+    public (int Used, int Value) DecodeLong(int peek)
+    {
+        ushort fast = _fast[peek >> (16 - FastBits)];
+        if (fast != 0)
+        {
+            return (fast >> 8, fast & 0xFF);
+        }
+
+        for (int length = FastBits + 1; length <= 16; length++)
+        {
+            int code = peek >> (16 - length);
+            if (code <= _maxCode[length])
+            {
+                return (length, _values[code + _valueOffset[length]]);
+            }
+        }
+
+        throw ImageErrors.Corrupt("The JPEG image data has a bit pattern that isn't a Huffman code.");
+    }
+
     /// <summary>Decodes one value.</summary>
     /// <param name="bits">The bit reader.</param>
     /// <returns>The value.</returns>

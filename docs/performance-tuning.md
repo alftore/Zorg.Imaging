@@ -183,6 +183,13 @@ where it was measured. `docs/performance.md` has the current numbers.
 - **Check that a speed change leaves the output alone.** Hashing the encoder's output for a set of images, qualities and
   efforts before and after showed every one of these changes produced the same bytes.
 
+## Measure the parts, then count
+
+- **Count the work before optimising it.** The reduced inverse DCT was rewritten to touch only non-zero coefficients
+  and got no faster. Making it return at once showed the loop around it cost under 2 ms of 20, and counting showed 13
+  non-zero coefficients a block: the arithmetic was cheap, and the time was in rounding each sample with
+  `MathF.Round`, sums kept in stack memory, and memmove calls for two-byte rows. Fixing those took it to 14 ms.
+
 ## Memory
 
 - **Small tables beat direct ones when they fit in cache.** The GIF encoder's LZW table started as a direct array,

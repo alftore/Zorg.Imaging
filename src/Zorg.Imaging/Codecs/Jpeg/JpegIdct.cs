@@ -189,6 +189,136 @@ internal static class JpegIdct
         return columns;
     }
 
+    /// <summary>
+    /// The reduced transform's weights for one quantisation table: for each coefficient (natural order), the amount it
+    /// adds to each of the <paramref name="wide"/> x <paramref name="high"/> samples, quantisation included, padded to
+    /// a multiple of four samples so each coefficient's row loads as whole vectors.
+    /// </summary>
+    public static float[] ReducedWeights(ReadOnlySpan<float> quantisation, int wide, int high)
+    {
+        float[] across = Basis[wide - 1];
+        float[] down = Basis[high - 1];
+        int outputs = Padded(wide * high);
+        float[] weights = new float[64 * outputs];
+        for (int v = 0; v < 8; v++)
+        {
+            for (int u = 0; u < 8; u++)
+            {
+                int k = (v * 8) + u;
+                for (int y = 0; y < high; y++)
+                {
+                    for (int x = 0; x < wide; x++)
+                    {
+                        weights[(k * outputs) + (y * wide) + x] = quantisation[k] * down[(v * high) + y] * across[(u * wide) + x];
+                    }
+                }
+            }
+        }
+
+        return weights;
+    }
+
+    /// <summary>
+    /// The reduced transform from precomputed weights (<see cref="ReducedWeights"/>): each non-zero coefficient adds its
+    /// weight row to all the samples at once, so a block costs one vector multiply-add per coefficient that isn't zero.
+    /// The same sums as <see cref="Transform"/>'s, in another order.
+    /// </summary>
+    public static void TransformReduced(ReadOnlySpan<short> coefficients, float[] weights, int wide, int high, Span<byte> output, int stride)
+    {
+        // Which coefficients aren't zero, eight vector compares.
+        ReadOnlySpan<Vector128<short>> rows = MemoryMarshal.Cast<short, Vector128<short>>(coefficients[..64]);
+        ulong mask = 0;
+        for (int i = 0; i < 8; i++)
+        {
+            uint zero = Vector128.Equals(rows[i], Vector128<short>.Zero).ExtractMostSignificantBits();
+            mask |= (ulong)(~zero & 0xFF) << (8 * i);
+        }
+
+        int outputs = Padded(wide * high);
+        Span<float> sums = stackalloc float[32];
+        Span<Vector128<float>> sumVectors = MemoryMarshal.Cast<float, Vector128<float>>(sums[..outputs]);
+        ReadOnlySpan<Vector128<float>> weightVectors = MemoryMarshal.Cast<float, Vector128<float>>(weights);
+        Vector128<float> start = Vector128.Create(128f);
+        if (outputs == 4)
+        {
+            // 2 x 2 (luma at 1/4): one vector of sums, kept in a register.
+            Vector128<float> a = start;
+            for (; mask != 0; mask &= mask - 1)
+            {
+                int k = BitOperations.TrailingZeroCount(mask);
+                a += Vector128.Create((float)coefficients[k]) * weightVectors[k];
+            }
+
+            sumVectors[0] = a;
+        }
+        else if (outputs == 16)
+        {
+            // 4 x 4 (chroma at 1/4, luma at 1/2): four vectors of sums.
+            Vector128<float> a = start, b = start, c = start, d = start;
+            for (; mask != 0; mask &= mask - 1)
+            {
+                int k = BitOperations.TrailingZeroCount(mask);
+                Vector128<float> value = Vector128.Create((float)coefficients[k]);
+                ReadOnlySpan<Vector128<float>> row = weightVectors.Slice(k * 4, 4);
+                a += value * row[0];
+                b += value * row[1];
+                c += value * row[2];
+                d += value * row[3];
+            }
+
+            sumVectors[0] = a;
+            sumVectors[1] = b;
+            sumVectors[2] = c;
+            sumVectors[3] = d;
+        }
+        else
+        {
+            sumVectors.Fill(start);
+            int vectorsPerCoefficient = outputs / 4;
+            for (; mask != 0; mask &= mask - 1)
+            {
+                int k = BitOperations.TrailingZeroCount(mask);
+                Vector128<float> value = Vector128.Create((float)coefficients[k]);
+                ReadOnlySpan<Vector128<float>> row = weightVectors.Slice(k * vectorsPerCoefficient, vectorsPerCoefficient);
+                for (int i = 0; i < row.Length; i++)
+                {
+                    sumVectors[i] += value * row[i];
+                }
+            }
+        }
+
+        // Round half up, clamp to 0 to 255 and narrow, four samples at a time; then the rows into place.
+        Span<byte> samples = stackalloc byte[32];
+        Vector128<float> half = Vector128.Create(0.5f);
+        Vector128<int> top = Vector128.Create(255);
+        for (int i = 0; i < sumVectors.Length; i++)
+        {
+            Vector128<int> ints = Vector128.Min(Vector128.Max(Vector128.ConvertToInt32(Vector128.Floor(sumVectors[i] + half)), Vector128<int>.Zero), top);
+            Vector128<short> shorts = Vector128.Narrow(ints, ints);
+            Vector128<byte> bytes = Vector128.Narrow(shorts.AsUInt16(), shorts.AsUInt16());
+            MemoryMarshal.Write(samples.Slice(i * 4, 4), bytes.AsUInt32().ToScalar());
+        }
+
+        // Rows of 2 or 4 samples go out as single stores, not copies.
+        for (int y = 0; y < high; y++)
+        {
+            switch (wide)
+            {
+                case 2:
+                    MemoryMarshal.Write(output.Slice(y * stride, 2), MemoryMarshal.Read<ushort>(samples.Slice(y * 2, 2)));
+                    break;
+                case 4:
+                    MemoryMarshal.Write(output.Slice(y * stride, 4), MemoryMarshal.Read<uint>(samples.Slice(y * 4, 4)));
+                    break;
+                default:
+                    samples.Slice(y * wide, wide).CopyTo(output.Slice(y * stride, wide));
+                    break;
+            }
+        }
+    }
+
+    private static int Padded(int outputs) => (outputs + 3) & ~3;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static byte Clamp(float value) => (byte)Math.Clamp((int)MathF.Round(value), 0, 255);
 

@@ -8,6 +8,22 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: JPEG thumbnails on one core
+
+Phase timings of the 400 px thumbnail on one core showed Huffman decoding at 23 ms and the reduced inverse DCT at
+20 ms. The reduced transform now folds quantisation and both passes into one weight row per coefficient, and visits
+only the non-zero coefficients (13 a block on average in the test photo), with the sums for the usual 2 x 2 and 4 x 4
+shapes held in registers and the output rounded as vectors: 20 to 14 ms. Sequential scans keep the bit buffer in
+locals for a whole row of MCUs instead of going through the reader for every block, and the hot loop drops bounds
+checks it provably doesn't need: Huffman 27 to 23 ms.
+
+| BenchmarkDotNet short job | Before, one core | After, one core | Before, 16 cores | After, 16 cores |
+|---|---:|---:|---:|---:|
+| JPEG to a 400 px thumbnail | 52 ms | 43 ms | 30 ms | 26 ms |
+| JPEG to a 400 px WebP | 73 ms | 63 ms | 47 ms | 46 ms |
+
+libvips makes the thumbnail in 29 ms on one core and 32 ms on 16.
+
 ## 2026-11-08: optimal deflate for PNG Optimize
 
 `Optimize` now recompresses each band's best filter with our own deflate encoder (`OptimalDeflate`), which weighs
