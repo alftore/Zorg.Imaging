@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added animations: `AnimationReader` reads every frame of an animated GIF or WebP, already composited, one at a time. `AnimationWriter` writes animated GIF or WebP from whole frames, coding only what changed. Any other image reads as one frame. See docs/animation.md.
 - Faster WebP encoding, measured on a 12-megapixel photo on one core:
   - Lossy encoding takes 1.4 s, down from 2.3 s, the same as cwebp. The output is unchanged.
   - Lossless encoding at the default effort takes 3.0 s, down from 5.9 s, and makes a file 1.6% smaller.
