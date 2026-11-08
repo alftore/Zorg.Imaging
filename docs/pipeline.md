@@ -158,19 +158,23 @@ pipeline, including its save. Small images, up to about a quarter of a megapixel
 ## Speed
 
 A 12-megapixel JPEG (4000 x 3000) made into a 400 x 300 thumbnail, BenchmarkDotNet short job, on a machine busy
-with other work (2026-11-08). Skia uses libjpeg-turbo's scaled decode at 1/4 and libwebp; ImageSharp 2.1 can't shrink
-on load.
+with other work (2026-11-08). libvips (through NetVips, the engine behind sharp) and Skia use libjpeg-turbo's scaled
+decode at 1/4 and libwebp; ImageSharp 2.1 can't shrink on load.
 
 | JPEG to a 400 px thumbnail | One core | 16 cores | Allocated |
 |---|---:|---:|---:|
 | Zorg.Imaging, to an `Image` | 105 ms | 39 ms | 35 MB |
 | Zorg.Imaging, to WebP quality 80 | 128 ms | 68 ms | 36 MB |
+| libvips 8.18, to memory | 30 ms | 31 ms | 2 KB managed |
+| libvips 8.18, to WebP quality 80 | 40 ms | 42 ms | 14 KB managed |
 | SkiaSharp, to a bitmap | 37 ms | 36 ms | 2 KB managed |
 | SkiaSharp, to WebP quality 80 | 46 ms | 48 ms | 3 KB managed |
 | ImageSharp 2.1, to an image | 107 ms | 88 ms | 64 KB |
 | ImageSharp 2.1, to WebP quality 80 | 385 ms | 122 ms | 8 MB |
 
-On all cores the pipeline is within reach of Skia; on one core Skia is about 3x faster. The time is in the codecs,
+On all cores the pipeline is within reach of the native libraries; on one core libvips and Skia are about 3x faster.
+For a 1600 px web size re-encoded as JPEG 80, all cores make it 63 ms against libvips' 65 and Skia's 156 (from a full
+decode), but one core makes it 364 ms against libvips' 70. The time is in the codecs,
 not the pipeline: the reduced inverse DCT that shrink-on-load uses is still scalar, the JPEG decoder keeps a
 coefficient buffer for the whole frame (most of the 35 MB), and the lossy WebP encoder takes about twice libwebp's
 time per pixel. `docs/performance.md` tracks these.

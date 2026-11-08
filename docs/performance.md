@@ -14,14 +14,25 @@ The 12-megapixel photo to a 400 x 300 thumbnail, from the JPEG to the encoded fi
 
 | JPEG to a 400 px WebP, quality 80 | One core | 16 cores |
 |---|---:|---:|
-| Zorg.Imaging (`Fit(400, 400).SaveAsWebpAsync`) | 128 ms | 68 ms |
+| Zorg.Imaging (`Fit(400, 400).SaveAsWebpAsync`) | 128 ms (197 in a busier run) | 68 ms |
+| libvips 8.18 through NetVips (`ThumbnailBuffer`, `WebpsaveBuffer`) | 40 ms | 42 ms |
 | SkiaSharp (scaled decode, Mitchell, libwebp) | 46 ms | 48 ms |
 | ImageSharp 2.1 (full decode, Mitchell) | 385 ms | 122 ms |
 
 The pipeline itself costs nothing measurable; the thumbnail without the encode is 105 ms on one core (Skia 37 ms).
 What is left is in the codecs: the scalar reduced inverse DCT, the whole-frame coefficient buffer (35 MB allocated
 for a thumbnail), and lossy WebP encoding at about twice libwebp's time per pixel (23 against 10 ms for 400 x 300).
-NetVips is not yet measured: it needs the NetVips packages added to the benchmarks.
+
+| JPEG to 1600 px, JPEG 80 | One core | 16 cores |
+|---|---:|---:|
+| Zorg.Imaging (`Fit(1600, 1600).SaveAsJpegAsync`) | 364 ms | 63 ms |
+| libvips 8.18 (`ThumbnailBuffer`, `JpegsaveBuffer`) | 70 ms | 65 ms |
+| SkiaSharp (full decode, Mitchell) | 155 ms | 156 ms |
+
+libvips is the target to beat: on all cores we are level with it, on one core it is 3x to 5x faster. Its time hardly
+changes with the core count because its JPEG work is libjpeg-turbo's, which is single-threaded; its own thread pool
+only splits the resize. `NetVips.Concurrency` follows `DOTNET_PROCESSOR_COUNT` in the benchmark, so the one-core rows
+are fair to it.
 
 ## 2026-11-08: PNG optimiser and banded compression
 

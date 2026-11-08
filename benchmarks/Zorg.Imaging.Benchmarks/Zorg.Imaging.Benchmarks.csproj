@@ -12,6 +12,9 @@
     <PackageReference Include="SkiaSharp.NativeAssets.Linux" />
     <!-- The last Apache-2.0 ImageSharp (3.0 moved to the Six Labors Split License), as a managed baseline. Never its source. -->
     <PackageReference Include="SixLabors.ImageSharp" />
+    <!-- libvips through NetVips, the engine behind sharp, as a native baseline for the pipeline. -->
+    <PackageReference Include="NetVips" />
+    <PackageReference Include="NetVips.Native" />
   </ItemGroup>
 
   <!-- ImageSharp 2.1's open advisories are about hostile files. The benchmarks feed it only the photos that

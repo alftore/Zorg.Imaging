@@ -16,6 +16,8 @@
     <PackageVersion Include="SkiaSharp" Version="4.154.0" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux" Version="4.154.0" />
     <PackageVersion Include="SixLabors.ImageSharp" Version="2.1.13" />
+    <PackageVersion Include="NetVips" Version="3.2.0" />
+    <PackageVersion Include="NetVips.Native" Version="8.18.7" />
   </ItemGroup>
 
   <ItemGroup Label="Tests">
