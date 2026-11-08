@@ -26,6 +26,7 @@ Rules:
 | Package | Licence | Why | Risk |
 |---|---|---|---|
 | BenchmarkDotNet 0.15.8 | MIT (checked in the `.nuspec`) | Measures speed and allocations | Low. Its own dependencies are only in the benchmark project; nothing reaches `src/`. |
+| SkiaSharp 4.154.0, SkiaSharp.NativeAssets.Linux 4.154.0 (and the Win32, macOS assets it brings) | MIT (checked in each `.nuspec`) | A native baseline in the same process: Skia with libjpeg-turbo, libpng, libwebp and zlib | Low. Benchmarks only, never referenced from `src/` or `tests/`. Native code, so its own licences (Skia BSD-3-Clause, the codecs' permissive licences) ride along in the package. |
 
 ## Considered and rejected
 

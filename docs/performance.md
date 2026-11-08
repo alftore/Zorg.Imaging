@@ -8,6 +8,36 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: against SkiaSharp and libpng
+
+SkiaSharp 4.154.0 (Skia with libjpeg-turbo, libpng, libwebp and zlib, all native) runs the same work in the same
+process (`SkiaBenchmarks`). Skia is single-threaded here. It decodes to 32-bit BGRA (ours to 24-bit RGB for these
+photos), and its resize is a plain Mitchell filter on the stored values (ours Lanczos3 in linear light), so it does a
+little less work in both.
+
+| Task | SkiaSharp | Ours, one core | Ours, all cores |
+|---|---:|---:|---:|
+| JPEG decode, baseline | 84 ms | 76 ms | 37 ms |
+| JPEG decode, progressive | 150 ms | 180 ms | 139 ms |
+| JPEG encode, quality 80 | 161 ms | 116 ms | 77 ms |
+| PNG decode | 120 ms | 152 ms | 153 ms |
+| PNG encode (level 6, adaptive filters) | 1,332 ms | 632 ms | 631 ms |
+| WebP lossy decode | 134 ms | 310 ms | 169 ms |
+| WebP lossless decode | 169 ms | 241 ms | 255 ms |
+| JPEG to a 400 px thumbnail (scaled decode, resize) | 35 ms | 98 ms | 37 ms |
+| JPEG to JPEG at 1600 px | 156 ms | 217 ms | 62 ms |
+
+libpng through ImageMagick 7.1.2 in the gate image (best of three, PPM reading and writing subtracted): decode about
+150 ms, encode with adaptive filters at level 6 about 1.65 s. Our encoder's files were about 1% larger than libpng's
+(24.2 MB against 23.9 MB); .NET's zlib is zlib-ng, which is faster than classic zlib.
+
+Where we're behind on one core, in order of what it costs a web server:
+1. **The JPEG thumbnail** (98 against 35 ms): the reduced inverse DCT that shrink-on-load uses is still scalar, and
+   the final resize is in linear light.
+2. **WebP lossy decode** (310 against 134 ms): token decoding and reconstruction; threads help (169 ms).
+3. **WebP lossless decode** (241 against 169 ms) and **PNG decode** (152 against 120 ms).
+4. **Progressive JPEG** (180 against 150 ms): refinement scans.
+
 ## 2026-11-08, after the second round
 
 Same files and machine, quieter; 15 warm-up rounds so every method reaches its final compiled tier.
