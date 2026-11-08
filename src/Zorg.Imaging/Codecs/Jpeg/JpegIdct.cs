@@ -37,6 +37,9 @@ internal static class JpegIdct
     // Basis[n - 1][u * n + x'] for n = 1, 2, 4, 8: the mean of C(u)/2 · cos((2x+1)uπ/16) over cell x'.
     private static readonly float[][] Basis = [Make(1), Make(2), [], Make(4), [], [], [], Make(8)];
 
+    // Columns[n - 1][x']: the basis for cell x' as a vector over u, for the reduced transform's dot products.
+    private static readonly Vector256<float>[][] CellColumns = [Columns(1), Columns(2), [], Columns(4), [], [], [], Columns(8)];
+
     /// <summary>Turns one block of quantised coefficients into samples.</summary>
     /// <param name="coefficients">The 64 coefficients in natural (row-major) order, as decoded.</param>
     /// <param name="quantisation">The 64 quantisation values in natural order.</param>
@@ -93,7 +96,7 @@ internal static class JpegIdct
         }
         else
         {
-            TransformReduced(MemoryMarshal.Cast<Vector256<float>, float>(block), wide, high, output, stride);
+            TransformReduced(block, used, wide, high, output, stride);
         }
     }
 
@@ -145,39 +148,45 @@ internal static class JpegIdct
         }
     }
 
-    private static void TransformReduced(ReadOnlySpan<float> block, int wide, int high, Span<byte> output, int stride)
+    // Down first, as 8-wide vectors over u: row y' of the result is the sum over v of basis(v, y') times coefficient row
+    // v, skipping empty rows. Then each sample is one dot product of that row with its cell's basis column.
+    private static void TransformReduced(ReadOnlySpan<Vector256<float>> block, int used, int wide, int high, Span<byte> output, int stride)
     {
-        float[] across = Basis[wide - 1];
         float[] down = Basis[high - 1];
-        Span<float> rows = stackalloc float[64];
-        for (int v = 0; v < 8; v++)
-        {
-            ReadOnlySpan<float> f = block.Slice(v * 8, 8);
-            for (int x = 0; x < wide; x++)
-            {
-                float sum = 0;
-                for (int u = 0; u < 8; u++)
-                {
-                    sum += f[u] * across[(u * wide) + x];
-                }
-
-                rows[(v * 8) + x] = sum;
-            }
-        }
-
+        ReadOnlySpan<Vector256<float>> across = CellColumns[wide - 1];
         for (int y = 0; y < high; y++)
         {
+            Vector256<float> row = Vector256<float>.Zero;
+            for (int remaining = used; remaining != 0; remaining &= remaining - 1)
+            {
+                int v = BitOperations.TrailingZeroCount(remaining);
+                row += block[v] * down[(v * high) + y];
+            }
+
+            Span<byte> line = output.Slice(y * stride, wide);
             for (int x = 0; x < wide; x++)
             {
-                float sum = 128;
-                for (int v = 0; v < 8; v++)
-                {
-                    sum += down[(v * high) + y] * rows[(v * 8) + x];
-                }
-
-                output[(y * stride) + x] = Clamp(sum);
+                line[x] = Clamp(Vector256.Dot(row, across[x]) + 128);
             }
         }
+    }
+
+    private static Vector256<float>[] Columns(int n)
+    {
+        float[] basis = Make(n);
+        var columns = new Vector256<float>[n];
+        Span<float> column = stackalloc float[8];
+        for (int x = 0; x < n; x++)
+        {
+            for (int u = 0; u < 8; u++)
+            {
+                column[u] = basis[(u * n) + x];
+            }
+
+            columns[x] = Vector256.Create<float>(column);
+        }
+
+        return columns;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

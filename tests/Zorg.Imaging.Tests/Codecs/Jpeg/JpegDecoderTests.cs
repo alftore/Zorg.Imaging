@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
+using Zorg.Imaging.Codecs.Jpeg;
 using Zorg.Imaging.Tests.Codecs.Png;
 using static Zorg.Imaging.Tests.Codecs.Jpeg.JpegTestFiles;
 
@@ -292,6 +293,48 @@ public class JpegDecoderTests
         using Image cropFit = cropped.Fit(16, 16);
         using Image pipedCrop = await ImagePipeline.Load(jpeg).Crop(0, 0, 60, 40).Fit(16, 16).ToImageAsync(TestContext.Current.CancellationToken);
         Assert.Equal(cropFit.GetPixelBytes().ToArray(), pipedCrop.GetPixelBytes().ToArray());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(8)]
+    public void Streaming_in_bands_of_one_row_gives_the_same_pixels(int cores)
+    {
+        // Baseline files stream through a band buffer (JpegStream). One MCU row a band, on one core or with the
+        // transform overlapping the decode, must match the decode in one band, at every scale.
+        foreach (string name in (string[])["s420", "s422", "s411", "s440", "s444", "grey", "restart", "rgb"])
+        {
+            byte[] jpeg = Sample(name);
+            foreach (int target in (int[])[1000, 30, 12, 4])
+            {
+                DecodeOptions options = DecodeOptions.Default.WithShrinkTarget((w, h) => (Math.Min(target, w), Math.Min(target, h)));
+                using Image whole = Image.Decode(jpeg, options);
+                int saved = JpegStream.BandBytes;
+                try
+                {
+                    JpegStream.BandBytes = 1;
+                    DecodeOptions withCores = new DecodeOptions { MaxDegreeOfParallelism = cores }.WithShrinkTarget(options.ShrinkTarget);
+                    using Image banded = Image.Decode(jpeg, withCores);
+                    Assert.Equal(whole.ToString(), banded.ToString());
+                    Assert.True(whole.GetPixelBytes().SequenceEqual(banded.GetPixelBytes()), $"{name} at target {target}");
+                }
+                finally
+                {
+                    JpegStream.BandBytes = saved;
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void A_baseline_scan_after_one_with_every_component_is_corrupt()
+    {
+        byte[] jpeg = Sample("s420");
+        List<(int Offset, byte Marker)> segments = JpegTestFiles.Segments(jpeg);
+        (int sos, _) = segments.Find(s => s.Marker == 0xDA);
+        int eoi = jpeg.Length - 2;
+        byte[] twice = [.. jpeg[..eoi], .. jpeg[sos..eoi], 0xFF, 0xD9];
+        Assert.Throws<ImageFormatException>(() => Image.Decode(twice).Dispose());
     }
 
     [Fact]

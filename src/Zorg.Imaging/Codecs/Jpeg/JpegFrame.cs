@@ -164,8 +164,14 @@ internal sealed class JpegComponent(int id, int h, int v, int quantisationTable)
 
     public int UsedHigh => JpegFrame.DivideUp(SamplesHigh, 8);
 
-    /// <summary>Every block's 64 coefficients in natural (row-major) order, as decoded (not yet multiplied by the quantisation).</summary>
-    public short[] Coefficients { get; private set; } = [];
+    /// <summary>
+    /// Each block's 64 coefficients in natural (row-major) order, as decoded (not yet multiplied by the quantisation):
+    /// every block of the component, or, while a baseline scan streams, a window of block rows from <see cref="FirstRow"/>.
+    /// </summary>
+    public short[] Coefficients { get; set; } = [];
+
+    /// <summary>The block row that <see cref="Coefficients"/> starts at: 0 unless the scan streams.</summary>
+    public int FirstRow { get; set; }
 
     /// <summary>The quantisation table, copied when the component's first scan starts.</summary>
     public ushort[]? Quantisation { get; set; }
@@ -182,14 +188,21 @@ internal sealed class JpegComponent(int id, int h, int v, int quantisationTable)
         BlocksHigh = frame.McusHigh * V;
         SamplesWide = JpegFrame.DivideUp((long)frame.Width * H, frame.MaxH);
         SamplesHigh = JpegFrame.DivideUp((long)frame.Height * V, frame.MaxV);
-        long count = (long)BlocksWide * BlocksHigh * 64;
-        if (count > Array.MaxLength)
+        if ((long)BlocksWide * BlocksHigh * 64 > Array.MaxLength)
         {
             throw ImageErrors.ExceedsLimits("The JPEG image is too large to hold in memory.");
         }
-
-        Coefficients = new short[count];
     }
 
-    public Span<short> Block(int x, int y) => Coefficients.AsSpan(((y * BlocksWide) + x) * 64, 64);
+    /// <summary>Room for every coefficient of the component, made when its first scan that isn't streamed starts.</summary>
+    public void AllocateAll()
+    {
+        if (Coefficients.Length == 0 || FirstRow != 0 || Coefficients.Length != BlocksWide * BlocksHigh * 64)
+        {
+            Coefficients = new short[(long)BlocksWide * BlocksHigh * 64];
+            FirstRow = 0;
+        }
+    }
+
+    public Span<short> Block(int x, int y) => Coefficients.AsSpan((((y - FirstRow) * BlocksWide) + x) * 64, 64);
 }

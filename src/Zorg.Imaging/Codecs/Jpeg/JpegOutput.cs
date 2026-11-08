@@ -22,22 +22,61 @@ internal static class JpegOutput
 
     public static Image Build(JpegFrame frame, int scale, bool isRgb, PixelFormat requested)
     {
-        int width = JpegFrame.DivideUp((long)frame.Width * scale, 8);
-        int height = JpegFrame.DivideUp((long)frame.Height * scale, 8);
-        bool grey = frame.Components.Length == 1;
-        PixelFormat format = requested != PixelFormat.None ? requested : grey ? PixelFormat.L8 : PixelFormat.Rgb24;
-        var planes = new Plane[frame.Components.Length];
-        Image? image = null;
+        Plane[] planes = CreatePlanes(frame, scale);
         try
         {
             for (int i = 0; i < planes.Length; i++)
             {
-                planes[i] = Plane.Transform(frame, frame.Components[i], scale);
+                JpegComponent component = frame.Components[i];
+                planes[i].Transform(component, component.Coefficients, component.FirstRow, 0, component.UsedHigh);
             }
 
-            image = new Image(width, height, format);
-            Image target = image;
+            return Compose(frame, scale, planes, isRgb, requested);
+        }
+        finally
+        {
+            Dispose(planes);
+        }
+    }
 
+    /// <summary>One plane of samples for each component, at the scale's size; the caller disposes them.</summary>
+    public static Plane[] CreatePlanes(JpegFrame frame, int scale)
+    {
+        var planes = new Plane[frame.Components.Length];
+        try
+        {
+            for (int i = 0; i < planes.Length; i++)
+            {
+                planes[i] = Plane.Create(frame, frame.Components[i], scale);
+            }
+
+            return planes;
+        }
+        catch
+        {
+            Dispose(planes);
+            throw;
+        }
+    }
+
+    public static void Dispose(Plane[] planes)
+    {
+        foreach (Plane plane in planes)
+        {
+            plane?.Dispose();
+        }
+    }
+
+    /// <summary>Upsamples and converts the finished planes into the image.</summary>
+    public static Image Compose(JpegFrame frame, int scale, Plane[] planes, bool isRgb, PixelFormat requested)
+    {
+        int width = JpegFrame.DivideUp((long)frame.Width * scale, 8);
+        int height = JpegFrame.DivideUp((long)frame.Height * scale, 8);
+        bool grey = frame.Components.Length == 1;
+        PixelFormat format = requested != PixelFormat.None ? requested : grey ? PixelFormat.L8 : PixelFormat.Rgb24;
+        var image = new Image(width, height, format);
+        try
+        {
             // Rows are independent once the planes exist: large images are converted in parallel bands.
             int bands = Parallelism.Bands((long)width * height, height / 16);
             Parallelism.For(bands, band =>
@@ -56,21 +95,16 @@ internal static class JpegOutput
                         planes[i].Row(y, rows[i]);
                     }
 
-                    WriteRow(target, y, rows, grey, isRgb);
+                    WriteRow(image, y, rows, grey, isRgb);
                 }
             });
 
-            Image result = image;
-            image = null;
-            return result;
+            return image;
         }
-        finally
+        catch
         {
-            image?.Dispose();
-            foreach (Plane plane in planes)
-            {
-                plane?.Dispose();
-            }
+            image.Dispose();
+            throw;
         }
     }
 
@@ -171,8 +205,11 @@ internal static class JpegOutput
         }
     }
 
-    /// <summary>One component's samples after the inverse DCT, and how to bring a row of them to full size.</summary>
-    private sealed class Plane : IDisposable
+    /// <summary>
+    /// One component's samples after the inverse DCT, filled block row by block row, and how to bring a row of them to
+    /// full size.
+    /// </summary>
+    internal sealed class Plane : IDisposable
     {
         private byte[] _samples = [];
         private int _stride;
@@ -181,7 +218,11 @@ internal static class JpegOutput
         private int _factorX;
         private int _factorY;
 
-        public static Plane Transform(JpegFrame frame, JpegComponent component, int scale)
+        private float[] _quantisation = [];
+        private int _blockWide;
+        private int _blockHigh;
+
+        public static Plane Create(JpegFrame frame, JpegComponent component, int scale)
         {
             int factorX = frame.MaxH / component.H;
             int factorY = frame.MaxV / component.V;
@@ -212,36 +253,55 @@ internal static class JpegOutput
             };
             int rows = component.UsedHigh * high;
             plane._samples = ArrayPool<byte>.Shared.Rent(plane._stride * rows);
+            plane._blockWide = wide;
+            plane._blockHigh = high;
+
             // The quantisation table, stored in zigzag order, in natural order as floats for the transform.
             ushort[] zigzag = component.Quantisation ?? new ushort[64];
-            float[] quantisation = new float[64];
+            plane._quantisation = new float[64];
             for (int k = 0; k < 64; k++)
             {
-                quantisation[JpegIdct.ZigZag[k]] = zigzag[k];
+                plane._quantisation[JpegIdct.ZigZag[k]] = zigzag[k];
             }
-
-            byte[] samples = plane._samples;
-            int stride = plane._stride;
-
-            // Each block row writes its own rows of the plane, so large components are transformed in parallel.
-            long blocks = (long)component.UsedWide * component.UsedHigh;
-            int bands = Parallelism.Bands(blocks * 64, component.UsedHigh / 4);
-            Parallelism.For(bands, band =>
-            {
-                int end = (int)((long)component.UsedHigh * (band + 1) / bands);
-                for (int by = (int)((long)component.UsedHigh * band / bands); by < end; by++)
-                {
-                    for (int bx = 0; bx < component.UsedWide; bx++)
-                    {
-                        JpegIdct.Transform(component.Block(bx, by), quantisation, wide, high, samples.AsSpan((by * high * stride) + (bx * wide)), stride);
-                    }
-                }
-            });
 
             return plane;
         }
 
-        /// <summary>Fills one output row of this component at full size.</summary>
+        /// <summary>
+        /// Transforms block rows <paramref name="first"/> to <paramref name="first"/> + <paramref name="count"/> of
+        /// <paramref name="component"/> into the plane, stopping at the last row that holds samples. The coefficients
+        /// are passed rather than read from the component, whose buffer a streaming decode may already have moved on.
+        /// </summary>
+        public void Transform(JpegComponent component, short[] coefficients, int coefficientsFirstRow, int first, int count)
+        {
+            int last = Math.Min(first + count, component.UsedHigh);
+            if (last <= first)
+            {
+                return;
+            }
+
+            byte[] samples = _samples;
+            int stride = _stride;
+            int wide = _blockWide;
+            int high = _blockHigh;
+            float[] quantisation = _quantisation;
+
+            // Each block row writes its own rows of the plane, so large components are transformed in parallel.
+            int bands = Parallelism.Bands((long)component.UsedWide * (last - first) * 64, (last - first) / 4);
+            Parallelism.For(bands, band =>
+            {
+                int end = first + (int)((long)(last - first) * (band + 1) / bands);
+                for (int by = first + (int)((long)(last - first) * band / bands); by < end; by++)
+                {
+                    for (int bx = 0; bx < component.UsedWide; bx++)
+                    {
+                        ReadOnlySpan<short> block = coefficients.AsSpan((((by - coefficientsFirstRow) * component.BlocksWide) + bx) * 64, 64);
+                        JpegIdct.Transform(block, quantisation, wide, high, samples.AsSpan((by * high * stride) + (bx * wide)), stride);
+                    }
+                }
+            });
+        }
+
         public void Row(int y, Span<byte> output)
         {
             int near = Math.Min(y / _factorY, _high - 1);

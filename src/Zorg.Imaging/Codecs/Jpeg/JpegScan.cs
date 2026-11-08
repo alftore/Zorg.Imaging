@@ -53,7 +53,7 @@ internal sealed class JpegScan
         }
     }
 
-    public void Decode(JpegBitReader bits)
+    public void Decode(JpegBitReader bits, JpegStream? stream = null)
     {
         foreach (JpegComponent component in _components)
         {
@@ -65,33 +65,69 @@ internal sealed class JpegScan
             // Not interleaved: the component's own blocks, row by row, one per MCU (A.2.2).
             JpegComponent component = _components[0];
             int wide = component.UsedWide;
-            long count = (long)wide * component.UsedHigh;
-            for (long i = 0; i < count; i++)
+            int high = component.UsedHigh;
+            for (int y = 0; y < high; y++)
             {
-                RestartIfDue(bits, i);
-                DecodeBlock(bits, component, component.Block((int)(i % wide), (int)(i / wide)));
+                BeginBand(stream, y);
+                for (int x = 0; x < wide; x++)
+                {
+                    RestartIfDue(bits, ((long)y * wide) + x);
+                    DecodeBlock(bits, component, component.Block(x, y));
+                }
+
+                EndBand(stream, y, high);
             }
 
+            stream?.Finish();
             return;
         }
 
         // Interleaved: each MCU holds H x V blocks of each component in turn (A.2.3).
-        long mcus = (long)_frame.McusWide * _frame.McusHigh;
-        for (long m = 0; m < mcus; m++)
+        int mcusWide = _frame.McusWide;
+        int mcusHigh = _frame.McusHigh;
+        for (int my = 0; my < mcusHigh; my++)
         {
-            RestartIfDue(bits, m);
-            int mx = (int)(m % _frame.McusWide);
-            int my = (int)(m / _frame.McusWide);
-            foreach (JpegComponent component in _components)
+            BeginBand(stream, my);
+            for (int mx = 0; mx < mcusWide; mx++)
             {
-                for (int v = 0; v < component.V; v++)
+                RestartIfDue(bits, ((long)my * mcusWide) + mx);
+                foreach (JpegComponent component in _components)
                 {
-                    for (int h = 0; h < component.H; h++)
+                    for (int v = 0; v < component.V; v++)
                     {
-                        DecodeBlock(bits, component, component.Block((mx * component.H) + h, (my * component.V) + v));
+                        for (int h = 0; h < component.H; h++)
+                        {
+                            DecodeBlock(bits, component, component.Block((mx * component.H) + h, (my * component.V) + v));
+                        }
                     }
                 }
             }
+
+            EndBand(stream, my, mcusHigh);
+        }
+
+        stream?.Finish();
+    }
+
+    /// <summary>Whether this scan carries every component of the frame, which a streamed baseline scan must.</summary>
+    public bool CarriesEveryComponent => _components.Length == _frame.Components.Length;
+
+    /// <summary>Whether the scan's MCUs interleave several components.</summary>
+    public bool Interleaved => _components.Length > 1;
+
+    private static void BeginBand(JpegStream? stream, int unit)
+    {
+        if (stream is not null && unit % stream.UnitsPerBand == 0)
+        {
+            stream.Begin(unit);
+        }
+    }
+
+    private static void EndBand(JpegStream? stream, int unit, int units)
+    {
+        if (stream is not null && ((unit + 1) % stream.UnitsPerBand == 0 || unit + 1 == units))
+        {
+            stream.End(unit + 1 - (unit / stream.UnitsPerBand * stream.UnitsPerBand));
         }
     }
 

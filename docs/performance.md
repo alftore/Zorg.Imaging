@@ -8,6 +8,24 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: streaming baseline JPEG decode
+
+A baseline JPEG with one scan for every component (most photos) now decodes in bands of about 512 KiB of
+coefficients: each band is decoded into a small buffer and transformed into the sample planes straight away, and with
+more than one core the transform of one band runs while the next is decoded. The whole frame's coefficients (two
+bytes a sample, 36 MB for the 12-megapixel photo) are never held. The reduced inverse DCT for shrink-on-load also
+became vector code (down first as 8-wide vectors, then a dot product per sample). Progressive files and files with a
+scan per component keep the whole-frame path; both give the same pixels.
+
+| 12 MP JPEG, BenchmarkDotNet short job | Before, one core | After, one core | Before, 16 cores | After, 16 cores | Allocated before | After |
+|---|---:|---:|---:|---:|---:|---:|
+| Decode at full size | 123 ms | 119 ms | 44 ms | 37 ms | 34.5 MB | 0.4 MB |
+| 400 px thumbnail (decode at 1/4, Lanczos3) | 99 ms | 53 ms | 40 ms | 30 ms | 34.5 MB | 0.5 MB |
+| 1600 px web size | 274 ms | 206 ms | 63 ms | 60 ms | 34.7 MB | 0.7 MB |
+
+libvips makes the thumbnail in 29 ms on one core and 32 ms on all of them, so on 16 cores we are level. The rest of
+the one-core gap is Huffman decoding of every coefficient, which libjpeg-turbo does about twice as fast.
+
 ## 2026-11-08: the pipeline end to end
 
 The 12-megapixel photo to a 400 x 300 thumbnail, from the JPEG to the encoded file, BenchmarkDotNet short job:

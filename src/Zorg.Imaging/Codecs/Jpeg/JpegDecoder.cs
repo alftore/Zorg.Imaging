@@ -62,7 +62,7 @@ internal static class JpegDecoder
             throw ImageErrors.Corrupt("The JPEG file doesn't start with a start-of-image marker.");
         }
 
-        var state = new State();
+        using var state = new State();
         while (true)
         {
             byte marker = await ReadMarkerAsync(reader, two, cancellationToken).ConfigureAwait(false);
@@ -149,7 +149,7 @@ internal static class JpegDecoder
                     break;
 
                 case Sos:
-                    await DecodeScanAsync(reader, state, data, cancellationToken).ConfigureAwait(false);
+                    await DecodeScanAsync(reader, state, data, options, cancellationToken).ConfigureAwait(false);
                     break;
 
                 default:
@@ -165,26 +165,38 @@ internal static class JpegDecoder
 
         reader.Finish();
         ColorSpace colorSpace = state.ResolveColorSpace();
-        int scale = ChooseScale(state.Frame, options, state.Orientation);
-        Image image = JpegOutput.Build(state.Frame, scale, state.IsRgb, options.PixelFormat);
-        image.ColorSpace = colorSpace;
-        image.Metadata = Metadata.ImageMetadata.From(state.Exif, state.Xmp);
-        if (options.ApplyOrientation && state.Orientation != 1)
+        Metadata.ImageMetadata? metadata = Metadata.ImageMetadata.From(state.Exif, state.Xmp);
+        Image? image = Output(state, options);
+        try
         {
-            try
+            image.ColorSpace = colorSpace;
+            image.Metadata = metadata;
+            if (options.ApplyOrientation && state.Orientation != 1)
             {
                 Image upright = Orientation.Apply(image, state.Orientation);
                 image.Dispose();
                 image = upright;
             }
-            catch
-            {
-                image.Dispose();
-                throw;
-            }
+
+            Image result = image;
+            image = null;
+            return result;
+        }
+        finally
+        {
+            image?.Dispose();
+        }
+    }
+
+    private static Image Output(State state, DecodeOptions options)
+    {
+        JpegFrame frame = state.Frame!;
+        if (state.Planes is { } planes)
+        {
+            return JpegOutput.Compose(frame, state.Scale, planes, state.IsRgb, options.PixelFormat);
         }
 
-        return image;
+        return JpegOutput.Build(frame, ChooseScale(frame, options, state.Orientation), state.IsRgb, options.PixelFormat);
     }
 
     // The samples a side for the inverse DCT: 8 at full size, down to 1, keeping at least twice the target size.
@@ -211,11 +223,16 @@ internal static class JpegDecoder
         return scale;
     }
 
-    private static async ValueTask DecodeScanAsync(DataReader reader, State state, byte[] header, CancellationToken cancellationToken)
+    private static async ValueTask DecodeScanAsync(DataReader reader, State state, byte[] header, DecodeOptions options, CancellationToken cancellationToken)
     {
-        if (state.Frame is null)
+        if (state.Frame is not { } frame)
         {
             throw ImageErrors.Corrupt("The JPEG file has image data before its frame header.");
+        }
+
+        if (state.Planes is not null)
+        {
+            throw ImageErrors.Corrupt("The baseline JPEG file has another scan after one that carried every component.");
         }
 
         if (++state.Scans > MaxScans)
@@ -224,6 +241,22 @@ internal static class JpegDecoder
         }
 
         JpegScan scan = state.ParseScan(header);
+
+        // The usual baseline file, one scan with every component, streams: see JpegStream. Anything else (progressive,
+        // or a scan for each component) keeps every coefficient until the last scan.
+        if (state.Scans == 1 && !frame.Progressive && scan.CarriesEveryComponent)
+        {
+            state.Scale = ChooseScale(frame, options, state.Orientation);
+            state.Planes = JpegOutput.CreatePlanes(frame, state.Scale);
+            state.Stream = new JpegStream(frame, state.Planes, scan.Interleaved);
+        }
+        else
+        {
+            foreach (JpegComponent component in frame.Components)
+            {
+                component.AllocateAll();
+            }
+        }
 
         // A block can't use more than about 216 bytes of data (64 codes of up to 16 bits, each with up to 11 more).
         long cap = (scan.Blocks * 256) + (1 << 20);
@@ -242,7 +275,7 @@ internal static class JpegDecoder
             }
 
             data.Pad();
-            scan.Decode(new JpegBitReader(data.Buffer, data.Length, data.Restarts));
+            scan.Decode(new JpegBitReader(data.Buffer, data.Length, data.Restarts), state.Stream);
         }
         finally
         {
@@ -269,7 +302,7 @@ internal static class JpegDecoder
     }
 
     /// <summary>Everything read from the markers so far.</summary>
-    private sealed class State
+    private sealed class State : IDisposable
     {
         private readonly ushort[]?[] _quantisation = new ushort[4][];
         private readonly JpegHuffman?[] _dc = new JpegHuffman[4];
@@ -292,6 +325,22 @@ internal static class JpegDecoder
         public byte[]? Xmp { get; set; }
 
         public int Orientation { get; set; } = 1;
+
+        /// <summary>While a baseline scan streams: the planes it fills, at <see cref="Scale"/>, and the stream itself.</summary>
+        public JpegOutput.Plane[]? Planes { get; set; }
+
+        public JpegStream? Stream { get; set; }
+
+        public int Scale { get; set; } = 8;
+
+        public void Dispose()
+        {
+            Stream?.Dispose();
+            if (Planes is not null)
+            {
+                JpegOutput.Dispose(Planes);
+            }
+        }
 
         public int AdobeTransform { get; set; } = -1;
 
