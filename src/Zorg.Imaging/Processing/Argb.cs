@@ -54,6 +54,35 @@ internal static class Argb
         return image;
     }
 
+    /// <summary>
+    /// Draws <paramref name="source"/> over <paramref name="target"/>, both ARGB with straight (not premultiplied) alpha:
+    /// the "over" operator on 8-bit values, rounded to nearest.
+    /// </summary>
+    public static void BlendOver(ReadOnlySpan<uint> source, Span<uint> target)
+    {
+        for (int i = 0; i < source.Length; i++)
+        {
+            uint src = source[i];
+            uint sa = src >> 24;
+            if (sa == 255)
+            {
+                target[i] = src;
+                continue;
+            }
+
+            if (sa == 0)
+            {
+                continue;
+            }
+
+            uint dst = target[i];
+            uint behind = (((dst >> 24) * (255 - sa)) + 127) / 255;
+            uint a = sa + behind;
+            uint Channel(int shift) => ((((src >> shift) & 0xFF) * sa) + (((dst >> shift) & 0xFF) * behind) + (a / 2)) / a;
+            target[i] = (a << 24) | (Channel(16) << 16) | (Channel(8) << 8) | Channel(0);
+        }
+    }
+
     /// <summary>One row of ARGB words into an image row in <paramref name="format"/>: Rgb24, Rgba32, Bgra32 or Rgba64.</summary>
     public static void WriteRow(ReadOnlySpan<uint> row, Span<byte> output, PixelFormat format, bool hasAlpha)
     {

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.IO;
@@ -28,18 +29,8 @@ internal static class WebpEncoder
         using (Parallelism.Use(options.MaxDegreeOfParallelism))
         {
             (uint[] argb, bool alpha) = Argb.FromImage(image);
-            if (options.Lossless)
-            {
-                byte[] vp8l = Vp8lEncoder.Encode(argb, image.Width, image.Height, alpha, options.Effort);
-                file = Container("VP8L"u8, vp8l, [], image.Width, image.Height, alpha, profile.Span, exif, xmp);
-            }
-            else
-            {
-                (byte[] y, byte[] u, byte[] v) = ToYuv(argb, image.Width, image.Height);
-                byte[] vp8 = Vp8Encoder.Encode(y, u, v, image.Width, image.Height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
-                byte[] alphaChunk = alpha ? AlphaChunk(argb, image.Width, image.Height, options.Effort) : [];
-                file = Container("VP8 "u8, vp8, alphaChunk, image.Width, image.Height, alpha, profile.Span, exif, xmp);
-            }
+            (byte[] data, byte[] alphaChunk) = EncodePicture(argb, image.Width, image.Height, alpha, options);
+            file = Container(options.Lossless ? "VP8L"u8 : "VP8 "u8, data, alphaChunk, image.Width, image.Height, alpha, profile.Span, exif, xmp);
         }
 
         if (sync)
@@ -53,7 +44,85 @@ internal static class WebpEncoder
     }
 
     /// <summary>The largest side a VP8 frame header can hold.</summary>
-    private const int MaxLossySide = 16383;
+    internal const int MaxLossySide = 16383;
+
+    /// <summary>
+    /// One picture's image chunk payload, VP8L or VP8 as the options say, and for a lossy picture with alpha the ALPH
+    /// chunk's payload (else empty).
+    /// </summary>
+    internal static (byte[] Data, byte[] Alpha) EncodePicture(uint[] argb, int width, int height, bool alpha, WebpEncoderOptions options)
+    {
+        if (options.Lossless)
+        {
+            return (Vp8lEncoder.Encode(argb, width, height, alpha, options.Effort), []);
+        }
+
+        (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height);
+        byte[] vp8 = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
+        return (vp8, alpha ? AlphaChunk(argb, width, height, options.Effort) : []);
+    }
+
+    /// <summary>
+    /// An ANMF chunk's payload (RFC 9649, 2.7.1.1): the frame's place (even), size, duration in milliseconds, no
+    /// blending, disposal to the background or none, then its ALPH and image chunks.
+    /// </summary>
+    internal static byte[] AnimationFrame(int x, int y, int width, int height, int duration, bool dispose, bool lossless, byte[] data, byte[] alphaChunk)
+    {
+        int size = 16 + 8 + data.Length + (data.Length & 1) + (alphaChunk.Length == 0 ? 0 : 8 + alphaChunk.Length + (alphaChunk.Length & 1));
+        byte[] frame = new byte[size];
+        Span<byte> span = frame;
+        WriteUInt24(span, x / 2);
+        WriteUInt24(span[3..], y / 2);
+        WriteUInt24(span[6..], width - 1);
+        WriteUInt24(span[9..], height - 1);
+        WriteUInt24(span[12..], duration);
+        span[15] = (byte)(0x02 | (dispose ? 0x01 : 0));
+        int at = 16;
+        if (alphaChunk.Length > 0)
+        {
+            at = Chunk(span, at, "ALPH"u8, alphaChunk);
+        }
+
+        Chunk(span, at, lossless ? "VP8L"u8 : "VP8 "u8, data);
+        return frame;
+    }
+
+    /// <summary>An animated WebP: RIFF, VP8X with the animation flag, ICCP when given, ANIM, then the ANMF chunks.</summary>
+    internal static void AnimationContainer(ArrayBufferWriter<byte> output, int width, int height, bool alpha, ReadOnlySpan<byte> profile, int loops, ReadOnlySpan<byte> frames)
+    {
+        long size = 4 + 18 + (profile.IsEmpty ? 0 : 8 + profile.Length + (profile.Length & 1)) + 14 + frames.Length;
+        if (size > uint.MaxValue - 8)
+        {
+            throw new NotSupportedException("The animation is too large for a WebP file (4 GiB).");
+        }
+
+        Span<byte> head = stackalloc byte[12 + 18];
+        "RIFF"u8.CopyTo(head);
+        BinaryPrimitives.WriteUInt32LittleEndian(head[4..], (uint)size);
+        "WEBP"u8.CopyTo(head[8..]);
+        "VP8X"u8.CopyTo(head[12..]);
+        BinaryPrimitives.WriteInt32LittleEndian(head[16..], 10);
+        head[20] = (byte)((profile.IsEmpty ? 0 : 0x20) | (alpha ? 0x10 : 0) | 0x02);
+        head[21] = head[22] = head[23] = 0;
+        WriteUInt24(head[24..], width - 1);
+        WriteUInt24(head[27..], height - 1);
+        output.Write(head);
+        if (!profile.IsEmpty)
+        {
+            byte[] chunk = new byte[8 + profile.Length + (profile.Length & 1)];
+            Chunk(chunk, 0, "ICCP"u8, profile);
+            output.Write(chunk);
+        }
+
+        // ANIM: a transparent background (a hint only) and the loop count.
+        Span<byte> anim = stackalloc byte[14];
+        "ANIM"u8.CopyTo(anim);
+        BinaryPrimitives.WriteInt32LittleEndian(anim[4..], 6);
+        BinaryPrimitives.WriteUInt32LittleEndian(anim[8..], 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(anim[12..], (ushort)loops);
+        output.Write(anim);
+        output.Write(frames);
+    }
 
     // RGB to Y'CbCr with BT.601's studio-range coefficients, as VP8 decoders convert back (RFC 6386 leaves the colour
     // space to the container; WebP uses this one). Chroma is the 2 x 2 average, at half size. The planes are padded to

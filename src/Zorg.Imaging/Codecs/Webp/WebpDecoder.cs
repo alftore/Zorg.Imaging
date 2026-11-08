@@ -86,6 +86,119 @@ internal static class WebpDecoder
     /// <summary>Decoded pixels, ARGB, and whether alpha is meant.</summary>
     private sealed record Picture(int Width, int Height, uint[] Pixels, bool HasAlpha);
 
+    /// <summary>One frame of an animation as stored: its image, place, duration in milliseconds, blending and disposal.</summary>
+    private sealed record AnimationFrame(Picture Picture, int X, int Y, int Width, int Height, int Duration, bool Blend, bool Dispose);
+
+    /// <summary>
+    /// Reads an animated WebP frame by frame onto its canvas (RFC 9649, 2.7.1): each frame blended over what the frames
+    /// before left, or copied when it asks not to be blended, after the previous frame's rectangle is cleared if that
+    /// frame asked to be disposed. The canvas starts transparent and disposal clears to transparent, as libwebp's
+    /// animation decoder and browsers do; the ANIM chunk's background colour is only a hint.
+    /// </summary>
+    internal sealed class Animation
+    {
+        private readonly State _file;
+        private readonly DataReader _reader;
+        private readonly ImageLimits _limits;
+        private (int X, int Y, int Width, int Height)? _dispose;
+
+        private Animation(State file, DataReader reader, ImageLimits limits, int width, int height, int loops)
+        {
+            _file = file;
+            _reader = reader;
+            _limits = limits;
+            Width = width;
+            Height = height;
+            Loops = loops;
+            Canvas = new uint[(long)width * height];
+        }
+
+        public int Width { get; }
+
+        public int Height { get; }
+
+        /// <summary>The ANIM chunk's loop count: how many times the animation plays, 0 for ever.</summary>
+        public int Loops { get; }
+
+        public ColorSpace ColorSpace => _file.ColorSpace;
+
+        /// <summary>The canvas after the last frame read, ARGB.</summary>
+        public uint[] Canvas { get; }
+
+        /// <summary>The last frame's duration in milliseconds.</summary>
+        public int Duration { get; private set; }
+
+        public int Frames { get; private set; }
+
+        /// <summary>
+        /// Reads the header of an animated WebP, up to its first frame. The reader is at the signature, and the file
+        /// has been checked to be an animation (a VP8X chunk first, with the animation flag).
+        /// </summary>
+        public static async ValueTask<Animation> OpenAsync(DataReader reader, DecodeOptions options, CancellationToken cancellationToken)
+        {
+            reader.FormatName = "WebP";
+            byte[] head = new byte[12];
+            await reader.ReadExactlyAsync(head, cancellationToken).ConfigureAwait(false);
+            long end = 8L + BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(4));
+            var file = new State(reader, end, options);
+            (string fourCc, uint size) = await file.NextChunkAsync(cancellationToken).ConfigureAwait(false);
+            if (fourCc != "VP8X")
+            {
+                throw ImageErrors.Corrupt("The animated WebP file doesn't start with a VP8X chunk.");
+            }
+
+            (int width, int height, int loops) = await file.ReadAnimationHeaderAsync(size, cancellationToken).ConfigureAwait(false);
+            return new Animation(file, reader, options.Limits, width, height, loops);
+        }
+
+        /// <summary>Reads the next frame and draws it on the canvas.</summary>
+        /// <returns>Whether there was a frame.</returns>
+        public async ValueTask<bool> NextFrameAsync(CancellationToken cancellationToken)
+        {
+            uint size = await _file.NextFrameChunkAsync(cancellationToken).ConfigureAwait(false);
+            if (size == 0)
+            {
+                _reader.Finish();
+                return false;
+            }
+
+            if (++Frames > _limits.MaxFrames)
+            {
+                throw ImageErrors.ExceedsLimits(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"The WebP animation has more than {_limits.MaxFrames} frames (ImageLimits.MaxFrames)."));
+            }
+
+            AnimationFrame frame = await _file.ReadFrameAsync(size, Width, Height, cancellationToken).ConfigureAwait(false);
+            if (_dispose is (int dx, int dy, int dw, int dh))
+            {
+                for (int row = dy; row < dy + dh; row++)
+                {
+                    Canvas.AsSpan((row * Width) + dx, dw).Clear();
+                }
+            }
+
+            uint[] pixels = frame.Picture.Pixels;
+            for (int row = 0; row < frame.Height; row++)
+            {
+                Span<uint> target = Canvas.AsSpan(((frame.Y + row) * Width) + frame.X, frame.Width);
+                ReadOnlySpan<uint> source = pixels.AsSpan(row * frame.Width, frame.Width);
+                if (frame.Blend)
+                {
+                    Argb.BlendOver(source, target);
+                }
+                else
+                {
+                    source.CopyTo(target);
+                }
+            }
+
+            _dispose = frame.Dispose ? (frame.X, frame.Y, frame.Width, frame.Height) : null;
+            Duration = frame.Duration;
+            return true;
+        }
+    }
+
     /// <summary>Reading through the chunks, with what they say.</summary>
     private sealed class State(DataReader reader, long end, DecodeOptions options)
     {
@@ -310,6 +423,19 @@ internal static class WebpDecoder
         // The first frame of an animation, placed on a transparent canvas: what a viewer shows before playing.
         private async ValueTask<Picture> ReadFirstFrameAsync(uint size, int canvasWidth, int canvasHeight, CancellationToken cancellationToken)
         {
+            AnimationFrame frame = await ReadFrameAsync(size, canvasWidth, canvasHeight, cancellationToken).ConfigureAwait(false);
+            uint[] canvas = new uint[(long)canvasWidth * canvasHeight];
+            for (int row = 0; row < frame.Height; row++)
+            {
+                frame.Picture.Pixels.AsSpan(row * frame.Width, frame.Width).CopyTo(canvas.AsSpan(((frame.Y + row) * canvasWidth) + frame.X));
+            }
+
+            return new Picture(canvasWidth, canvasHeight, canvas, HasAlpha: true);
+        }
+
+        // An ANMF chunk (RFC 9649, 2.7.1.1): where the frame goes, for how long, how it's drawn and left, and its image.
+        public async ValueTask<AnimationFrame> ReadFrameAsync(uint size, int canvasWidth, int canvasHeight, CancellationToken cancellationToken)
+        {
             if (size < 16 + 8)
             {
                 throw ImageErrors.Corrupt("The WebP animation frame is too short.");
@@ -321,6 +447,8 @@ internal static class WebpDecoder
             int y = 2 * (header[3] | (header[4] << 8) | (header[5] << 16));
             int width = (header[6] | (header[7] << 8) | (header[8] << 16)) + 1;
             int height = (header[9] | (header[10] << 8) | (header[11] << 16)) + 1;
+            int duration = header[12] | (header[13] << 8) | (header[14] << 16);
+            byte flags = header[15];
             if ((long)x + width > canvasWidth || (long)y + height > canvasHeight)
             {
                 throw ImageErrors.Corrupt("The WebP animation frame reaches outside the canvas.");
@@ -359,18 +487,83 @@ internal static class WebpDecoder
                 await reader.SkipAsync(frameEnd - reader.Position, cancellationToken).ConfigureAwait(false);
             }
 
+            if ((size & 1) != 0 && reader.Position < end)
+            {
+                await reader.SkipAsync(1, cancellationToken).ConfigureAwait(false);
+            }
+
+            return new AnimationFrame(frame, x, y, width, height, duration, Blend: (flags & 0x02) == 0, Dispose: (flags & 0x01) != 0);
+        }
+
+        // The chunks from VP8X to the first frame: the canvas, the profile and the ANIM chunk's loop count.
+        public async ValueTask<(int Width, int Height, int Loops)> ReadAnimationHeaderAsync(uint size, CancellationToken cancellationToken)
+        {
+            if (size < 10)
+            {
+                throw ImageErrors.Corrupt("The WebP VP8X chunk is too short.");
+            }
+
+            byte[] vp8x = new byte[size];
+            await reader.ReadExactlyAsync(vp8x, cancellationToken).ConfigureAwait(false);
             if ((size & 1) != 0)
             {
                 await reader.SkipAsync(1, cancellationToken).ConfigureAwait(false);
             }
 
-            uint[] canvas = new uint[(long)canvasWidth * canvasHeight];
-            for (int row = 0; row < height; row++)
+            int width = (vp8x[4] | (vp8x[5] << 8) | (vp8x[6] << 16)) + 1;
+            int height = (vp8x[7] | (vp8x[8] << 8) | (vp8x[9] << 16)) + 1;
+            CheckSize(width, height, options.Limits);
+            while (true)
             {
-                frame.Pixels.AsSpan(row * width, width).CopyTo(canvas.AsSpan(((y + row) * canvasWidth) + x));
+                if (reader.Position + 8 > end)
+                {
+                    throw ImageErrors.Corrupt("The WebP animation has no ANIM chunk.");
+                }
+
+                (string fourCc, uint chunkSize) = await NextChunkAsync(cancellationToken).ConfigureAwait(false);
+                switch (fourCc)
+                {
+                    case "ICCP" when (vp8x[0] & IccFlag) != 0:
+                        await ReadProfileAsync(chunkSize, cancellationToken).ConfigureAwait(false);
+                        break;
+
+                    case "ANIM":
+                        if (chunkSize < 6)
+                        {
+                            throw ImageErrors.Corrupt("The WebP ANIM chunk is too short.");
+                        }
+
+                        byte[] anim = new byte[chunkSize];
+                        await reader.ReadExactlyAsync(anim, cancellationToken).ConfigureAwait(false);
+                        if ((chunkSize & 1) != 0)
+                        {
+                            await reader.SkipAsync(1, cancellationToken).ConfigureAwait(false);
+                        }
+
+                        return (width, height, BinaryPrimitives.ReadUInt16LittleEndian(anim.AsSpan(4)));
+
+                    default:
+                        await SkipChunkAsync(chunkSize, cancellationToken).ConfigureAwait(false);
+                        break;
+                }
+            }
+        }
+
+        // The next ANMF chunk's size, passing over others; 0 at the end of the file.
+        public async ValueTask<uint> NextFrameChunkAsync(CancellationToken cancellationToken)
+        {
+            while (reader.Position + 8 <= end)
+            {
+                (string fourCc, uint chunkSize) = await NextChunkAsync(cancellationToken).ConfigureAwait(false);
+                if (fourCc == "ANMF")
+                {
+                    return chunkSize;
+                }
+
+                await SkipChunkAsync(chunkSize, cancellationToken).ConfigureAwait(false);
             }
 
-            return new Picture(canvasWidth, canvasHeight, canvas, HasAlpha: true);
+            return 0;
         }
     }
 }

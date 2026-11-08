@@ -82,7 +82,7 @@ public sealed partial class Image
         return await DecodeCoreAsync(DataReader.FromStream(stream), options, sync: false, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async ValueTask<Image> DecodeCoreAsync(DataReader reader, DecodeOptions options, bool sync, CancellationToken cancellationToken)
+    internal static async ValueTask<Image> DecodeCoreAsync(DataReader reader, DecodeOptions options, bool sync, CancellationToken cancellationToken)
     {
         using Parallelism.Scope scope = Parallelism.Use(options.MaxDegreeOfParallelism);
         ReadOnlyMemory<byte> head = await reader.PeekAsync(ImageFormats.MaxSignatureLength, cancellationToken).ConfigureAwait(false);

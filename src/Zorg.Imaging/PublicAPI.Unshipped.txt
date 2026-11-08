@@ -436,3 +436,28 @@ Zorg.Imaging.ImageMetadata.Xmp.get -> System.ReadOnlyMemory<byte>
 Zorg.Imaging.IdentifyOptions.ReadColorSpace.get -> bool
 Zorg.Imaging.IdentifyOptions.ReadColorSpace.init -> void
 Zorg.Imaging.ImageInfo.ColorSpace.get -> Zorg.Imaging.ColorSpace?
+Zorg.Imaging.AnimationFrame
+Zorg.Imaging.AnimationFrame.AnimationFrame(Zorg.Imaging.Image! image, System.TimeSpan duration) -> void
+Zorg.Imaging.AnimationFrame.Dispose() -> void
+Zorg.Imaging.AnimationFrame.Duration.get -> System.TimeSpan
+Zorg.Imaging.AnimationFrame.Image.get -> Zorg.Imaging.Image!
+Zorg.Imaging.AnimationReader
+Zorg.Imaging.AnimationReader.Dispose() -> void
+Zorg.Imaging.AnimationReader.Format.get -> Zorg.Imaging.ImageFormat!
+Zorg.Imaging.AnimationReader.Height.get -> int
+Zorg.Imaging.AnimationReader.IsAnimated.get -> bool
+Zorg.Imaging.AnimationReader.LoopCount.get -> int
+Zorg.Imaging.AnimationReader.ReadFrame() -> Zorg.Imaging.AnimationFrame?
+Zorg.Imaging.AnimationReader.ReadFrameAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.AnimationFrame?>
+Zorg.Imaging.AnimationReader.Width.get -> int
+Zorg.Imaging.AnimationWriter
+Zorg.Imaging.AnimationWriter.Complete() -> void
+Zorg.Imaging.AnimationWriter.CompleteAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.AnimationWriter.Height.get -> int
+Zorg.Imaging.AnimationWriter.Width.get -> int
+Zorg.Imaging.AnimationWriter.WriteFrame(Zorg.Imaging.Image! image, System.TimeSpan duration) -> void
+Zorg.Imaging.AnimationWriter.WriteFrameAsync(Zorg.Imaging.Image! image, System.TimeSpan duration, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+static Zorg.Imaging.AnimationReader.Open(byte[]! data, Zorg.Imaging.DecodeOptions? options = null) -> Zorg.Imaging.AnimationReader!
+static Zorg.Imaging.AnimationReader.OpenAsync(System.IO.Stream! stream, Zorg.Imaging.DecodeOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.AnimationReader!>
+static Zorg.Imaging.AnimationWriter.CreateGif(System.IO.Stream! stream, int loopCount = 0, Zorg.Imaging.GifEncoderOptions? options = null) -> Zorg.Imaging.AnimationWriter!
+static Zorg.Imaging.AnimationWriter.CreateWebp(System.IO.Stream! stream, int loopCount = 0, Zorg.Imaging.WebpEncoderOptions? options = null) -> Zorg.Imaging.AnimationWriter!

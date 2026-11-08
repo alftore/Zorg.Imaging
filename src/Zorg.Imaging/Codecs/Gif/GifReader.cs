@@ -75,6 +75,12 @@ internal sealed class GifReader
     /// <summary>How many frames have been read.</summary>
     public int Frames { get; private set; }
 
+    /// <summary>
+    /// The NETSCAPE2.0 (or ANIMEXTS1.0) extension's repeat count, read so far: 0 for ever, else how many times the
+    /// animation repeats after it first plays, as browsers read it; <see langword="null"/> without the extension.
+    /// </summary>
+    public int? Repeats { get; private set; }
+
     /// <summary>The last frame's delay, in hundredths of a second.</summary>
     public int Delay { get; private set; }
 
@@ -147,6 +153,21 @@ internal sealed class GifReader
                     else if (label == Application && size == 11 && Frames == 0 && _block.AsSpan(0, 11).SequenceEqual("ICCRGBG1012"u8))
                     {
                         await ReadProfileAsync(cancellationToken).ConfigureAwait(false);
+                        break;
+                    }
+                    else if (label == Application && size == 11 && (_block.AsSpan(0, 11).SequenceEqual("NETSCAPE2.0"u8) || _block.AsSpan(0, 11).SequenceEqual("ANIMEXTS1.0"u8)))
+                    {
+                        int sub = await ReadBlockAsync(cancellationToken).ConfigureAwait(false);
+                        if (sub >= 3 && _block[0] == 1)
+                        {
+                            Repeats = BinaryPrimitives.ReadUInt16LittleEndian(_block.AsSpan(1));
+                        }
+
+                        if (sub > 0)
+                        {
+                            await SkipBlocksAsync(cancellationToken).ConfigureAwait(false);
+                        }
+
                         break;
                     }
 
