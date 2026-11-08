@@ -8,6 +8,18 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-09: lossy PNG
+
+`PngEncoderOptions.MaxColors` reduces to a palette with full alpha (median cut over premultiplied colour cells, then
+k-means). 800 x 600 crops of the photo, one core:
+
+| Image | Lossless | 256 colours, dithered | 256, no dithering | 64, no dithering |
+|---|---:|---:|---:|---:|
+| Photo | 776,228 | 331,695 (34.0 dB, 145 ms) | 293,659 (36.4 dB, 86 ms) | 187,480 (33.1 dB) |
+| Cut-out with soft alpha | 916,632 | 194,129 (34.2 dB) | 131,524 (37.7 dB) | 71,130 (34.7 dB) |
+
+PSNR is over premultiplied colour and alpha. Dithering lowers PSNR but hides banding in gradients.
+
 ## 2026-11-09: JPEG encoding on many cores
 
 The 12-megapixel photo at quality 80, 4:2:0, timed by the same harness as the WebP section below:

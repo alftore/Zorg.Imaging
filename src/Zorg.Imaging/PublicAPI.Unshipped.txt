@@ -471,3 +471,7 @@ Zorg.Imaging.ImagePipeline.DrawImage(Zorg.Imaging.Image! overlay, int x, int y, 
 Zorg.Imaging.ImagePipeline.Sharpen(double sigma = 1, double amount = 1) -> Zorg.Imaging.ImagePipeline!
 Zorg.Imaging.ImagePipeline.Trim(int threshold = 10) -> Zorg.Imaging.ImagePipeline!
 const Zorg.Imaging.Image.MaxSigma = 1000 -> double
+Zorg.Imaging.PngEncoderOptions.Dithering.get -> double
+Zorg.Imaging.PngEncoderOptions.Dithering.init -> void
+Zorg.Imaging.PngEncoderOptions.MaxColors.get -> int
+Zorg.Imaging.PngEncoderOptions.MaxColors.init -> void

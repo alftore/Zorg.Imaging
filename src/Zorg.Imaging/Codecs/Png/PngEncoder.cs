@@ -28,10 +28,40 @@ internal static class PngEncoder
     /// <param name="sync">Whether to write synchronously; the method then completes synchronously.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>A task that completes when the file is written.</returns>
-    [SuppressMessage("Performance", "CA1849:Call async methods when in an async method", Justification = "The synchronous branches serve SaveAsPng, which must not block on async.")]
     public static async ValueTask EncodeAsync(Image image, Stream output, PngEncoderOptions options, bool sync, CancellationToken cancellationToken)
     {
         using Parallelism.Scope scope = Parallelism.Use(options.MaxDegreeOfParallelism);
+        if (options.MaxColors > 0)
+        {
+            using Image reduced = Reduce(image, options.MaxColors, options.Dithering);
+            await EncodeCoreAsync(reduced, output, options, sync, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await EncodeCoreAsync(image, output, options, sync, cancellationToken).ConfigureAwait(false);
+    }
+
+    // Lossy PNG: the image in at most maxColours colours with full alpha, as 8-bit RGB or RGBA, so the layout chosen
+    // after is a palette (with a tRNS entry per colour) when colour types are reduced.
+    private static Image Reduce(Image image, int maxColours, double dither)
+    {
+        (uint[] argb, _) = Argb.FromImage(image);
+        RgbaQuantizer.Result result = RgbaQuantizer.Run(argb, image.Width, image.Height, maxColours, dither);
+        bool alpha = Array.Exists(result.Palette, p => p < 0xFF000000u);
+        for (int i = 0; i < argb.Length; i++)
+        {
+            argb[i] = result.Palette[result.Indices[i]];
+        }
+
+        Image reduced = Argb.ToImage(argb, image.Width, image.Height, alpha, alpha ? PixelFormat.Rgba32 : PixelFormat.Rgb24);
+        reduced.ColorSpace = image.ColorSpace;
+        reduced.SourceMetadata = image.SourceMetadata;
+        return reduced;
+    }
+
+    [SuppressMessage("Performance", "CA1849:Call async methods when in an async method", Justification = "The synchronous branches serve SaveAsPng, which must not block on async.")]
+    private static async ValueTask EncodeCoreAsync(Image image, Stream output, PngEncoderOptions options, bool sync, CancellationToken cancellationToken)
+    {
         PngLayout layout = options.ReduceColorType
             ? PngLayout.Choose(image, options.CleanTransparentPixels)
             : PngLayout.Of(image, options.CleanTransparentPixels);

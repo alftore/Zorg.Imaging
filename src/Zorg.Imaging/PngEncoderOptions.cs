@@ -89,6 +89,52 @@ public sealed class PngEncoderOptions
     public bool Optimize { get; init; }
 
     /// <summary>
+    /// For a lossy PNG, the most colours to keep, 2 to 256; 0 (the default) keeps every colour. Fewer colours make a
+    /// palette file, often a third to a quarter of the size, as pngquant does: colours are chosen with full alpha
+    /// (compared premultiplied, so faint pixels' colours count for little), and a colour whose pixels are all opaque
+    /// stays opaque. An image that already has few enough colours is written exactly.
+    /// </summary>
+    /// <remarks>
+    /// The palette layout needs <see cref="ReduceColorType"/>, which is on by default; with it off, the colours are reduced
+    /// but the file stays RGB or RGBA. 16-bit images come out as 8-bit.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The value isn't 0 or 2 to 256.</exception>
+    /// <example><code>var small = new PngEncoderOptions { MaxColors = 256 };</code></example>
+    public int MaxColors
+    {
+        get;
+        init
+        {
+            if (value is not (0 or (>= 2 and <= 256)))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "MaxColors must be 0 (keep every colour) or 2 to 256.");
+            }
+
+            field = value;
+        }
+    }
+
+    /// <summary>
+    /// With <see cref="MaxColors"/>, how much Floyd–Steinberg dithering to use, 0 (none) to 1 (full, the default).
+    /// Dithering hides banding in gradients and photos; flat graphics compress smaller without it.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value isn't 0 to 1.</exception>
+    /// <example><code>var flat = new PngEncoderOptions { MaxColors = 64, Dithering = 0 };</code></example>
+    public double Dithering
+    {
+        get;
+        init
+        {
+            if (!(value >= 0 && value <= 1))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "Dithering must be 0 to 1.");
+            }
+
+            field = value;
+        }
+    } = 1;
+
+    /// <summary>
     /// How many cores this encode may use, or 0 (the default) for <see cref="ImageDefaults.MaxDegreeOfParallelism"/>.
     /// The file is the same, byte for byte, whatever the value.
     /// </summary>
