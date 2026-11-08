@@ -17,7 +17,8 @@ namespace Zorg.Imaging.Codecs.Jpeg;
 /// <para>
 /// Grey and YCbCr (or RGB, when an Adobe marker or the component identifiers say so) with any whole-number chroma
 /// subsampling. Chroma is upsampled with a triangle filter, centred as JFIF places it. 12-bit, lossless, hierarchical
-/// and arithmetic-coded files, and CMYK, throw <see cref="UnsupportedImageFormatException"/>.
+/// and arithmetic-coded files throw <see cref="UnsupportedImageFormatException"/>. CMYK and YCCK files are converted to
+/// sRGB (see <see cref="JpegCmyk"/>).
 /// </para>
 /// <para>
 /// Hostile input: the frame's size is checked against <see cref="ImageLimits.MaxPixels"/> before the coefficients are
@@ -169,8 +170,16 @@ internal static class JpegDecoder
 
         reader.Finish();
         ColorSpace colorSpace = state.ResolveColorSpace();
+        JpegCmyk? cmyk = null;
+        if (state.Frame.Components.Length == 4)
+        {
+            // There is no CMYK pixel format: the pixels come out as sRGB, through the profile when there is one.
+            cmyk = JpegCmyk.For(state.AdobeTransform, colorSpace.IccProfile.Span);
+            colorSpace = ColorSpace.Srgb;
+        }
+
         Metadata.SourceMetadata? metadata = Metadata.SourceMetadata.From(state.Exif, state.Xmp, state.Iptc);
-        Image? image = Output(state, options);
+        Image? image = Output(state, options, cmyk);
         try
         {
             image.ColorSpace = colorSpace;
@@ -192,15 +201,15 @@ internal static class JpegDecoder
         }
     }
 
-    private static Image Output(State state, DecodeOptions options)
+    private static Image Output(State state, DecodeOptions options, JpegCmyk? cmyk)
     {
         JpegFrame frame = state.Frame!;
         if (state.Planes is { } planes)
         {
-            return JpegOutput.Compose(frame, state.Scale, planes, state.IsRgb, options.PixelFormat);
+            return JpegOutput.Compose(frame, state.Scale, planes, state.IsRgb, options.PixelFormat, cmyk);
         }
 
-        return JpegOutput.Build(frame, ChooseScale(frame, options, state.Orientation), state.IsRgb, options.PixelFormat);
+        return JpegOutput.Build(frame, ChooseScale(frame, options, state.Orientation), state.IsRgb, options.PixelFormat, cmyk);
     }
 
     // The samples a side for the inverse DCT: 8 at full size, down to 1, keeping at least twice the target size.

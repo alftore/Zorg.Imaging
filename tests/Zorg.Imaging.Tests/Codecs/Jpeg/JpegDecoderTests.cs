@@ -194,9 +194,9 @@ public class JpegDecoderTests
         twelveBit[sof + 4] = 12;
         Assert.Throws<UnsupportedImageFormatException>(() => Image.Decode(twelveBit));
 
-        // A CMYK frame header: four components.
+        // A CMYK frame header is understood now (JpegCmykTests); with no scan after it, the file is simply incomplete.
         byte[] cmyk = [0xFF, 0xD8, 0xFF, 0xC0, 0, 20, 8, 0, 8, 0, 8, 4, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0, 0xFF, 0xD9];
-        Assert.Contains("CMYK", Assert.Throws<UnsupportedImageFormatException>(() => Image.Decode(cmyk)).Message, StringComparison.Ordinal);
+        Assert.Throws<ImageFormatException>(() => Image.Decode(cmyk));
     }
 
     [Fact]

@@ -30,6 +30,10 @@ for s in 1/2 1/4 1/8; do
   djpeg -pnm -scale $s progressive.jpg > progressive-scale$n.pnm
   djpeg -pnm -scale $s grey.jpg > grey-scale$n.pnm
 done
+# CMYK: ImageMagick writes YCCK with an Adobe marker; its own decodes, by the device formula, are the references.
+magick src.ppm -colorspace CMYK -quality 90 ycck.jpg
+magick src.ppm -colorspace CMYK -sampling-factor 2x2,1x1,1x1,2x2 -quality 85 ycck-subsampled.jpg
+for f in ycck ycck-subsampled; do magick $f.jpg -colorspace sRGB -depth 8 ppm:$f.pnm; done
 rm src.ppm small.ppm
 tar -cf - .
 ' | tar -xf - -C "$out"

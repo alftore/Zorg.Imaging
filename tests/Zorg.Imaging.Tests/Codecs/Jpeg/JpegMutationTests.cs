@@ -83,7 +83,7 @@ public class JpegMutationTests
 
     private static Dictionary<string, byte[]> SampleFiles()
     {
-        var files = new[] { "grey", "progressive", "progressive-grey", "progressive-restart", "restart", "rgb", "s411", "s420", "s422", "s440", "s444" }
+        var files = new[] { "grey", "progressive", "progressive-grey", "progressive-restart", "restart", "rgb", "s411", "s420", "s422", "s440", "s444", "ycck", "ycck-subsampled" }
             .ToDictionary(name => name, JpegTestFiles.Sample);
         using Image photo = JpegEncoderTests.Photo(40, 30);
         photo.ColorSpace = ColorSpace.DisplayP3;

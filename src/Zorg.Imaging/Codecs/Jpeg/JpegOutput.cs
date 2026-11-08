@@ -20,7 +20,7 @@ namespace Zorg.Imaging.Codecs.Jpeg;
 internal static class JpegOutput
 {
 
-    public static Image Build(JpegFrame frame, int scale, bool isRgb, PixelFormat requested)
+    public static Image Build(JpegFrame frame, int scale, bool isRgb, PixelFormat requested, JpegCmyk? cmyk = null)
     {
         Plane[] planes = CreatePlanes(frame, scale);
         try
@@ -31,7 +31,7 @@ internal static class JpegOutput
                 planes[i].Transform(component, component.Coefficients, component.FirstRow, 0, component.UsedHigh);
             }
 
-            return Compose(frame, scale, planes, isRgb, requested);
+            return Compose(frame, scale, planes, isRgb, requested, cmyk);
         }
         finally
         {
@@ -68,7 +68,7 @@ internal static class JpegOutput
     }
 
     /// <summary>Upsamples and converts the finished planes into the image.</summary>
-    public static Image Compose(JpegFrame frame, int scale, Plane[] planes, bool isRgb, PixelFormat requested)
+    public static Image Compose(JpegFrame frame, int scale, Plane[] planes, bool isRgb, PixelFormat requested, JpegCmyk? cmyk = null)
     {
         int width = JpegFrame.DivideUp((long)frame.Width * scale, 8);
         int height = JpegFrame.DivideUp((long)frame.Height * scale, 8);
@@ -95,7 +95,14 @@ internal static class JpegOutput
                         planes[i].Row(y, rows[i]);
                     }
 
-                    WriteRow(image, y, rows, grey, isRgb);
+                    if (cmyk is not null)
+                    {
+                        cmyk.WriteRow(rows, image.GetRowBytes(y), image.PixelFormat, width);
+                    }
+                    else
+                    {
+                        WriteRow(image, y, rows, grey, isRgb);
+                    }
                 }
             });
 

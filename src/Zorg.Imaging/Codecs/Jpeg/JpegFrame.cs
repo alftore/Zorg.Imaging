@@ -74,14 +74,9 @@ internal sealed class JpegFrame
             throw ImageErrors.Corrupt("The JPEG file has a width of 0.");
         }
 
-        if (count == 4)
+        if (count is not (1 or 3 or 4))
         {
-            throw new UnsupportedImageFormatException("CMYK JPEG isn't supported yet.", ImageFormat.Jpeg);
-        }
-
-        if (count is not (1 or 3))
-        {
-            throw ImageErrors.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The JPEG file has {count} colour components; only 1 (grey) or 3 (colour) make sense."));
+            throw ImageErrors.Corrupt(string.Create(CultureInfo.InvariantCulture, $"The JPEG file has {count} colour components; only 1 (grey), 3 (colour) or 4 (CMYK) make sense."));
         }
 
         if (data.Length != 6 + (3 * count))
