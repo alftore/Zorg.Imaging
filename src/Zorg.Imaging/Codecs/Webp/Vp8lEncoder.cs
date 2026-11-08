@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.Intrinsics;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
@@ -268,11 +269,11 @@ internal static class Vp8lEncoder
                     modes[(row * tilesWide) + tx] = 0xFF000000u | ((uint)best << 8);
                     for (int y = top; y < bottom; y++)
                     {
-                        for (int x = left; x < right; x++)
+                        int start = (y * width) + left;
+                        Span<uint> line = residuals.AsSpan(start, right - left);
+                        Residuals(best, p, width, start, line);
+                        foreach (uint residual in line)
                         {
-                            int i = (y * width) + x;
-                            uint residual = Subtract(p[i], Vp8lDecoder.Transform.Predict(best, p[i - 1], p[i - width], p[i - width + 1], p[i - width - 1]));
-                            residuals[i] = residual;
                             local[(int)(residual >> 24)]++;
                             local[256 + (int)((residual >> 16) & 0xFF)]++;
                             local[512 + (int)((residual >> 8) & 0xFF)]++;
@@ -301,16 +302,15 @@ internal static class Vp8lEncoder
     {
         int best = 1;
         float bestCost = float.MaxValue;
+        Span<uint> line = stackalloc uint[right - left];
         for (int mode = firstMode; mode <= lastMode; mode++)
         {
             float total = 0;
             for (int y = top; y < bottom && total < bestCost; y++)
             {
-                int row = y * width;
-                for (int x = left; x < right; x++)
+                Residuals(mode, p, width, (y * width) + left, line);
+                foreach (uint residual in line)
                 {
-                    int i = row + x;
-                    uint residual = Subtract(p[i], Vp8lDecoder.Transform.Predict(mode, p[i - 1], p[i - width], p[i - width + 1], p[i - width - 1]));
                     total += cost[(int)(residual >> 24)] + cost[256 + (int)((residual >> 16) & 0xFF)]
                         + cost[512 + (int)((residual >> 8) & 0xFF)] + cost[768 + (int)(residual & 0xFF)];
                 }
@@ -324,6 +324,115 @@ internal static class Vp8lEncoder
         }
 
         return best;
+    }
+
+    // The residuals of pixels start to start + output.Length (none in the first row or column) under a predictor mode:
+    // four pixels to a 128-bit vector, each byte as Vp8lDecoder.Transform.Predict and Subtract compute it, then any
+    // remainder one by one.
+    internal static void Residuals(int mode, uint[] p, int width, int start, Span<uint> output)
+    {
+        int n = output.Length;
+        int x = 0;
+        if (Vector128.IsHardwareAccelerated)
+        {
+            ReadOnlySpan<uint> pixels = p;
+            for (; x + 4 <= n; x += 4)
+            {
+                int i = start + x;
+                Vector128<byte> here = Vector128.Create(pixels.Slice(i, 4)).AsByte();
+                Vector128<byte> prediction = PredictVector(mode, pixels, i, width);
+                (here - prediction).AsUInt32().CopyTo(output.Slice(x, 4));
+            }
+        }
+
+        for (; x < n; x++)
+        {
+            int i = start + x;
+            output[x] = Subtract(p[i], Vp8lDecoder.Transform.Predict(mode, p[i - 1], p[i - width], p[i - width + 1], p[i - width - 1]));
+        }
+    }
+
+    private static Vector128<byte> PredictVector(int mode, ReadOnlySpan<uint> p, int i, int width)
+    {
+        static Vector128<byte> Load(ReadOnlySpan<uint> pixels, int at) => Vector128.Create(pixels.Slice(at, 4)).AsByte();
+        switch (mode)
+        {
+            case 0:
+                return Vector128.Create(0xFF000000u).AsByte();
+            case 1:
+                return Load(p, i - 1);
+            case 2:
+                return Load(p, i - width);
+            case 3:
+                return Load(p, i - width + 1);
+            case 4:
+                return Load(p, i - width - 1);
+            case 5:
+                return Average(Average(Load(p, i - 1), Load(p, i - width + 1)), Load(p, i - width));
+            case 6:
+                return Average(Load(p, i - 1), Load(p, i - width - 1));
+            case 7:
+                return Average(Load(p, i - 1), Load(p, i - width));
+            case 8:
+                return Average(Load(p, i - width - 1), Load(p, i - width));
+            case 9:
+                return Average(Load(p, i - width), Load(p, i - width + 1));
+            case 10:
+                return Average(Average(Load(p, i - 1), Load(p, i - width - 1)), Average(Load(p, i - width), Load(p, i - width + 1)));
+            case 11:
+                return Select(Load(p, i - 1), Load(p, i - width), Load(p, i - width - 1));
+            case 12:
+                return ClampAddSubtractFull(Load(p, i - 1), Load(p, i - width), Load(p, i - width - 1));
+            default:
+                return ClampAddSubtractHalf(Average(Load(p, i - 1), Load(p, i - width)), Load(p, i - width - 1));
+        }
+    }
+
+    // The byte-wise floor average, as the scalar (((a ^ b) & 0xFE...) >> 1) + (a & b).
+    private static Vector128<byte> Average(Vector128<byte> a, Vector128<byte> b) =>
+        (Vector128.ShiftRightLogical((a ^ b).AsUInt32() & Vector128.Create(0xFEFEFEFEu), 1) + (a & b).AsUInt32()).AsByte();
+
+    // Left or top, whichever the summed channel distances to left + top - top-left favour; top on a tie.
+    private static Vector128<byte> Select(Vector128<byte> left, Vector128<byte> top, Vector128<byte> topLeft)
+    {
+        Vector128<uint> toLeft = ChannelSum(Vector128.Max(top, topLeft) - Vector128.Min(top, topLeft));
+        Vector128<uint> toTop = ChannelSum(Vector128.Max(left, topLeft) - Vector128.Min(left, topLeft));
+        return Vector128.ConditionalSelect(Vector128.LessThan(toLeft, toTop).AsByte(), left, top);
+    }
+
+    private static Vector128<uint> ChannelSum(Vector128<byte> bytes)
+    {
+        Vector128<uint> v = bytes.AsUInt32();
+        Vector128<uint> low = Vector128.Create(0xFFu);
+        return (v & low) + (Vector128.ShiftRightLogical(v, 8) & low) + (Vector128.ShiftRightLogical(v, 16) & low) + Vector128.ShiftRightLogical(v, 24);
+    }
+
+    // a + b - c in each channel, clamped to 0 to 255.
+    private static Vector128<byte> ClampAddSubtractFull(Vector128<byte> a, Vector128<byte> b, Vector128<byte> c)
+    {
+        Vector128<short> low = (Vector128.WidenLower(a) + Vector128.WidenLower(b) - Vector128.WidenLower(c)).AsInt16();
+        Vector128<short> high = (Vector128.WidenUpper(a) + Vector128.WidenUpper(b) - Vector128.WidenUpper(c)).AsInt16();
+        return Narrow(low, high);
+    }
+
+    // a + (a - b) / 2 in each channel, the division rounding toward zero as C#'s does, clamped to 0 to 255.
+    private static Vector128<byte> ClampAddSubtractHalf(Vector128<byte> a, Vector128<byte> b)
+    {
+        Vector128<short> HalfStep(Vector128<ushort> wa, Vector128<ushort> wb)
+        {
+            Vector128<short> d = (wa - wb).AsInt16();
+            Vector128<short> half = Vector128.ShiftRightArithmetic(d - Vector128.ShiftRightArithmetic(d, 15), 1);
+            return wa.AsInt16() + half;
+        }
+
+        return Narrow(HalfStep(Vector128.WidenLower(a), Vector128.WidenLower(b)), HalfStep(Vector128.WidenUpper(a), Vector128.WidenUpper(b)));
+    }
+
+    private static Vector128<byte> Narrow(Vector128<short> low, Vector128<short> high)
+    {
+        Vector128<short> zero = Vector128<short>.Zero;
+        Vector128<short> top = Vector128.Create((short)255);
+        return Vector128.Narrow(Vector128.Min(Vector128.Max(low, zero), top).AsUInt16(), Vector128.Min(Vector128.Max(high, zero), top).AsUInt16());
     }
 
     // Section 4.2: red and blue less what green (and blue less what red) predicts of them, with multipliers chosen per
