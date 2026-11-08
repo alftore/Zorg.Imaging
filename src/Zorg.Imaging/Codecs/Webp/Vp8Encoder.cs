@@ -820,11 +820,175 @@ internal sealed class Vp8Encoder
         public void Put(int probability, bool value, int index) => bits.WriteBool(probability, value);
     }
 
-    private int BlockCost(ReadOnlySpan<short> levels, int type, int first, int context)
+    // The bits a block's tokens take, with the default token probabilities, which are the ones in force while modes are
+    // chosen (the fitted ones come after, for writing). The same sum as walking the tokens (Tokens with a CostSink), with
+    // the walk for each level done once ahead: a level's cost in each of the 96 contexts (type, band, previous), up to
+    // 66, and for larger ones the category 6 prefix in each context plus its eleven extra bits.
+    private static int BlockCost(ReadOnlySpan<short> levels, int type, int first, int context)
     {
-        var sink = new CostSink();
-        Tokens(ref sink, levels, type, first, context);
-        return sink.Bits;
+        int last = -1;
+        for (int c = 15; c >= first; c--)
+        {
+            if (levels[c] != 0)
+            {
+                last = c;
+                break;
+            }
+        }
+
+        ReadOnlySpan<byte> bands = Bands;
+        ReadOnlySpan<byte> probabilities = Vp8Tables.DefaultCoefficientProbabilities;
+        int table = type * 8 * 3;
+        int slot = table + (bands[first] * 3) + context;
+        int bits = BoolCost(probabilities[slot * 11], last >= 0);
+        if (last < 0)
+        {
+            return bits;
+        }
+
+        int[] zeroCost = ZeroCost;
+        int[] levelCost = LevelCost;
+        for (int c = first; ;)
+        {
+            int value = Math.Abs((int)levels[c]);
+            if (value == 0)
+            {
+                bits += zeroCost[slot];
+                c++;
+                slot = table + (bands[c] * 3);
+                continue;
+            }
+
+            bits += value < Category6 ? levelCost[(slot * Category6) + value] : Category6Prefix[slot] + Category6Extra[value - Category6];
+            bits += BoolCost(128, levels[c] < 0);
+            if (++c == 16)
+            {
+                return bits;
+            }
+
+            slot = table + (bands[c] * 3) + (value == 1 ? 1 : 2);
+            bits += BoolCost(probabilities[slot * 11], c <= last);
+            if (c > last)
+            {
+                return bits;
+            }
+        }
+    }
+
+    private const int Category6 = 67;
+
+    private static readonly int[] ZeroCost = BuildZeroCost();
+    private static readonly int[] LevelCost = BuildLevelCost(out Category6Prefix);
+    private static readonly int[] Category6Prefix;
+    private static readonly int[] Category6Extra = BuildCategory6Extra();
+
+    private static int[] BuildZeroCost()
+    {
+        ReadOnlySpan<byte> p = Vp8Tables.DefaultCoefficientProbabilities;
+        int[] costs = new int[96];
+        for (int slot = 0; slot < 96; slot++)
+        {
+            costs[slot] = BoolCost(p[(slot * 11) + 1], false);
+        }
+
+        return costs;
+    }
+
+    // For each context and each level 1 to 66: the "not zero" bit, the value tree and its extra bits (not the sign), as
+    // Tokens puts them; and for category 6, the prefix alone.
+    private static int[] BuildLevelCost(out int[] category6Prefix)
+    {
+        ReadOnlySpan<byte> p = Vp8Tables.DefaultCoefficientProbabilities;
+        int[] costs = new int[96 * Category6];
+        category6Prefix = new int[96];
+        for (int slot = 0; slot < 96; slot++)
+        {
+            int at = slot * 11;
+            for (int value = 1; value <= Category6; value++)
+            {
+                var sink = new CostSink();
+                sink.Put(p[at + 1], true, -1);
+                if (value == 1)
+                {
+                    sink.Put(p[at + 2], false, -1);
+                }
+                else
+                {
+                    sink.Put(p[at + 2], true, -1);
+                    if (value <= 4)
+                    {
+                        sink.Put(p[at + 3], false, -1);
+                        sink.Put(p[at + 4], value != 2, -1);
+                        if (value != 2)
+                        {
+                            sink.Put(p[at + 5], value == 4, -1);
+                        }
+                    }
+                    else if (value <= 10)
+                    {
+                        sink.Put(p[at + 3], true, -1);
+                        sink.Put(p[at + 6], false, -1);
+                        sink.Put(p[at + 7], value > 6, -1);
+                        if (value <= 6)
+                        {
+                            sink.Put(159, value == 6, -1);
+                        }
+                        else
+                        {
+                            sink.Put(165, value - 7 >= 2, -1);
+                            sink.Put(145, ((value - 7) & 1) != 0, -1);
+                        }
+                    }
+                    else
+                    {
+                        sink.Put(p[at + 3], true, -1);
+                        sink.Put(p[at + 6], true, -1);
+                        bool high = value > 34;
+                        bool odd = high ? value > 66 : value > 18;
+                        sink.Put(p[at + 8], high, -1);
+                        sink.Put(p[at + (high ? 10 : 9)], odd, -1);
+                        if (value < Category6)
+                        {
+                            ReadOnlySpan<byte> extra = high ? Cat5 : (odd ? Cat4 : Cat3);
+                            int extraValue = value - (high ? 35 : (odd ? 19 : 11));
+                            for (int b = extra.Length - 1; b >= 0; b--)
+                            {
+                                sink.Put(extra[extra.Length - 1 - b], ((extraValue >> b) & 1) != 0, -1);
+                            }
+                        }
+                    }
+                }
+
+                if (value < Category6)
+                {
+                    costs[(slot * Category6) + value] = sink.Bits;
+                }
+                else
+                {
+                    category6Prefix[slot] = sink.Bits;
+                }
+            }
+        }
+
+        return costs;
+    }
+
+    private static int[] BuildCategory6Extra()
+    {
+        ReadOnlySpan<byte> extra = Cat6;
+        int[] costs = new int[2048 - Category6 + 1];
+        for (int extraValue = 0; extraValue < costs.Length; extraValue++)
+        {
+            var sink = new CostSink();
+            for (int b = extra.Length - 1; b >= 0; b--)
+            {
+                sink.Put(extra[extra.Length - 1 - b], ((extraValue >> b) & 1) != 0, -1);
+            }
+
+            costs[extraValue] = sink.Bits;
+        }
+
+        return costs;
     }
 
     // One block's tokens (section 13.2), as the decoder reads them.
