@@ -262,6 +262,13 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     webp.SaveAsGif(gifWritten);
     using Image gifBack = Image.Decode(gifWritten.ToArray(), new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
     Rgba32 gifPixel = gifBack.GetRow<Rgba32>(8)[16];
+    // Colour: a muted Display P3 image comes out of the JPEG encoder as sRGB with no profile.
+    using var p3 = new Image(2, 1, PixelFormat.Rgb24) { ColorSpace = ColorSpace.DisplayP3 };
+    p3.GetRow<Rgb24>(0)[0] = new Rgb24(128, 128, 128);
+    p3.GetRow<Rgb24>(0)[1] = new Rgb24(120, 110, 100);
+    using Image srgb = p3.ToSrgb();
+    Check("colour conversion", srgb.ColorSpace.IsSrgb && srgb.GetRow<Rgb24>(0)[0] == new Rgb24(128, 128, 128));
+
     Check(
         "gif encode and decode",
         gifBack.Width == webp.Width && original.A >= 128

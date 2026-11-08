@@ -328,4 +328,30 @@ public sealed partial class Image
             : (width, (int)Math.Min(((2L * imageHeight * width) + imageWidth) / (2L * imageWidth), int.MaxValue));
 
     private (int Width, int Height) Inside(int width, int height) => Inside(Width, Height, width, height);
+
+    /// <summary>Converts the pixels to sRGB, clipping colours outside it.</summary>
+    /// <returns>A new image in the same pixel format, with <see cref="ColorSpace"/> sRGB, which the caller disposes; a copy when the image is sRGB already.</returns>
+    /// <exception cref="NotSupportedException">
+    /// The colour space is HDR (PQ or HLG), which needs tone mapping, or an ICC profile that isn't matrix/TRC.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <remarks>
+    /// Each channel goes through its curve to linear light, through the ICC connection space into linear sRGB, and back
+    /// through the sRGB curve. Encoders do this themselves under <see cref="ColorSpaceHandling"/>; this is for when the
+    /// pixels themselves are wanted in sRGB.
+    /// </remarks>
+    /// <example><code>using Image srgb = photo.ToSrgb();</code></example>
+    public Image ToSrgb()
+    {
+        ObjectDisposedException.ThrowIf(_buffer is null, this);
+        if (ColorSpace.IsSrgb)
+        {
+            return Clone();
+        }
+
+        return SrgbConverter.Convert(this, onlyIfInside: false)
+            ?? throw new NotSupportedException(string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"The colour space {ColorSpace.Name} can't be converted to sRGB: HDR needs tone mapping, and only matrix/TRC ICC profiles are understood."));
+    }
 }

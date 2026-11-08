@@ -8,6 +8,20 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: colour conversion to sRGB
+
+`ToSrgb_DisplayP3`: the 12-megapixel photo tagged Display P3, converted to sRGB as encoders do by default.
+
+| | One core | All cores |
+|---|---:|---:|
+| Before the quantiser change | 396 ms | 41 ms |
+| After | 144 ms | 28 ms |
+
+Three curve encodes a pixel dominated: each was a bucket lookup and a short binary search whose branches the
+processor couldn't predict. For 8-bit curves whose every step is wider than 1/16384 in linear light (sRGB, BT.709,
+linear; not a pure gamma), a table of the code at each of 16384 buckets and one comparison with the next midpoint
+give the same exactly rounded code. Resizing 8-bit images in linear light uses the same encoder, so it gains too.
+
 ## 2026-11-08: GIF
 
 Decoding `photo.gif` (ImageMagick's default reduction of the photo, 8.7 MB) and encoding the photo decoded from

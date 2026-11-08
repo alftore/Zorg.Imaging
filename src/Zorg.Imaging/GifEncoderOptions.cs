@@ -72,4 +72,23 @@ public sealed class GifEncoderOptions
             field = value;
         }
     }
+
+    /// <summary>
+    /// What to do when the image's <see cref="Image.ColorSpace"/> isn't sRGB. Defaults to
+    /// <see cref="ColorSpaceHandling.SrgbWhenLossless"/>: few viewers read a GIF's profile.
+    /// </summary>
+    /// <example><code>var options = new GifEncoderOptions { ColorSpaceHandling = ColorSpaceHandling.Srgb };</code></example>
+    public ColorSpaceHandling ColorSpaceHandling
+    {
+        get;
+        init
+        {
+            if (!System.Enum.IsDefined(value))
+            {
+                throw new System.ArgumentOutOfRangeException(nameof(value), value, "Not a ColorSpaceHandling value.");
+            }
+
+            field = value;
+        }
+    }
 }

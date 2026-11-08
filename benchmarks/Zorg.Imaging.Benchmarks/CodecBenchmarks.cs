@@ -114,6 +114,23 @@ public class CodecBenchmarks
         return (int)output.Length;
     }
 
+    /// <summary>The photo tagged Display P3 and converted to sRGB, as encoders do by default.</summary>
+    [Benchmark]
+    public int ToSrgb_DisplayP3()
+    {
+        ColorSpace original = _decoded.ColorSpace;
+        _decoded.ColorSpace = ColorSpace.DisplayP3;
+        try
+        {
+            using Image srgb = _decoded.ToSrgb();
+            return srgb.Width;
+        }
+        finally
+        {
+            _decoded.ColorSpace = original;
+        }
+    }
+
     [GlobalCleanup]
     public void Cleanup() => _decoded.Dispose();
 

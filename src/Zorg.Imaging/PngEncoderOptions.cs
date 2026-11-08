@@ -35,4 +35,23 @@ public sealed class PngEncoderOptions
             field = value;
         }
     } = DefaultCompressionLevel;
+
+    /// <summary>
+    /// What to do when the image's <see cref="Image.ColorSpace"/> isn't sRGB. Defaults to
+    /// <see cref="ColorSpaceHandling.Keep"/>: PNG keeps any colour space exactly, for a few bytes.
+    /// </summary>
+    /// <example><code>var options = new PngEncoderOptions { ColorSpaceHandling = ColorSpaceHandling.Srgb };</code></example>
+    public ColorSpaceHandling ColorSpaceHandling
+    {
+        get;
+        init
+        {
+            if (!System.Enum.IsDefined(value))
+            {
+                throw new System.ArgumentOutOfRangeException(nameof(value), value, "Not a ColorSpaceHandling value.");
+            }
+
+            field = value;
+        }
+    } = ColorSpaceHandling.Keep;
 }

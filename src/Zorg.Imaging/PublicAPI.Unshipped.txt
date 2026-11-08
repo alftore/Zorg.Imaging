@@ -352,3 +352,16 @@ Zorg.Imaging.GifEncoderOptions.MaxDegreeOfParallelism.init -> void
 Zorg.Imaging.Image.SaveAsGif(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null) -> void
 Zorg.Imaging.Image.SaveAsGifAsync(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 Zorg.Imaging.ImagePipeline.SaveAsGifAsync(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.ColorSpaceHandling.Keep = 2 -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.ColorSpaceHandling.Srgb = 1 -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.ColorSpaceHandling.SrgbWhenLossless = 0 -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.GifEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.GifEncoderOptions.ColorSpaceHandling.init -> void
+Zorg.Imaging.Image.ToSrgb() -> Zorg.Imaging.Image!
+Zorg.Imaging.JpegEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.JpegEncoderOptions.ColorSpaceHandling.init -> void
+Zorg.Imaging.PngEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.PngEncoderOptions.ColorSpaceHandling.init -> void
+Zorg.Imaging.WebpEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.WebpEncoderOptions.ColorSpaceHandling.init -> void

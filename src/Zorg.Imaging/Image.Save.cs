@@ -7,6 +7,7 @@ using Zorg.Imaging.Codecs.Jpeg;
 using Zorg.Imaging.Codecs.Png;
 using Zorg.Imaging.Codecs.Gif;
 using Zorg.Imaging.Codecs.Webp;
+using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging;
 
@@ -29,7 +30,8 @@ public sealed partial class Image
     /// <para>
     /// The <see cref="ColorSpace"/> is written so the file shows the same colours: nothing for sRGB, a <c>cICP</c> chunk
     /// for CICP code points (Display P3, HDR), an <c>iCCP</c> chunk for an ICC profile, or <c>gAMA</c> and <c>cHRM</c> as
-    /// they were read. No other metadata is written.
+    /// they were read. PNG keeps the colour space by default; <see cref="PngEncoderOptions.ColorSpaceHandling"/> can
+    /// convert to sRGB first. No other metadata is written.
     /// </para>
     /// </remarks>
     /// <example>
@@ -44,7 +46,8 @@ public sealed partial class Image
         ObjectDisposedException.ThrowIf(_buffer is null, this);
 
         // Every write is synchronous, so the task has already finished.
-        ValueTask task = PngEncoder.EncodeAsync(this, stream, options ?? PngEncoderOptions.Default, sync: true, CancellationToken.None);
+        options ??= PngEncoderOptions.Default;
+        ValueTask task = SaveConvertedAsync(options.ColorSpaceHandling, 0, image => PngEncoder.EncodeAsync(image, stream, options, sync: true, CancellationToken.None));
         Debug.Assert(task.IsCompleted, "A synchronous encode must complete synchronously.");
         task.GetAwaiter().GetResult();
     }
@@ -69,7 +72,8 @@ public sealed partial class Image
     {
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
-        return PngEncoder.EncodeAsync(this, stream, options ?? PngEncoderOptions.Default, sync: false, cancellationToken);
+        options ??= PngEncoderOptions.Default;
+        return SaveConvertedAsync(options.ColorSpaceHandling, 0, image => PngEncoder.EncodeAsync(image, stream, options, sync: false, cancellationToken));
     }
 
     /// <summary>Writes the image as a JPEG file.</summary>
@@ -91,7 +95,9 @@ public sealed partial class Image
     /// <para>
     /// The <see cref="ColorSpace"/> is written as an ICC profile, so the file shows the same colours: nothing for sRGB,
     /// the image's own profile when it has one, or a small generated one (about 600 bytes) for Display P3, Rec.2020 and
-    /// other spaces known by their primaries. No other metadata is written.
+    /// other spaces known by their primaries. First, by default (<see cref="ColorSpaceHandling.SrgbWhenLossless"/>), an image in another space whose
+    /// colours all fit inside sRGB is converted to sRGB and written with no profile; <see cref="JpegEncoderOptions.ColorSpaceHandling"/>
+    /// changes that. No other metadata is written.
     /// </para>
     /// </remarks>
     /// <example>
@@ -104,7 +110,8 @@ public sealed partial class Image
     {
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
-        ValueTask task = JpegEncoder.EncodeAsync(this, stream, options ?? JpegEncoderOptions.Default, sync: true, CancellationToken.None);
+        options ??= JpegEncoderOptions.Default;
+        ValueTask task = SaveConvertedAsync(options.ColorSpaceHandling, options.MaxDegreeOfParallelism, image => JpegEncoder.EncodeAsync(image, stream, options, sync: true, CancellationToken.None));
         Debug.Assert(task.IsCompleted, "A synchronous encode must complete synchronously.");
         task.GetAwaiter().GetResult();
     }
@@ -127,7 +134,8 @@ public sealed partial class Image
     {
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
-        return JpegEncoder.EncodeAsync(this, stream, options ?? JpegEncoderOptions.Default, sync: false, cancellationToken);
+        options ??= JpegEncoderOptions.Default;
+        return SaveConvertedAsync(options.ColorSpaceHandling, options.MaxDegreeOfParallelism, image => JpegEncoder.EncodeAsync(image, stream, options, sync: false, cancellationToken));
     }
 
     /// <summary>Writes the image as a WebP file.</summary>
@@ -151,7 +159,9 @@ public sealed partial class Image
     /// <para>
     /// The <see cref="ColorSpace"/> is written as an ICC profile (in a <c>VP8X</c> file), so the file shows the same
     /// colours: nothing for sRGB, the image's own profile when it has one, or a small generated one for Display P3,
-    /// Rec.2020 and other spaces known by their primaries. No other metadata is written.
+    /// Rec.2020 and other spaces known by their primaries. First, by default (<see cref="ColorSpaceHandling.SrgbWhenLossless"/>), an image in another space whose
+    /// colours all fit inside sRGB is converted to sRGB and written with no profile; <see cref="WebpEncoderOptions.ColorSpaceHandling"/>
+    /// changes that. No other metadata is written.
     /// </para>
     /// </remarks>
     /// <example>
@@ -167,7 +177,8 @@ public sealed partial class Image
     {
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
-        ValueTask task = WebpEncoder.EncodeAsync(this, stream, options ?? WebpEncoderOptions.Default, sync: true, CancellationToken.None);
+        options ??= WebpEncoderOptions.Default;
+        ValueTask task = SaveConvertedAsync(options.ColorSpaceHandling, options.MaxDegreeOfParallelism, image => WebpEncoder.EncodeAsync(image, stream, options, sync: true, CancellationToken.None));
         Debug.Assert(task.IsCompleted, "A synchronous encode must complete synchronously.");
         task.GetAwaiter().GetResult();
     }
@@ -190,7 +201,8 @@ public sealed partial class Image
     {
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
-        return WebpEncoder.EncodeAsync(this, stream, options ?? WebpEncoderOptions.Default, sync: false, cancellationToken);
+        options ??= WebpEncoderOptions.Default;
+        return SaveConvertedAsync(options.ColorSpaceHandling, options.MaxDegreeOfParallelism, image => WebpEncoder.EncodeAsync(image, stream, options, sync: false, cancellationToken));
     }
 
     /// <summary>Writes the image as a GIF file.</summary>
@@ -212,7 +224,9 @@ public sealed partial class Image
     /// </para>
     /// <para>
     /// The <see cref="ColorSpace"/> is written as an ICC profile in an <c>ICCRGBG1012</c> extension when it isn't sRGB.
-    /// Few viewers read it, so convert wide-gamut images to sRGB first for the web. No other metadata is written.
+    /// Few viewers read it: by default an image whose colours fit inside sRGB is converted to sRGB first, and
+    /// <see cref="GifEncoderOptions.ColorSpaceHandling"/> set to <see cref="ColorSpaceHandling.Srgb"/> converts every
+    /// image. No other metadata is written.
     /// </para>
     /// </remarks>
     /// <example>
@@ -225,7 +239,8 @@ public sealed partial class Image
     {
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
-        ValueTask task = GifEncoder.EncodeAsync(this, stream, options ?? GifEncoderOptions.Default, sync: true, CancellationToken.None);
+        options ??= GifEncoderOptions.Default;
+        ValueTask task = SaveConvertedAsync(options.ColorSpaceHandling, options.MaxDegreeOfParallelism, image => GifEncoder.EncodeAsync(image, stream, options, sync: true, CancellationToken.None));
         Debug.Assert(task.IsCompleted, "A synchronous encode must complete synchronously.");
         task.GetAwaiter().GetResult();
     }
@@ -248,7 +263,29 @@ public sealed partial class Image
     {
         CheckWritable(stream);
         ObjectDisposedException.ThrowIf(_buffer is null, this);
-        return GifEncoder.EncodeAsync(this, stream, options ?? GifEncoderOptions.Default, sync: false, cancellationToken);
+        options ??= GifEncoderOptions.Default;
+        return SaveConvertedAsync(options.ColorSpaceHandling, options.MaxDegreeOfParallelism, image => GifEncoder.EncodeAsync(image, stream, options, sync: false, cancellationToken));
+    }
+
+    // Converts to sRGB first when the handling says so, encodes, and disposes of the converted copy. Completes
+    // synchronously when the encode does.
+    private async ValueTask SaveConvertedAsync(ColorSpaceHandling handling, int degree, Func<Image, ValueTask> encode)
+    {
+        Image? converted = null;
+        if (handling != ColorSpaceHandling.Keep && SrgbConverter.CanConvert(ColorSpace))
+        {
+            using Parallelism.Scope scope = Parallelism.Use(degree);
+            converted = SrgbConverter.Convert(this, onlyIfInside: handling == ColorSpaceHandling.SrgbWhenLossless);
+        }
+
+        try
+        {
+            await encode(converted ?? this).ConfigureAwait(false);
+        }
+        finally
+        {
+            converted?.Dispose();
+        }
     }
 
     private static void CheckWritable(Stream stream)
