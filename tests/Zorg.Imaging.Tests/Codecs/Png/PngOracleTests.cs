@@ -162,8 +162,8 @@ public class PngOracleTests
 
         Assert.True(exit == 0, errors);
         long theirs = new FileInfo(folder.File("out.png")).Length;
-        // oxipng compresses with libdeflate at level 11, a few per cent ahead of zlib at 9; layouts and filters match.
-        Assert.True(ours.Length <= theirs * 1.15, $"ours {ours.Length}, oxipng {theirs}");
+        // oxipng compresses with libdeflate at level 11; ours with optimal parsing is within a few per cent of it, or ahead.
+        Assert.True(ours.Length <= theirs * 1.03, $"ours {ours.Length}, oxipng {theirs}");
     }
 
     // ImageMagick's 16-bit samples, big-endian, into the machine's order as an Rgba64 image holds them.

@@ -76,6 +76,7 @@ internal static class PngDeflate
 
             var chooser = new RowFilter(rowBytes, layout.FilterStep);
             Band? best = null;
+            PngFilter bestFilter = filter;
             PngFilter[] filters = optimize ? OptimizeFilters : [filter];
             ZLibCompressionStrategy[] strategies = optimize ? OptimizeStrategies : [ZLibCompressionStrategy.Default];
             foreach (PngFilter f in filters)
@@ -93,7 +94,24 @@ internal static class PngDeflate
                     if (best is null || length < best.Value.Length)
                     {
                         best = new Band(bytes, length, adler, data.Length);
+                        bestFilter = f;
                     }
+                }
+            }
+
+            if (optimize)
+            {
+                // The winning filter's bytes again, through the slow optimal-parsing encoder; kept when smaller.
+                for (int r = 0; r < count; r++)
+                {
+                    chooser.Choose(bestFilter, raws.AsSpan((r + 1) * rowBytes, rowBytes), raws.AsSpan(r * rowBytes, rowBytes), filtered.AsSpan(r * stride, stride));
+                }
+
+                ReadOnlySpan<byte> data = filtered.AsSpan(0, count * stride);
+                (byte[] bytes, int length) = OptimalDeflate.Compress(data, last);
+                if (length < best!.Value.Length)
+                {
+                    best = new Band(bytes, length, best.Value.Adler, data.Length);
                 }
             }
 

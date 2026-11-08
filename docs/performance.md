@@ -8,6 +8,23 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: optimal deflate for PNG Optimize
+
+`Optimize` now recompresses each band's best filter with our own deflate encoder (`OptimalDeflate`), which weighs
+every match length at every position by its cost in bits and refines the costs over several passes, as Zopfli does,
+with simple block splitting. It also tries colour rows against a palette when the image fits one.
+
+| Image | Level 6 | Optimize before | Optimize now | oxipng -o2 | oxipng -o4 |
+|---|---:|---:|---:|---:|---:|
+| 800 x 600 photo crop | 776,228 | | 751,221 | 757,653 | 755,938 |
+| 400 x 300 test image, 40 colours (palette) | | 12,163 | 10,816 | 10,736 | |
+| 400 x 300 test image, RGBA | | | 165,464 | 164,802 | |
+| 400 x 300 test image, grey | | | 40,155 | 39,273 | |
+| 12 MP photo | 19,172,860 | | 18,600,375 | | |
+
+Ahead of oxipng on the photo; within 0.4 to 2.2% on the synthetic test images, where it was 13% behind on the palette
+one. The cost is time: 5.2 s for the 12-megapixel photo on 16 cores (level 6: 155 ms).
+
 ## 2026-11-08: lossy WebP encoder search
 
 The subblock mode search took 25 of the 41 ms a 400 x 300 lossy encode needed on one core. It now reads the edge

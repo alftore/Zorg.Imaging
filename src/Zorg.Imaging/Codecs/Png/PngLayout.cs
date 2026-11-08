@@ -91,7 +91,8 @@ internal sealed class PngLayout
     /// Whether fully transparent pixels may be written as transparent black, which lets them share a palette entry or a
     /// <c>tRNS</c> key.
     /// </param>
-    public static PngLayout Choose(Image image, bool cleanTransparent)
+    /// <param name="allowPalette">Whether a palette may be chosen; <see langword="false"/> gives the best layout without one.</param>
+    public static PngLayout Choose(Image image, bool cleanTransparent, bool allowPalette = true)
     {
         bool hasAlpha = image.PixelFormat is PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Rgba64;
         bool greySource = image.PixelFormat is PixelFormat.L8 or PixelFormat.L16;
@@ -163,7 +164,7 @@ internal sealed class PngLayout
                 Consider(Bytes(32), () => new PngLayout(6, 8, Mode.Narrow, clean));
             }
 
-            if (scan.Colours <= 256)
+            if (allowPalette && scan.Colours <= 256)
             {
                 int count = scan.Colours;
                 int bits = count <= 2 ? 1 : count <= 4 ? 2 : count <= 16 ? 4 : 8;

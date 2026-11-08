@@ -36,6 +36,17 @@ internal static class PngEncoder
             ? PngLayout.Choose(image, options.CleanTransparentPixels)
             : PngLayout.Of(image, options.CleanTransparentPixels);
 
+        // The layout is chosen by the bytes it stores, which always favours a palette; but a palette's rows are seldom
+        // filtered, and sometimes the colour rows, filtered, compress smaller. Optimize tries both quickly first.
+        if (options.Optimize && layout.ColourType == 3)
+        {
+            PngLayout colour = PngLayout.Choose(image, options.CleanTransparentPixels, allowPalette: false);
+            if (TrialSize(image, colour) < TrialSize(image, layout))
+            {
+                layout = colour;
+            }
+        }
+
         byte[] header = new byte[8 + 12 + 13];
         Signature.CopyTo(header);
         Span<byte> ihdr = header.AsSpan(8 + 8, 13);
@@ -120,6 +131,29 @@ internal static class PngEncoder
         byte[] end = new byte[12];
         PngChunkWriter.Frame(end, "IEND"u8, 0);
         await WriteAsync(output, end, sync, cancellationToken).ConfigureAwait(false);
+    }
+
+    // The file's size near enough to compare layouts: every band at zlib level 9 with the layout's usual filter, and the
+    // palette and transparency chunks.
+    private static long TrialSize(Image image, PngLayout layout)
+    {
+        PngFilter filter = PngDeflate.Resolve(PngFilter.Adaptive, layout, 9);
+        int rowsPerBand = PngDeflate.RowsPerBand(layout.RowBytes(image.Width));
+        int bands = (image.Height + rowsPerBand - 1) / rowsPerBand;
+        long[] sizes = new long[bands];
+        Parallelism.For(bands, band =>
+        {
+            int first = band * rowsPerBand;
+            sizes[band] = PngDeflate.Compress(image, layout, first, Math.Min(rowsPerBand, image.Height - first), filter, 9, optimize: false, last: band == bands - 1).Length;
+        });
+
+        long total = 0;
+        foreach (long size in sizes)
+        {
+            total += size;
+        }
+
+        return total + (layout.Palette is { } palette ? palette.Length + 12 : 0) + (layout.Transparency is { } key ? key.Length + 12 : 0);
     }
 
     /// <summary>
