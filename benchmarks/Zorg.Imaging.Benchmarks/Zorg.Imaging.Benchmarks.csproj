@@ -10,6 +10,18 @@
     <!-- A native baseline (Skia with libpng, libjpeg-turbo and libwebp underneath), for comparison only. -->
     <PackageReference Include="SkiaSharp" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux" />
+    <!-- The last Apache-2.0 ImageSharp (3.0 moved to the Six Labors Split License), as a managed baseline. Never its source. -->
+    <PackageReference Include="SixLabors.ImageSharp" />
+  </ItemGroup>
+
+  <!-- ImageSharp 2.1's open advisories are about hostile files. The benchmarks feed it only the photos that
+       scripts/make-bench-files.sh makes, and this project never ships, so these alone are suppressed, here alone. -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-gwg2-r3hj-4w44" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j3p4-wp97-rph4" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j9gm-c75j-xc9q" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-jjfr-hcj7-qf5w" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-wmxv-xphr-5c9g" />
   </ItemGroup>
 
   <ItemGroup>

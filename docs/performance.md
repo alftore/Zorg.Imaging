@@ -8,6 +8,31 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: against ImageSharp 2.1
+
+ImageSharp 2.1.13 (`ImageSharpBenchmarks`) is the last release under Apache-2.0; 3.0 moved to the Six Labors Split
+License, and we never read its source. It is the closest managed baseline, but an older one: its package has no .NET 5+
+build, so .NET 10 runs its netcoreapp3.1 build, and 2.1 has no shrink-on-load. It decodes to `Rgb24` here, like ours.
+It uses all cores by default. Another session was using the machine during these runs, so they are noisier than the
+SkiaSharp ones below (the one-core column especially).
+
+| Task | ImageSharp 2.1, one core | ImageSharp 2.1, all cores | Ours, one core | Ours, all cores |
+|---|---:|---:|---:|---:|
+| JPEG decode, baseline | 80 ms | 59 ms | 76 ms | 37 ms |
+| JPEG decode, progressive | 193 ms | 139 ms | 180 ms | 139 ms |
+| JPEG encode, quality 80, 4:2:0 | 79 ms | 77 ms | 116 ms | 77 ms |
+| PNG decode | 135 ms | 109 ms | 152 ms | 153 ms |
+| PNG encode (its defaults, ours level 6) | 2,532 ms | 2,444 ms | 632 ms | 631 ms |
+| WebP lossy decode | 257 ms | 208 ms | 310 ms | 169 ms |
+| WebP lossless decode | 367 ms | 313 ms | 241 ms | 255 ms |
+| JPEG to a 400 px thumbnail | 91 ms | 82 ms | 98 ms | 37 ms |
+| JPEG to JPEG at 1600 px | 214 ms | 116 ms | 217 ms | 62 ms |
+
+What it adds to the list below: ImageSharp 2.1's **JPEG encoder is faster than ours on one core** (79 against 116 ms),
+its **PNG decode is faster** (109 ms on all cores; ours does not split PNG decode yet), and its one-core WebP lossy
+decode is faster than ours (257 against 310 ms). Ours is ahead on PNG encode (about 4x), WebP lossless, and anything
+shrink-on-load or our threads reach.
+
 ## 2026-11-08: against SkiaSharp and libpng
 
 SkiaSharp 4.154.0 (Skia with libjpeg-turbo, libpng, libwebp and zlib, all native) runs the same work in the same

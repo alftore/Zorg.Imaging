@@ -27,6 +27,7 @@ Rules:
 |---|---|---|---|
 | BenchmarkDotNet 0.15.8 | MIT (checked in the `.nuspec`) | Measures speed and allocations | Low. Its own dependencies are only in the benchmark project; nothing reaches `src/`. |
 | SkiaSharp 4.154.0, SkiaSharp.NativeAssets.Linux 4.154.0 (and the Win32, macOS assets it brings) | MIT (checked in each `.nuspec`) | A native baseline in the same process: Skia with libjpeg-turbo, libpng, libwebp and zlib | Low. Benchmarks only, never referenced from `src/` or `tests/`. Native code, so its own licences (Skia BSD-3-Clause, the codecs' permissive licences) ride along in the package. |
+| SixLabors.ImageSharp 2.1.13 | Apache-2.0 (checked in the `.nuspec`; the last release before the Six Labors Split License) | A managed baseline in the same process | Medium, contained. Benchmarks only, never referenced from `src/` or `tests/`, and its source is never read. It has five open advisories about hostile files (GHSA-gwg2-r3hj-4w44, GHSA-j3p4-wp97-rph4, GHSA-j9gm-c75j-xc9q, GHSA-jjfr-hcj7-qf5w, GHSA-wmxv-xphr-5c9g), suppressed in the benchmark project alone: it only reads the photos `scripts/make-bench-files.sh` makes, and the project never ships. |
 
 ## Considered and rejected
 
