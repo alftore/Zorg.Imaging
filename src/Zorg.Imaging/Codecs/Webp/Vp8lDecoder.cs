@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Webp;
@@ -174,6 +176,10 @@ internal static class Vp8lDecoder
         int y = 0;
         int block = -1;
         Vp8lPrefixCode[] codes = groups[0];
+
+        // The bit buffer lives in locals for the loop (see Vp8lBitReader.State); every decode below needs 15 bits.
+        (ulong buffer, int count, int position) = bits.State;
+        ReadOnlySpan<byte> data = bits.Data;
         while (at < pixels.Length)
         {
             // x and y follow `at`; the group is looked up again only when the entropy block under them changes.
@@ -194,28 +200,61 @@ internal static class Vp8lDecoder
             }
 
             int before = at;
-            int green = codes[0].Decode(bits);
+            if (count < 32)
+            {
+                Vp8lBitReader.Refill(ref buffer, ref count, ref position, data);
+            }
+
+            int green = codes[0].Decode(ref buffer, ref count);
             if (green < 256)
             {
-                int red = codes[1].Decode(bits);
-                int blue = codes[2].Decode(bits);
-                int alpha = codes[3].Decode(bits);
+                int red = codes[1].Decode(ref buffer, ref count);
+                if (count < 32)
+                {
+                    Vp8lBitReader.Refill(ref buffer, ref count, ref position, data);
+                }
+
+                int blue = codes[2].Decode(ref buffer, ref count);
+                int alpha = codes[3].Decode(ref buffer, ref count);
                 pixels[at++] = (uint)((alpha << 24) | (red << 16) | (green << 8) | blue);
             }
             else if (green < GreenAlphabet)
             {
-                int length = PrefixValue(bits, green - 256);
-                int distanceCode = PrefixValue(bits, codes[4].Decode(bits));
-                int distance = Distance(distanceCode, width);
+                if (count < 32)
+                {
+                    Vp8lBitReader.Refill(ref buffer, ref count, ref position, data);
+                }
+
+                int length = PrefixValue(ref buffer, ref count, green - 256);
+                if (count < 32)
+                {
+                    Vp8lBitReader.Refill(ref buffer, ref count, ref position, data);
+                }
+
+                int distanceSymbol = codes[4].Decode(ref buffer, ref count);
+                if (count < 32)
+                {
+                    Vp8lBitReader.Refill(ref buffer, ref count, ref position, data);
+                }
+
+                int distance = Distance(PrefixValue(ref buffer, ref count, distanceSymbol), width);
                 if (distance > at || at + length > pixels.Length)
                 {
                     throw ImageErrors.Corrupt("A WebP lossless backward reference reaches outside the image.");
                 }
 
-                // Overlapping copies are meant: a distance of 1 repeats a pixel.
-                for (int i = 0; i < length; i++, at++)
+                // Overlapping copies are meant: a distance of 1 repeats a pixel. Without overlap, one block copy.
+                if (distance >= length)
                 {
-                    pixels[at] = pixels[at - distance];
+                    pixels.AsSpan(at - distance, length).CopyTo(pixels.AsSpan(at, length));
+                    at += length;
+                }
+                else
+                {
+                    for (int i = 0; i < length; i++, at++)
+                    {
+                        pixels[at] = pixels[at - distance];
+                    }
                 }
             }
             else
@@ -229,6 +268,7 @@ internal static class Vp8lDecoder
             x += at - before;
         }
 
+        bits.Store(buffer, count, position);
         return pixels;
     }
 
@@ -246,6 +286,22 @@ internal static class Vp8lDecoder
             uint argb = pixels[last];
             cache[(int)((0x1E35A7BDu * argb) >> (32 - cacheBits))] = argb;
         }
+    }
+
+    // PrefixValue on a hot loop's buffer, which holds at least the 18 extra bits the largest prefix needs.
+    private static int PrefixValue(ref ulong buffer, ref int count, int prefix)
+    {
+        if (prefix < 4)
+        {
+            return prefix + 1;
+        }
+
+        int extra = (prefix - 2) >> 1;
+        int offset = (2 + (prefix & 1)) << extra;
+        int value = (int)(buffer & ((1UL << extra) - 1));
+        buffer >>= extra;
+        count -= extra;
+        return offset + value + 1;
     }
 
     // Section 4.2.2: lengths and distance codes are a prefix and some extra bits.
@@ -305,35 +361,100 @@ internal static class Vp8lDecoder
         {
             int w = Width;
             int blocksWide = DivideUp(w, SizeBits);
-            for (int y = 0; y < height; y++)
+
+            // The first row predicts from the left (the first pixel from opaque black).
+            p[0] = AddPixels(p[0], 0xFF000000u);
+            for (int x = 1; x < w; x++)
             {
-                for (int x = 0; x < w; x++)
+                p[x] = AddPixels(p[x], p[x - 1]);
+            }
+
+            for (int y = 1; y < height; y++)
+            {
+                int row = y * w;
+
+                // The first column predicts from above; the rest by each block's mode, a run at a time.
+                p[row] = AddPixels(p[row], p[row - w]);
+                for (int x = 1; x < w;)
                 {
-                    int at = (y * w) + x;
-                    uint prediction;
-                    if (y == 0)
-                    {
-                        prediction = x == 0 ? 0xFF000000u : p[at - 1];
-                    }
-                    else if (x == 0)
-                    {
-                        prediction = p[at - w];
-                    }
-                    else
-                    {
-                        int mode = (int)((Data[((y >> SizeBits) * blocksWide) + (x >> SizeBits)] >> 8) & 0xF);
-
-                        // On the rightmost column, the top-right pixel is the first pixel of this row, which is
-                        // where the next pixel after the top one lies in memory.
-                        prediction = Predict(mode, p[at - 1], p[at - w], p[at - w + 1], p[at - w - 1]);
-                    }
-
-                    p[at] = AddPixels(p[at], prediction);
+                    int end = Math.Min(((x >> SizeBits) + 1) << SizeBits, w);
+                    int mode = (int)((Data[((y >> SizeBits) * blocksWide) + (x >> SizeBits)] >> 8) & 0xF);
+                    UndoRun(p, row + x, row + end, w, mode);
+                    x = end;
                 }
             }
 
             return p;
         }
+
+        // One run of pixels with one mode. Modes that read only the row above (T, TR, TL and their averages) don't depend
+        // on the pixel just decoded, so they add four pixels at a time; the rest go one by one.
+        // On the rightmost column, the top-right pixel is the first pixel of this row, which is where the next pixel
+        // after the top one lies in memory, and is already decoded.
+        private static void UndoRun(uint[] p, int from, int to, int w, int mode)
+        {
+            int i = from;
+            if (Vector128.IsHardwareAccelerated && mode is 2 or 3 or 4 or 8 or 9)
+            {
+                ref uint p0 = ref MemoryMarshal.GetArrayDataReference(p);
+                for (; i + 4 <= to; i += 4)
+                {
+                    Vector128<uint> top = Vector128.LoadUnsafe(ref p0, (nuint)(i - w));
+                    Vector128<uint> prediction = mode switch
+                    {
+                        2 => top,
+                        3 => Vector128.LoadUnsafe(ref p0, (nuint)(i - w + 1)),
+                        4 => Vector128.LoadUnsafe(ref p0, (nuint)(i - w - 1)),
+                        8 => Average(Vector128.LoadUnsafe(ref p0, (nuint)(i - w - 1)), top),
+                        _ => Average(top, Vector128.LoadUnsafe(ref p0, (nuint)(i - w + 1))),
+                    };
+                    (Vector128.LoadUnsafe(ref p0, (nuint)i).AsByte() + prediction.AsByte()).AsUInt32().StoreUnsafe(ref p0, (nuint)i);
+                }
+            }
+
+            switch (mode)
+            {
+                case 1:
+                    for (; i < to; i++)
+                    {
+                        p[i] = AddPixels(p[i], p[i - 1]);
+                    }
+
+                    break;
+                case 2:
+                    for (; i < to; i++)
+                    {
+                        p[i] = AddPixels(p[i], p[i - w]);
+                    }
+
+                    break;
+                case 7:
+                    for (; i < to; i++)
+                    {
+                        p[i] = AddPixels(p[i], Average(p[i - 1], p[i - w]));
+                    }
+
+                    break;
+                case 11:
+                    for (; i < to; i++)
+                    {
+                        p[i] = AddPixels(p[i], Select(p[i - 1], p[i - w], p[i - w - 1]));
+                    }
+
+                    break;
+                default:
+                    for (; i < to; i++)
+                    {
+                        p[i] = AddPixels(p[i], Predict(mode, p[i - 1], p[i - w], p[i - w + 1], p[i - w - 1]));
+                    }
+
+                    break;
+            }
+        }
+
+        // floor((a + b) / 2) per byte, four pixels at once.
+        private static Vector128<uint> Average(Vector128<uint> a, Vector128<uint> b) =>
+            Vector128.ShiftRightLogical((a ^ b) & Vector128.Create(0xFEFEFEFEu), 1) + (a & b);
 
         // Section 4.2: red and blue were decorrelated from green (and blue from red) with per-block multipliers.
         private uint[] UndoCrossColor(uint[] p)
@@ -341,23 +462,25 @@ internal static class Vp8lDecoder
             int w = Width;
             int height = p.Length / w;
             int blocksWide = DivideUp(w, SizeBits);
+            int blockSize = 1 << SizeBits;
             for (int y = 0; y < height; y++)
             {
-                for (int x = 0; x < w; x++)
+                // The multipliers change only from block to block: read them once per run.
+                for (int x0 = 0; x0 < w; x0 += blockSize)
                 {
-                    uint element = Data[((y >> SizeBits) * blocksWide) + (x >> SizeBits)];
-                    sbyte greenToRed = (sbyte)(element & 0xFF);
-                    sbyte greenToBlue = (sbyte)((element >> 8) & 0xFF);
-                    sbyte redToBlue = (sbyte)((element >> 16) & 0xFF);
-                    int at = (y * w) + x;
-                    uint argb = p[at];
-                    sbyte green = (sbyte)((argb >> 8) & 0xFF);
-                    int red = (int)((argb >> 16) & 0xFF);
-                    int blue = (int)(argb & 0xFF);
-                    red = (red + Delta(greenToRed, green)) & 0xFF;
-                    blue = (blue + Delta(greenToBlue, green)) & 0xFF;
-                    blue = (blue + Delta(redToBlue, (sbyte)red)) & 0xFF;
-                    p[at] = (argb & 0xFF00FF00u) | ((uint)red << 16) | (uint)blue;
+                    uint element = Data[((y >> SizeBits) * blocksWide) + (x0 >> SizeBits)];
+                    int greenToRed = (sbyte)(element & 0xFF);
+                    int greenToBlue = (sbyte)((element >> 8) & 0xFF);
+                    int redToBlue = (sbyte)((element >> 16) & 0xFF);
+                    int end = (y * w) + Math.Min(x0 + blockSize, w);
+                    for (int at = (y * w) + x0; at < end; at++)
+                    {
+                        uint argb = p[at];
+                        int green = (sbyte)((argb >> 8) & 0xFF);
+                        int red = (int)(((argb >> 16) + (uint)((greenToRed * green) >> 5)) & 0xFF);
+                        int blue = (int)((argb + (uint)((greenToBlue * green) >> 5) + (uint)((redToBlue * (sbyte)red) >> 5)) & 0xFF);
+                        p[at] = (argb & 0xFF00FF00u) | ((uint)red << 16) | (uint)blue;
+                    }
                 }
             }
 
@@ -368,7 +491,23 @@ internal static class Vp8lDecoder
 
         private static uint[] UndoSubtractGreen(uint[] p)
         {
-            for (int i = 0; i < p.Length; i++)
+            int i = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                ref uint p0 = ref MemoryMarshal.GetArrayDataReference(p);
+                Vector128<uint> redBlueMask = Vector128.Create(0x00FF00FFu);
+                Vector128<uint> alphaGreenMask = Vector128.Create(0xFF00FF00u);
+                Vector128<uint> byteMask = Vector128.Create(0xFFu);
+                for (; i + 4 <= p.Length; i += 4)
+                {
+                    Vector128<uint> argb = Vector128.LoadUnsafe(ref p0, (nuint)i);
+                    Vector128<uint> green = Vector128.ShiftRightLogical(argb, 8) & byteMask;
+                    Vector128<uint> redBlue = ((argb & redBlueMask) + (Vector128.ShiftLeft(green, 16) | green)) & redBlueMask;
+                    ((argb & alphaGreenMask) | redBlue).StoreUnsafe(ref p0, (nuint)i);
+                }
+            }
+
+            for (; i < p.Length; i++)
             {
                 uint argb = p[i];
                 uint green = (argb >> 8) & 0xFF;
@@ -424,17 +563,18 @@ internal static class Vp8lDecoder
         private static int Channel(uint argb, int shift) => (int)((argb >> shift) & 0xFF);
 
         // Returns whichever of left and top is closer, channel by channel summed, to left + top - top-left.
+        // The estimate is left + top - top-left, so its distance to left is |top - top-left| and to top |left - top-left|,
+        // summed over the four channels.
         private static uint Select(uint left, uint top, uint topLeft)
         {
-            int toLeft = 0;
-            int toTop = 0;
-            for (int shift = 0; shift < 32; shift += 8)
-            {
-                int estimate = Channel(left, shift) + Channel(top, shift) - Channel(topLeft, shift);
-                toLeft += Math.Abs(estimate - Channel(left, shift));
-                toTop += Math.Abs(estimate - Channel(top, shift));
-            }
-
+            int toLeft = Math.Abs((int)(top >> 24) - (int)(topLeft >> 24))
+                + Math.Abs((int)((top >> 16) & 0xFF) - (int)((topLeft >> 16) & 0xFF))
+                + Math.Abs((int)((top >> 8) & 0xFF) - (int)((topLeft >> 8) & 0xFF))
+                + Math.Abs((int)(top & 0xFF) - (int)(topLeft & 0xFF));
+            int toTop = Math.Abs((int)(left >> 24) - (int)(topLeft >> 24))
+                + Math.Abs((int)((left >> 16) & 0xFF) - (int)((topLeft >> 16) & 0xFF))
+                + Math.Abs((int)((left >> 8) & 0xFF) - (int)((topLeft >> 8) & 0xFF))
+                + Math.Abs((int)(left & 0xFF) - (int)(topLeft & 0xFF));
             return toLeft < toTop ? left : top;
         }
 

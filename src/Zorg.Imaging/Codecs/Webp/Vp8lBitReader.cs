@@ -1,4 +1,6 @@
 using System;
+using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Webp;
@@ -14,6 +16,61 @@ internal sealed class Vp8lBitReader(ReadOnlyMemory<byte> data)
     private int _position;
     private ulong _buffer;
     private int _count;
+
+    /// <summary>The state, for a hot loop to keep in locals (registers) and give back with <see cref="Store"/>.</summary>
+    public (ulong Buffer, int Count, int Position) State => (_buffer, _count, _position);
+
+    /// <summary>The data the reader reads.</summary>
+    public ReadOnlySpan<byte> Data => _data.Span;
+
+    /// <summary>Takes back the state from a hot loop, and throws when it used bits past the data.</summary>
+    public void Store(ulong buffer, int count, int position)
+    {
+        _buffer = buffer;
+        _count = count;
+        _position = position;
+        if (_position > _data.Length && ((long)_position * 8) - _count > (long)_data.Length * 8)
+        {
+            throw ImageErrors.Truncated("The WebP lossless data ends early.");
+        }
+    }
+
+    /// <summary>Tops a hot loop's buffer up to at least 57 bits: whole bytes from one 8-byte load where it can.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void Refill(ref ulong buffer, ref int count, ref int position, ReadOnlySpan<byte> data)
+    {
+        if (position + 8 <= data.Length)
+        {
+            ulong next = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(position, 8));
+            int bytes = (63 - count) >> 3;
+            buffer |= (next & ((1UL << (bytes * 8)) - 1)) << count;
+            position += bytes;
+            count += bytes * 8;
+            return;
+        }
+
+        RefillTail(ref buffer, ref count, ref position, data);
+    }
+
+    private static void RefillTail(ref ulong buffer, ref int count, ref int position, ReadOnlySpan<byte> data)
+    {
+        while (count <= 56)
+        {
+            ulong value = 0;
+            if (position < data.Length)
+            {
+                value = data[position];
+            }
+            else if (position > data.Length + 8)
+            {
+                throw ImageErrors.Truncated("The WebP lossless data ends early.");
+            }
+
+            position++;
+            buffer |= value << count;
+            count += 8;
+        }
+    }
 
     /// <summary>Reads 0 to 32 bits as an unsigned number.</summary>
     public uint Read(int bits)

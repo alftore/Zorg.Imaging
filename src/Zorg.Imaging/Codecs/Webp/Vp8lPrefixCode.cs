@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Webp;
@@ -18,7 +19,7 @@ internal sealed class Vp8lPrefixCode
     private const int FastBits = 8;
 
     private readonly int _single = -1;
-    private readonly int[] _fast = [];
+    private readonly int[] _table = [];
     private readonly ushort[] _counts = new ushort[MaxLength + 1];
     private readonly ushort[] _sorted = [];
 
@@ -64,22 +65,81 @@ internal sealed class Vp8lPrefixCode
             }
         }
 
-        // The fast table: each code of FastBits or fewer, reversed, at every index that starts with it.
-        _fast = new int[1 << FastBits];
+        // The table: a root of 2^FastBits entries indexed by the next bits as they arrive (so by the code's bits
+        // reversed). A code of FastBits or fewer fills every root entry that starts with it; longer codes share a
+        // second-level table under their first FastBits bits, as zlib's inflate builds them. An entry is the length in
+        // bits 16..23 and the symbol in bits 0..15; a link to a second-level table has bit 31 set, its size in bits
+        // in 24..30 and its start in 0..23.
+        Span<int> longest = stackalloc int[1 << FastBits];
+        longest.Clear();
         int code = 0;
         int k = 0;
-        for (int length = 1; length <= FastBits; length++)
+        int[] reversedCodes = new int[lengths.Length];
+        for (int length = 1; length <= MaxLength; length++)
         {
             for (int i = 0; i < _counts[length]; i++, k++, code++)
             {
+                int symbol = _sorted[k];
                 int reversed = Reverse(code, length);
-                for (int j = reversed; j < _fast.Length; j += 1 << length)
+                reversedCodes[symbol] = reversed;
+                if (length > FastBits)
                 {
-                    _fast[j] = (length << 16) | _sorted[k];
+                    int prefix = reversed & ((1 << FastBits) - 1);
+                    longest[prefix] = Math.Max(longest[prefix], length);
                 }
             }
 
             code <<= 1;
+        }
+
+        int size = 1 << FastBits;
+        for (int prefix = 0; prefix < (1 << FastBits); prefix++)
+        {
+            if (longest[prefix] > 0)
+            {
+                size += 1 << (longest[prefix] - FastBits);
+            }
+        }
+
+        _table = new int[size];
+        int next = 1 << FastBits;
+        for (int prefix = 0; prefix < (1 << FastBits); prefix++)
+        {
+            if (longest[prefix] > 0)
+            {
+                int bits = longest[prefix] - FastBits;
+                _table[prefix] = int.MinValue | (bits << 24) | next;
+                next += 1 << bits;
+            }
+        }
+
+        for (int symbol = 0; symbol < lengths.Length; symbol++)
+        {
+            int length = lengths[symbol];
+            if (length == 0)
+            {
+                continue;
+            }
+
+            int reversed = reversedCodes[symbol];
+            int entry = (length << 16) | symbol;
+            if (length <= FastBits)
+            {
+                for (int j = reversed; j < (1 << FastBits); j += 1 << length)
+                {
+                    _table[j] = entry;
+                }
+
+                continue;
+            }
+
+            int link = _table[reversed & ((1 << FastBits) - 1)];
+            int subBits = (link >> 24) & 0x7F;
+            int subStart = link & 0xFFFFFF;
+            for (int j = reversed >> FastBits; j < (1 << subBits); j += 1 << (length - FastBits))
+            {
+                _table[subStart + j] = entry;
+            }
         }
     }
 
@@ -179,34 +239,38 @@ internal sealed class Vp8lPrefixCode
             return _single;
         }
 
-        int peek = bits.Peek16();
-        int fast = _fast[peek & ((1 << FastBits) - 1)];
-        if (fast != 0)
+        (ulong buffer, int count, int position) = bits.State;
+        ReadOnlySpan<byte> data = bits.Data;
+        if (count < MaxLength)
         {
-            bits.Skip(fast >> 16);
-            return fast & 0xFFFF;
+            Vp8lBitReader.Refill(ref buffer, ref count, ref position, data);
         }
 
-        // Longer than FastBits: walk the lengths, a bit at a time (as zlib's puff does).
-        int code = 0;
-        int first = 0;
-        int index = 0;
-        for (int length = 1; length <= MaxLength; length++)
-        {
-            code |= (peek >> (length - 1)) & 1;
-            int count = _counts[length];
-            if (code - first < count)
-            {
-                bits.Skip(length);
-                return _sorted[index + code - first];
-            }
+        int symbol = Decode(ref buffer, ref count);
+        bits.Store(buffer, count, position);
+        return symbol;
+    }
 
-            index += count;
-            first = (first + count) << 1;
-            code <<= 1;
+    /// <summary>Decodes one symbol from a hot loop's bit buffer, which must hold at least 15 bits.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int Decode(ref ulong buffer, ref int count)
+    {
+        if (_single >= 0)
+        {
+            return _single;
         }
 
-        throw ImageErrors.Corrupt("The WebP lossless data has a bit pattern that isn't a prefix code.");
+        int entry = _table[(int)(buffer & ((1 << FastBits) - 1))];
+        if (entry < 0)
+        {
+            int subBits = (entry >> 24) & 0x7F;
+            entry = _table[(entry & 0xFFFFFF) + (int)((buffer >> FastBits) & ((1UL << subBits) - 1))];
+        }
+
+        int length = entry >> 16;
+        buffer >>= length;
+        count -= length;
+        return entry & 0xFFFF;
     }
 
     private static Vp8lPrefixCode FromLengths(int[] lengths)

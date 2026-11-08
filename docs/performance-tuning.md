@@ -80,6 +80,18 @@ where it was measured. `docs/performance.md` has the current numbers.
   to 52 ms on one core.
 - **`Vector256.Round` rounds half to even, like `MathF.Round`**, so vectorising rounding kept the output identical.
 
+- **Two-level code tables.** A prefix code with an 8-bit root table walked longer codes a bit at a time; photos use
+  many 9- to 12-bit codes, so that walk was hot. A second-level table under each 8-bit prefix (as zlib's inflate
+  builds them) decodes every code in at most two lookups. With the bit buffer in locals, lossless WebP's entropy
+  decoding went from 320 to 175 ms.
+- **Hoist per-block values out of per-pixel loops.** The cross-colour transform looked up its block's multipliers for
+  every pixel; reading them once per run of the block halved the stage with the other transforms (37 to 23 ms).
+- **Vectorise the independent cases, leave the dependent ones tight.** VP8L predictor modes that read only the row
+  above add four pixels per vector; modes that need the pixel just decoded stay scalar but lose the per-pixel mode
+  lookup.
+- **Measure even "obvious" rewrites.** Hand-unrolling a four-channel clamp-and-add loop into one expression made the
+  predictor slower (58 to 72 ms); the loop went back.
+
 ## Bit writing
 
 - **Write a code and its extra bits as one value** (`code << size | bits`, at most 27 bits) instead of two calls.
