@@ -140,6 +140,12 @@ where it was measured. `docs/performance.md` has the current numbers.
   so the result is the same on any number of cores.
 - **Several candidates evaluated over the same data are separate tasks.** The colour-cache size is chosen by trying
   eleven sizes; each is its own walk over the tokens, so they run side by side.
+- **A wavefront when each unit depends on its neighbours above.** A VP8 encoder's macroblock needs the one to its left
+  and the three above it. Rows are claimed in order by threads that code them to the end, each row two macroblocks
+  behind the one above (a volatile progress counter per row, read with `Volatile.Read`). A row only ever waits on a row
+  already claimed by a running thread, so nothing can deadlock however the pool schedules, and the caller codes rows
+  too. A failure sets a flag the waiting threads check, so they stop instead of spinning forever. 12-megapixel lossy
+  WebP went from 2.9 s to 0.7 s on 16 cores, the same bytes either way.
 - **Spin without sleeping for short waits.** `SpinWait.SpinOnce(sleep1Threshold: -1)` yields but never calls
   `Thread.Sleep(1)`, which on Windows can sleep for 15 ms.
 
@@ -148,6 +154,13 @@ where it was measured. `docs/performance.md` has the current numbers.
 - **Give BenchmarkDotNet enough warm-up for big methods.** With the short job's three warm-up rounds, the JPEG encoder
   measured bimodally (mean 272 ms, median 336 ms) because its long methods were still in tier 0 or on-stack
   replacement; with 15 warm-up rounds it was a steady 116 ms.
+
+## Doing less
+
+- **Rank cheaply, then test the few.** The lossy encoder chose each 4 x 4 block's prediction mode by transforming,
+  quantising, pricing the tokens and reconstructing every one of the ten modes. Ranking them by plain prediction error
+  first and testing only the best three fully halved the time on one core, and the files came out a little smaller,
+  not larger: the error ranking agrees with the full test almost always.
 
 ## Memory
 

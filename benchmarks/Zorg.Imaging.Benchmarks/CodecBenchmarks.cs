@@ -94,6 +94,14 @@ public class CodecBenchmarks
     }
 
     [Benchmark]
+    public int Encode_WebpLossy80()
+    {
+        using var output = new MemoryStream();
+        _decoded.SaveAsWebp(output);
+        return (int)output.Length;
+    }
+
+    [Benchmark]
     public int Encode_WebpLossless()
     {
         using var output = new MemoryStream();

@@ -42,6 +42,26 @@ public class WebpEncoderOracleTests
     }
 
     [Theory]
+    [InlineData(80, 517, 389, false)]
+    [InlineData(30, 517, 389, false)]
+    [InlineData(100, 131, 77, false)]
+    [InlineData(75, 301, 7, true)]
+    [InlineData(1, 33, 9, true)]
+    public async Task Dwebp_decodes_our_lossy_files_as_we_do(int quality, int width, int height, bool alpha)
+    {
+        string dwebp = Oracle.Require("dwebp");
+        using Oracle.TempFolder folder = Oracle.CreateFolder();
+        using Image picture = JpegEncoderTests.Photo(width, height, alpha ? PixelFormat.Rgba32 : PixelFormat.Rgb24, seed: width);
+        byte[] ours = WebpEncoderTests.Save(picture, new WebpEncoderOptions { Quality = quality });
+        await File.WriteAllBytesAsync(folder.File("ours.webp"), ours, TestContext.Current.CancellationToken);
+        (int read, _, string readErrors) = await Oracle.RunAsync(dwebp, "-quiet", "-pam", folder.File("ours.webp"), "-o", folder.File("ours.pam"));
+        Assert.True(read == 0, readErrors);
+        byte[] pam = await File.ReadAllBytesAsync(folder.File("ours.pam"), TestContext.Current.CancellationToken);
+        using Image decoded = Image.Decode(ours, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        Assert.Equal(pam[(pam.AsSpan().IndexOf("ENDHDR\n"u8) + 7)..], decoded.GetPixelBytes().ToArray());
+    }
+
+    [Theory]
     [MemberData(nameof(Cases))]
     public async Task Dwebp_decodes_our_files_exactly_and_they_are_about_cwebps_size(string kind, int width, int height, int effort)
     {

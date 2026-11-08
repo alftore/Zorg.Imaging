@@ -8,6 +8,26 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-08: lossy WebP encoding
+
+The 12-megapixel photo decoded from `photo.jpg`, quality 80, effort 4 (BenchmarkDotNet, short job).
+
+| Encoder | One core | All cores | Allocated |
+|---|---:|---:|---:|
+| Ours | 3.05 s | 0.65 s | 130 MB |
+| libwebp through SkiaSharp | 0.99 s | | |
+| cwebp 1.6 `-q 80` (gate image) | 1.41 s | | |
+| ImageSharp 2.1 | 3.53 s | 3.57 s | 1.47 GB |
+
+Quality: at the file sizes cwebp gives for qualities 10 to 90, ours decodes to the same or higher PSNR (+0.05 dB on a
+1000 x 1000 crop of the photo, +0.5 dB on the synthetic test photo; -0.1 dB on the crop at quality 90). cwebp tunes
+for perceived quality with segments and spatial noise shaping, which ours doesn't have yet, so PSNR isn't the whole
+story. Quality numbers are fitted so a quality gives about cwebp's file size.
+
+Speed came from ranking each block's modes by prediction error and fully testing only the best few (5.3 to 2.9 s on
+one core, with slightly smaller files), and from coding macroblock rows as a wavefront (0.65 s on 16 cores). Still to
+do on one core: SIMD for the forward transform, quantisation and error sums, and a cheaper token-cost walk.
+
 ## 2026-11-08: lossless WebP encoding
 
 The 12-megapixel photo, effort 4 (cwebp's default `-m 4`). Sizes are for `photo.png`; times are BenchmarkDotNet's for

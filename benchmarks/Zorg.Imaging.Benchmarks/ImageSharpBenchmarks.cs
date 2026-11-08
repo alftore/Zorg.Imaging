@@ -73,6 +73,14 @@ public class ImageSharpBenchmarks
     }
 
     [Benchmark]
+    public long Sharp_Encode_WebpLossy80()
+    {
+        using var output = new MemoryStream();
+        _decoded.Save(output, new WebpEncoder { FileFormat = WebpFileFormatType.Lossy, Quality = 80 });
+        return output.Length;
+    }
+
+    [Benchmark]
     public long Sharp_Encode_WebpLossless()
     {
         using var output = new MemoryStream();

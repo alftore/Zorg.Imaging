@@ -246,6 +246,16 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     }
 
     Check("webp lossless encode", exact);
+
+    // Lossy, the default: near the original, with the alpha exact.
+    using var lossyWritten = new MemoryStream();
+    webp.SaveAsWebp(lossyWritten);
+    using Image lossyBack = Image.Decode(lossyWritten.ToArray());
+    Rgba32 original = webp.GetRow<Rgba32>(8)[16];
+    Rgba32 coded = lossyBack.GetRow<Rgba32>(8)[16];
+    Check(
+        "webp lossy encode",
+        Math.Abs(original.R - coded.R) <= 40 && Math.Abs(original.G - coded.G) <= 40 && Math.Abs(original.B - coded.B) <= 40 && original.A == coded.A);
 }
 
 return failures == 0 ? 0 : 1;

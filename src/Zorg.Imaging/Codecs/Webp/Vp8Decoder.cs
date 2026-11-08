@@ -23,22 +23,22 @@ namespace Zorg.Imaging.Codecs.Webp;
 /// </remarks>
 internal sealed class Vp8Decoder
 {
-    private const int DcPred = 0;
-    private const int VPred = 1;
-    private const int HPred = 2;
-    private const int TmPred = 3;
-    private const int BPred = 4;
+    internal const int DcPred = 0;
+    internal const int VPred = 1;
+    internal const int HPred = 2;
+    internal const int TmPred = 3;
+    internal const int BPred = 4;
 
-    private const int BDcPred = 0;
-    private const int BTmPred = 1;
-    private const int BVePred = 2;
-    private const int BHePred = 3;
-    private const int BLdPred = 4;
-    private const int BRdPred = 5;
-    private const int BVrPred = 6;
-    private const int BVlPred = 7;
-    private const int BHdPred = 8;
-    private const int BHuPred = 9;
+    internal const int BDcPred = 0;
+    internal const int BTmPred = 1;
+    internal const int BVePred = 2;
+    internal const int BHePred = 3;
+    internal const int BLdPred = 4;
+    internal const int BRdPred = 5;
+    internal const int BVrPred = 6;
+    internal const int BVlPred = 7;
+    internal const int BHdPred = 8;
+    internal const int BHuPred = 9;
 
     private readonly byte[] _coefficientProbabilities = Vp8Tables.DefaultCoefficientProbabilities.ToArray();
     private readonly int[] _segmentQuantiser = new int[4];
@@ -72,28 +72,28 @@ internal sealed class Vp8Decoder
     }
 
     // Section 11.2 to 11.4: the key-frame mode trees, as tree_index arrays (leaves are negated values).
-    private static ReadOnlySpan<sbyte> YModeTree => [-BPred, 2, 4, 6, -DcPred, -VPred, -HPred, -TmPred];
+    internal static ReadOnlySpan<sbyte> YModeTree => [-BPred, 2, 4, 6, -DcPred, -VPred, -HPred, -TmPred];
 
-    private static ReadOnlySpan<byte> YModeProbabilities => [145, 156, 163, 128];
+    internal static ReadOnlySpan<byte> YModeProbabilities => [145, 156, 163, 128];
 
-    private static ReadOnlySpan<sbyte> UvModeTree => [-DcPred, 2, -VPred, 4, -HPred, -TmPred];
+    internal static ReadOnlySpan<sbyte> UvModeTree => [-DcPred, 2, -VPred, 4, -HPred, -TmPred];
 
-    private static ReadOnlySpan<byte> UvModeProbabilities => [142, 114, 183];
+    internal static ReadOnlySpan<byte> UvModeProbabilities => [142, 114, 183];
 
-    private static ReadOnlySpan<sbyte> SubblockModeTree =>
+    internal static ReadOnlySpan<sbyte> SubblockModeTree =>
         [-BDcPred, 2, -BTmPred, 4, -BVePred, 6, 8, 12, -BHePred, 10, -BRdPred, -BVrPred, -BLdPred, 14, -BVlPred, 16, -BHdPred, -BHuPred];
 
-    private static ReadOnlySpan<byte> Bands => [0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 0];
+    internal static ReadOnlySpan<byte> Bands => [0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 0];
 
-    private static ReadOnlySpan<byte> ZigZag => [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
+    internal static ReadOnlySpan<byte> ZigZag => [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 
-    private static ReadOnlySpan<byte> Cat3 => [173, 148, 140];
+    internal static ReadOnlySpan<byte> Cat3 => [173, 148, 140];
 
-    private static ReadOnlySpan<byte> Cat4 => [176, 155, 140, 135];
+    internal static ReadOnlySpan<byte> Cat4 => [176, 155, 140, 135];
 
-    private static ReadOnlySpan<byte> Cat5 => [180, 157, 141, 134, 130];
+    internal static ReadOnlySpan<byte> Cat5 => [180, 157, 141, 134, 130];
 
-    private static ReadOnlySpan<byte> Cat6 => [254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129];
+    internal static ReadOnlySpan<byte> Cat6 => [254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129];
 
     public int Width { get; private set; }
 
@@ -579,7 +579,7 @@ internal sealed class Vp8Decoder
             {
                 int bx = x0 + ((i & 3) * 4);
                 int by = y0 + ((i >> 2) * 4);
-                PredictSubblock(bx, by, modes[i], (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
+                PredictSubblock(_y, _edge, bx, by, modes[i], (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
                 AddResidual(_y, bx, by, coefficients.Slice(i * 16, 16), (nonZero & (1UL << i)) != 0);
             }
         }
@@ -596,7 +596,7 @@ internal sealed class Vp8Decoder
     }
 
     // Section 12.2 and 12.3: the whole-block modes, with DC's own rule at the frame's top and left edges.
-    private static void PredictBlock(Plane plane, int x0, int y0, int size, int mode, bool leftEdge, bool topEdge)
+    internal static void PredictBlock(Plane plane, int x0, int y0, int size, int mode, bool leftEdge, bool topEdge)
     {
         switch (mode)
         {
@@ -673,10 +673,8 @@ internal sealed class Vp8Decoder
     }
 
     // Section 12.3: the ten subblock modes. A is the 8 pixels above (4 above, 4 above-right), L the 4 to the left.
-    private void PredictSubblock(int x0, int y0, int mode, bool useMacroblockAboveRight, int aboveRightX, int aboveRightY)
+    internal static void PredictSubblock(Plane plane, int[] edge, int x0, int y0, int mode, bool useMacroblockAboveRight, int aboveRightX, int aboveRightY)
     {
-        Plane plane = _y;
-        int[] edge = _edge;
 
         // edge[0..3] = L[3], L[2], L[1], L[0]; edge[4] = P; edge[5..12] = A[0..7] (the RFC's E, extended by A[4..7]).
         for (int i = 0; i < 4; i++)
@@ -835,7 +833,7 @@ internal sealed class Vp8Decoder
     }
 
     // Section 14.4: the inverse DCT, added to the prediction and clamped (section 14.5).
-    private static void AddResidual(Plane plane, int x0, int y0, ReadOnlySpan<short> input, bool any)
+    internal static void AddResidual(Plane plane, int x0, int y0, ReadOnlySpan<short> input, bool any)
     {
         if (!any)
         {
@@ -898,7 +896,7 @@ internal sealed class Vp8Decoder
         }
     }
 
-    private static void InverseWht(ReadOnlySpan<short> input, Span<short> output)
+    internal static void InverseWht(ReadOnlySpan<short> input, Span<short> output)
     {
         Span<int> temp = stackalloc int[16];
         for (int i = 0; i < 4; i++)
@@ -1298,7 +1296,7 @@ internal sealed class Vp8Decoder
     }
 
     /// <summary>A plane with a one-pixel border above and to the left (127 above, 129 left) and spare columns right.</summary>
-    private sealed class Plane
+    internal sealed class Plane
     {
         private readonly byte[] _data;
         private readonly int _stride;

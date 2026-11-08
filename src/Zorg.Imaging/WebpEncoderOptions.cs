@@ -5,7 +5,7 @@ namespace Zorg.Imaging;
 /// <summary>Options for <see cref="Image.SaveAsWebp"/> and <see cref="Image.SaveAsWebpAsync"/>.</summary>
 /// <example>
 /// <code>
-/// var options = new WebpEncoderOptions { Lossless = true };
+/// var options = new WebpEncoderOptions { Quality = 75 };
 /// image.SaveAsWebp(output, options);
 /// </code>
 /// </example>
@@ -27,12 +27,12 @@ public sealed class WebpEncoderOptions
     /// Whether to keep every pixel exactly (VP8L), rather than the smaller lossy coding (VP8) that suits photos. Lossless
     /// suits logos, screenshots, line art and anything that will be edited again. Defaults to <see langword="false"/>.
     /// </summary>
-    /// <remarks>This version writes lossless WebP only: set this to <see langword="true"/>. Lossy encoding is next.</remarks>
     /// <example><code>var exact = new WebpEncoderOptions { Lossless = true };</code></example>
     public bool Lossless { get; init; }
 
     /// <summary>
-    /// The lossy quality, 1 to 100, on cwebp's scale: 75 to 85 suits photos on the web. Lossless files ignore it.
+    /// The lossy quality, 1 to 100: higher keeps more detail in larger files. 75 to 85 suits photos on the web. The scale is
+    /// fitted to cwebp's, so a quality gives about the file size cwebp gives for it. Lossless files ignore it.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value isn't 1 to 100.</exception>
     /// <example><code>var small = new WebpEncoderOptions { Quality = 70 };</code></example>
@@ -48,8 +48,9 @@ public sealed class WebpEncoderOptions
     } = DefaultQuality;
 
     /// <summary>
-    /// How hard to work for a smaller file, 0 (fastest) to 6 (smallest), as cwebp's <c>-m</c>. Every effort decodes to the
-    /// same pixels; higher ones only search more.
+    /// How hard to work, 0 (fastest) to 6, as cwebp's <c>-m</c>. Lossless: higher efforts search more for a smaller file,
+    /// which decodes to the same pixels. Lossy: higher efforts try more prediction modes per block; 0 uses whole-block
+    /// modes only.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value isn't 0 to 6.</exception>
     /// <example><code>var fast = new WebpEncoderOptions { Lossless = true, Effort = 1 };</code></example>

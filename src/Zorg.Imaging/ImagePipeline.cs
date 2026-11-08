@@ -367,8 +367,7 @@ public sealed class ImagePipeline
     /// <returns>A task that completes when the file is written.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
     /// <exception cref="NotSupportedException">
-    /// <paramref name="stream"/> can't write, the options ask for lossy WebP (not written yet), the result is too large
-    /// for WebP, or its colour space can't be written.
+    /// <paramref name="stream"/> can't write, the result is too large for WebP, or its colour space can't be written.
     /// </exception>
     /// <exception cref="UnsupportedImageFormatException">The source isn't an image format this version can decode.</exception>
     /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
@@ -377,7 +376,7 @@ public sealed class ImagePipeline
     /// <exception cref="IOException">Reading or writing fails.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     /// <remarks>See <see cref="Image.SaveAsWebp"/> for what is written.</remarks>
-    /// <example><code>await ImagePipeline.Load(upload).Fit(512, 512).SaveAsWebpAsync(output, new WebpEncoderOptions { Lossless = true }, cancellationToken);</code></example>
+    /// <example><code>await ImagePipeline.Load(upload).Fit(1600, 1600).SaveAsWebpAsync(output, cancellationToken: cancellationToken);</code></example>
     public async ValueTask SaveAsWebpAsync(Stream stream, WebpEncoderOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);

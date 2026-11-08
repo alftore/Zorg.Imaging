@@ -66,6 +66,13 @@ public class SkiaBenchmarks
     }
 
     [Benchmark]
+    public int Skia_Encode_WebpLossy80()
+    {
+        using SKData data = _decoded.Encode(SKEncodedImageFormat.Webp, 80);
+        return (int)data.Size;
+    }
+
+    [Benchmark]
     public int Skia_Encode_WebpLossless()
     {
         // libwebp lossless; its quality 75 is cwebp's default lossless effort.

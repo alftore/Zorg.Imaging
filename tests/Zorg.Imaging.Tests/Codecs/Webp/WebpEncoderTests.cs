@@ -249,15 +249,17 @@ public class WebpEncoderTests
     }
 
     [Fact]
-    public void What_this_version_cannot_write_is_refused()
+    public void What_webp_cannot_hold_is_refused()
     {
         using Image photo = JpegEncoderTests.Photo(16, 16);
-        Assert.Contains("Lossless", Assert.Throws<NotSupportedException>(() => Save(photo, WebpEncoderOptions.Default)).Message, StringComparison.Ordinal);
         photo.ColorSpace = ColorSpace.Rec2020Pq;
         Assert.Throws<NotSupportedException>(() => Save(photo));
+        Assert.Throws<NotSupportedException>(() => Save(photo, WebpEncoderOptions.Default));
 
         using var wide = new Image(16385, 1, PixelFormat.L8);
         Assert.Throws<NotSupportedException>(() => Save(wide));
+        using var lossyWide = new Image(16384, 1, PixelFormat.L8);
+        Assert.Contains("16383", Assert.Throws<NotSupportedException>(() => Save(lossyWide, WebpEncoderOptions.Default)).Message, StringComparison.Ordinal);
         Assert.Throws<ArgumentOutOfRangeException>(() => new WebpEncoderOptions { Effort = 7 });
         Assert.Throws<ArgumentOutOfRangeException>(() => new WebpEncoderOptions { Quality = 0 });
         Assert.Throws<ArgumentOutOfRangeException>(() => new WebpEncoderOptions { MaxDegreeOfParallelism = -1 });
@@ -289,6 +291,163 @@ public class WebpEncoderTests
         Assert.Equal(one, many);
         using Image decoded = Image.Decode(many, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
         Assert.Equal(Rgba(photo), decoded.GetPixelBytes().ToArray());
+    }
+
+    [Theory]
+    [InlineData(PixelFormat.Rgb24, 30)]
+    [InlineData(PixelFormat.Rgba32, 30)]
+    [InlineData(PixelFormat.Bgra32, 30)]
+    [InlineData(PixelFormat.L8, 33)]
+    [InlineData(PixelFormat.L16, 33)]
+    [InlineData(PixelFormat.Rgba64, 30)]
+    public void Lossy_round_trips_with_the_expected_fidelity_and_exact_alpha(PixelFormat format, double minimumPsnr)
+    {
+        using Image photo = JpegEncoderTests.Photo(131, 77, format, seed: 3);
+        byte[] webp = Save(photo, WebpEncoderOptions.Default);
+        bool alpha = format is PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Rgba64;
+        Assert.Equal(alpha ? "VP8X"u8.ToArray() : "VP8 "u8.ToArray(), webp[12..16]);
+        using Image decoded = Image.Decode(webp, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        byte[] expected = Rgba(photo);
+        byte[] actual = decoded.GetPixelBytes().ToArray();
+        double psnr = JpegEncoderTests.Psnr(Channels(actual, 3), Channels(expected, 3));
+        Assert.True(psnr >= minimumPsnr, $"PSNR {psnr:0.0} dB");
+        Assert.Equal(Channels(expected, 1, 3), Channels(actual, 1, 3));
+    }
+
+    // Bytes `count` at a time from each RGBA pixel, starting at `skip`: the colour, or the alpha.
+    private static byte[] Channels(byte[] rgba, int count, int skip = 0)
+    {
+        byte[] result = new byte[rgba.Length / 4 * count];
+        for (int i = 0; i < rgba.Length / 4; i++)
+        {
+            rgba.AsSpan((i * 4) + skip, count).CopyTo(result.AsSpan(i * count));
+        }
+
+        return result;
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(1, 40)]
+    [InlineData(40, 1)]
+    [InlineData(17, 33)]
+    [InlineData(255, 3)]
+    public void Lossy_odd_and_tiny_sizes_round_trip(int width, int height)
+    {
+        using Image photo = JpegEncoderTests.Photo(width, height, PixelFormat.Rgba32, seed: width + height);
+        byte[] webp = Save(photo, new WebpEncoderOptions { Quality = 90 });
+        using Image decoded = Image.Decode(webp, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        Assert.Equal((width, height), (decoded.Width, decoded.Height));
+        // The test photo's green spans the height, so very short pictures change colour sharply from row to row, which
+        // 4:2:0 chroma averages away.
+        double psnr = JpegEncoderTests.Psnr(Channels(decoded.GetPixelBytes().ToArray(), 3), Channels(Rgba(photo), 3));
+        Assert.True(psnr > (height < 8 ? 20 : 26), $"PSNR {psnr:0.00} dB");
+    }
+
+    [Fact]
+    public void Higher_quality_is_larger_and_closer()
+    {
+        using Image photo = JpegEncoderTests.Photo(200, 150, seed: 4);
+        int lastSize = 0;
+        double lastPsnr = 0;
+        foreach (int quality in new[] { 1, 20, 50, 80, 95, 100 })
+        {
+            byte[] webp = Save(photo, new WebpEncoderOptions { Quality = quality });
+            using Image decoded = Image.Decode(webp);
+            double psnr = JpegEncoderTests.Psnr(decoded.GetPixelBytes(), photo.GetPixelBytes());
+            Assert.True(webp.Length > lastSize && psnr > lastPsnr, $"quality {quality}: {webp.Length} bytes, {psnr:0.00} dB");
+            (lastSize, lastPsnr) = (webp.Length, psnr);
+        }
+    }
+
+    [Fact]
+    public void Flat_colour_is_tiny_and_exact_enough()
+    {
+        using var flat = new Image(400, 300, PixelFormat.Rgb24);
+        Span<Rgb24> pixels = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, Rgb24>(flat.GetPixelBytes());
+        pixels.Fill(new Rgb24(200, 30, 90));
+        byte[] webp = Save(flat, WebpEncoderOptions.Default);
+        Assert.True(webp.Length < 400, $"{webp.Length} bytes");
+        using Image decoded = Image.Decode(webp);
+        Rgb24 middle = decoded.GetRow<Rgb24>(150)[200];
+        Assert.True(Math.Abs(middle.R - 200) <= 3 && Math.Abs(middle.G - 30) <= 3 && Math.Abs(middle.B - 90) <= 3, middle.ToString());
+    }
+
+    [Fact]
+    public void Lossy_files_carry_the_profile()
+    {
+        using Image photo = JpegEncoderTests.Photo(40, 24);
+        photo.ColorSpace = ColorSpace.DisplayP3;
+        byte[] webp = Save(photo, WebpEncoderOptions.Default);
+        Assert.Equal("VP8X"u8.ToArray(), webp[12..16]);
+        Assert.Equal(0x20, webp[20]);
+        using Image decoded = Image.Decode(webp);
+        Assert.Equal(IccProfileWriter.For(ColorSpace.DisplayP3, "WebP").ToArray(), decoded.ColorSpace.IccProfile.ToArray());
+    }
+
+    [Fact]
+    public void Quality_maps_to_the_quantiser_monotonically()
+    {
+        int last = 128;
+        for (int quality = 1; quality <= 100; quality++)
+        {
+            int q = Vp8Encoder.QuantiserFor(quality);
+            Assert.InRange(q, 0, last);
+            last = q;
+        }
+
+        Assert.Equal(0, Vp8Encoder.QuantiserFor(100));
+    }
+
+    [Fact]
+    public void Forward_transforms_invert_the_decoders_transforms()
+    {
+        // A residual through the forward DCT and the decoder's inverse comes back within rounding.
+        var random = new Random(2);
+        var plane = new Vp8Decoder.Plane(4, 4, extra: 0);
+        byte[] source = new byte[16];
+        for (int round = 0; round < 200; round++)
+        {
+            random.NextBytes(source);
+            for (int r = 0; r < 4; r++)
+            {
+                for (int c = 0; c < 4; c++)
+                {
+                    plane.Row(r)[c] = (byte)random.Next(256);
+                }
+            }
+
+            byte[] prediction = new byte[16];
+            for (int r = 0; r < 4; r++)
+            {
+                plane.Row(r)[..4].CopyTo(prediction.AsSpan(r * 4));
+            }
+
+            short[] coefficients = new short[16];
+            Vp8Encoder.ForwardDct(source, 0, 4, plane, 0, 0, coefficients);
+            Vp8Decoder.AddResidual(plane, 0, 0, coefficients, any: true);
+            for (int i = 0; i < 16; i++)
+            {
+                int expected = source[i];
+                int actual = plane.Row(i / 4)[i % 4];
+                Assert.True(Math.Abs(expected - actual) <= 1, $"round {round} pixel {i}: {expected} against {actual}, prediction {prediction[i]}");
+            }
+
+            short[] dcs = new short[16];
+            short[] wht = new short[16];
+            short[] back = new short[16];
+            for (int i = 0; i < 16; i++)
+            {
+                dcs[i] = (short)random.Next(-2000, 2000);
+            }
+
+            Vp8Encoder.ForwardWht(dcs, wht);
+            Vp8Decoder.InverseWht(wht, back);
+            for (int i = 0; i < 16; i++)
+            {
+                Assert.True(Math.Abs(dcs[i] - back[i]) <= 1, $"WHT {i}: {dcs[i]} against {back[i]}");
+            }
+        }
     }
 
     [Fact]

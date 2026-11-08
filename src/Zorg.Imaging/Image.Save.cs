@@ -134,16 +134,18 @@ public sealed partial class Image
     /// <param name="options">The options, or <see langword="null"/> for <see cref="WebpEncoderOptions.Default"/>.</param>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
     /// <exception cref="NotSupportedException">
-    /// <paramref name="stream"/> can't write; <see cref="WebpEncoderOptions.Lossless"/> isn't set (this version writes
-    /// lossless WebP only); a side is longer than 16,384 pixels; or the <see cref="ColorSpace"/> is HDR (PQ or HLG), or
-    /// one that can't be described as an ICC profile yet.
+    /// <paramref name="stream"/> can't write; a side is longer than 16,383 pixels (lossy) or 16,384 (lossless); a lossy
+    /// picture of tens of megapixels has more macroblocks than VP8's first partition can describe; or the
+    /// <see cref="ColorSpace"/> is HDR (PQ or HLG), or one that can't be described as an ICC profile yet.
     /// </exception>
     /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
     /// <exception cref="IOException">The stream itself fails.</exception>
     /// <remarks>
     /// <para>
-    /// Lossless WebP (VP8L) keeps every pixel, alpha included, at 8 bits a sample: 16-bit samples are rounded and grey
-    /// is stored as RGB. Images of up to 256 colours are stored as a colour table, which suits logos and screenshots.
+    /// Lossy WebP (VP8, the default) stores Y'CbCr with chroma at half resolution, like a JPEG, at
+    /// <see cref="WebpEncoderOptions.Quality"/>; transparency is kept exactly, coded losslessly beside it. Lossless WebP
+    /// (VP8L) keeps every pixel, alpha included. Both store 8 bits a sample: 16-bit samples are rounded and grey is stored
+    /// as RGB. Lossless images of up to 256 colours are stored as a colour table, which suits logos and screenshots.
     /// </para>
     /// <para>
     /// The <see cref="ColorSpace"/> is written as an ICC profile (in a <c>VP8X</c> file), so the file shows the same
@@ -153,8 +155,11 @@ public sealed partial class Image
     /// </remarks>
     /// <example>
     /// <code>
-    /// using FileStream file = File.Create("logo.webp");
-    /// image.SaveAsWebp(file, new WebpEncoderOptions { Lossless = true });
+    /// using FileStream photo = File.Create("photo.webp");
+    /// image.SaveAsWebp(photo); // lossy, quality 80
+    ///
+    /// using FileStream logo = File.Create("logo.webp");
+    /// image.SaveAsWebp(logo, new WebpEncoderOptions { Lossless = true });
     /// </code>
     /// </example>
     public void SaveAsWebp(Stream stream, WebpEncoderOptions? options = null)
@@ -173,14 +178,13 @@ public sealed partial class Image
     /// <returns>A task that completes when the file is written.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is <see langword="null"/>.</exception>
     /// <exception cref="NotSupportedException">
-    /// <paramref name="stream"/> can't write, the options ask for lossy WebP, a side is longer than 16,384 pixels, or the
-    /// colour space can't be written.
+    /// <paramref name="stream"/> can't write, the picture is too large for WebP, or the colour space can't be written.
     /// </exception>
     /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
     /// <exception cref="IOException">The stream itself fails.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     /// <remarks>The file is the same as <see cref="SaveAsWebp"/> writes.</remarks>
-    /// <example><code>await image.SaveAsWebpAsync(response.Body, new WebpEncoderOptions { Lossless = true }, cancellationToken);</code></example>
+    /// <example><code>await image.SaveAsWebpAsync(response.Body, cancellationToken: cancellationToken);</code></example>
     public ValueTask SaveAsWebpAsync(Stream stream, WebpEncoderOptions? options = null, CancellationToken cancellationToken = default)
     {
         CheckWritable(stream);
