@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-preview.4
 
 - Fixed lossless WebP encoding writing a file that no decoder can read. It happened at efforts 2 to 4 (4 is the default) on some images that mix photo and flat areas. When every block of the image moved out of one group of codes, the encoder still wrote that group's codes, and the decoder read the rest of the file out of step. Files written by 0.1.0-preview.3 and earlier may have this fault.
 
