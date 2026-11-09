@@ -6,6 +6,51 @@ namespace Zorg.Imaging.Tests.Codecs.Webp;
 
 public class Vp8lEncoderTests
 {
+    // Half noisy gradient, half flat blocks: tiles whose best codes differ, with a colour cache. Moving each tile to its
+    // cheapest group used to leave a group empty but still counted, so one set of codes too many was written and the
+    // stream fell out of step (these seeds failed at effort 3 and 4).
+    [Theory]
+    [InlineData(3)]
+    [InlineData(14)]
+    [InlineData(49)]
+    public void Mixed_content_round_trips_at_every_effort(int seed)
+    {
+        var random = new Random(seed);
+        int width = 64 + random.Next(100);
+        int height = 48 + random.Next(60);
+        using var image = new Image(width, height, PixelFormat.Rgb24);
+        int split = (width / 3) + random.Next(width / 3);
+        for (int y = 0; y < height; y++)
+        {
+            Span<Rgb24> row = image.GetRow<Rgb24>(y);
+            for (int x = 0; x < width; x++)
+            {
+                if (x < split)
+                {
+                    int v = ((x * 3) + (y * 2) + random.Next(24)) & 255;
+                    row[x] = new Rgb24((byte)v, (byte)((v / 2) + random.Next(8)), (byte)(255 - v));
+                }
+                else
+                {
+                    row[x] = (((x / 9) + (y / 7)) % 3) switch
+                    {
+                        0 => new Rgb24(240, 240, 240),
+                        1 => new Rgb24(30, 90, 200),
+                        _ => new Rgb24((byte)random.Next(256), 20, 20),
+                    };
+                }
+            }
+        }
+
+        for (int effort = 0; effort <= 6; effort++)
+        {
+            using var stream = new System.IO.MemoryStream();
+            image.SaveAsWebp(stream, new WebpEncoderOptions { Lossless = true, Effort = effort });
+            using Image decoded = Image.Decode(stream.ToArray());
+            Assert.True(image.GetPixelBytes().SequenceEqual(decoded.GetPixelBytes()), $"effort {effort}");
+        }
+    }
+
     [Fact]
     public void Vector_residuals_equal_the_scalar_predictor_for_every_mode()
     {

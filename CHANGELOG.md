@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed lossless WebP encoding writing a file that no decoder can read. It happened at efforts 2 to 4 (4 is the default) on some images that mix photo and flat areas. When every block of the image moved out of one group of codes, the encoder still wrote that group's codes, and the decoder read the rest of the file out of step. Files written by 0.1.0-preview.3 and earlier may have this fault.
+
 - Added TIFF decoding (`Image.Decode`, `Image.Identify`) for a file's first image: strips or tiles, PackBits, LZW or Deflate compression, the horizontal predictor, grey, RGB, palette and CMYK of up to 16 bits, alpha, orientation and ICC profiles. `ImageFormat.Tiff.IsSupported` is now true. JPEG-compressed, YCbCr, floating-point and BigTIFF files report `UnsupportedImageFormatException`.
 - Added BMP decoding (`Image.Decode`, `Image.Identify`): Windows and OS/2 bitmaps of 1 to 32 bits per pixel, with palettes, bit fields, RLE8 and RLE4, top-down rows and V5 embedded ICC profiles. `ImageFormat.Bmp.IsSupported` is now true.
 - Added lossy PNG: `PngEncoderOptions.MaxColors` (2 to 256) reduces an image to a palette with full alpha, and `Dithering` sets how much dithering to use. On an 800 x 600 photo crop with 256 colours, the file is 38% of the lossless size at 36 dB, or 14% for a cut-out with soft alpha.

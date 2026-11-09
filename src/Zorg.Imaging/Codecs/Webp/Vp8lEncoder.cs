@@ -1051,6 +1051,30 @@ internal static class Vp8lEncoder
             tileGroups[t] = bestGroup;
         }
 
+        // The move can leave a group with no tiles. A decoder reads one set of codes for each number up to the largest
+        // in the entropy image, so the groups still used are numbered again, in the same order, and only they count.
+        bool[] used = new bool[final.Count];
+        for (int t = 0; t < n; t++)
+        {
+            if (tileCluster[t] >= 0)
+            {
+                used[tileGroups[t]] = true;
+            }
+        }
+
+        int[] renumber = new int[final.Count];
+        groupCount = 0;
+        for (int g = 0; g < final.Count; g++)
+        {
+            renumber[g] = used[g] ? groupCount++ : 0;
+        }
+
+        groupCount = Math.Max(groupCount, 1);
+        for (int t = 0; t < n; t++)
+        {
+            tileGroups[t] = renumber[tileGroups[t]];
+        }
+
         return tileGroups;
     }
 
