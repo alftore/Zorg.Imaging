@@ -1251,21 +1251,28 @@ internal static class Vp8lEncoder
         public float[][] SymbolCosts() => [.. Arrays.Select(Costs)];
 
         /// <summary>The bits this histogram's symbols take under other codes' costs.</summary>
+        // A tile's symbols are few and its histogram is not changed once counted, so the symbols it uses are listed once,
+        // on the first call, and only they are priced.
         public double BitsUnder(float[][] costs)
         {
+            _used ??= [.. Arrays.Select(counts => Enumerable.Range(0, counts.Length).Where(i => counts[i] != 0).ToArray())];
             double total = 0;
             int a = 0;
             foreach (int[] counts in Arrays)
             {
-                float[] cost = costs[a++];
-                for (int i = 0; i < counts.Length; i++)
+                float[] cost = costs[a];
+                foreach (int i in _used[a])
                 {
                     total += counts[i] * (double)cost[i];
                 }
+
+                a++;
             }
 
             return total;
         }
+
+        private int[][]? _used;
 
         private static double ArrayBits(int[] counts)
         {
@@ -1277,12 +1284,12 @@ internal static class Vp8lEncoder
                 if (c > 0)
                 {
                     total += c;
-                    sum += c * Math.Log2(c);
+                    sum += TimesLog2(c);
                     used++;
                 }
             }
 
-            return used <= 1 ? 4 : (total * Math.Log2(total)) - sum + (used * HeaderBitsPerSymbol);
+            return used <= 1 ? 4 : TimesLog2(total) - sum + (used * HeaderBitsPerSymbol);
         }
 
         private static double MergedArrayBits(int[] a, int[] b)
@@ -1296,13 +1303,18 @@ internal static class Vp8lEncoder
                 if (c > 0)
                 {
                     total += c;
-                    sum += c * Math.Log2(c);
+                    sum += TimesLog2(c);
                     used++;
                 }
             }
 
-            return used <= 1 ? 4 : (total * Math.Log2(total)) - sum + (used * HeaderBitsPerSymbol);
+            return used <= 1 ? 4 : TimesLog2(total) - sum + (used * HeaderBitsPerSymbol);
         }
+
+        // c log2 c, from a table for the small counts that most symbols have.
+        private static double TimesLog2(long c) => c < TimesLog2Table.Length ? TimesLog2Table[c] : c * Math.Log2(c);
+
+        private static readonly double[] TimesLog2Table = [.. Enumerable.Range(0, 4096).Select(c => c == 0 ? 0 : c * Math.Log2(c))];
     }
 
     // Section 5.2.2: a value of 1 or more as a prefix symbol and extra bits.
