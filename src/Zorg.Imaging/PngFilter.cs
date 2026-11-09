@@ -8,8 +8,9 @@ namespace Zorg.Imaging;
 public enum PngFilter
 {
     /// <summary>
-    /// <see cref="None"/> for palette images and grey packed below 8 bits, where prediction seldom helps, else
-    /// <see cref="MinimumSum"/>: what libpng does, and the default.
+    /// <see cref="None"/> for palette images and grey packed below 8 bits, where prediction seldom helps; else, for each
+    /// band of about a megabyte of rows, whichever of <see cref="Sub"/>, <see cref="Up"/>, <see cref="Paeth"/> and
+    /// <see cref="MinimumSum"/> compresses a sample of its rows smallest. The default.
     /// </summary>
     /// <example><code>var options = new PngEncoderOptions { Filter = PngFilter.Adaptive };</code></example>
     Adaptive,
