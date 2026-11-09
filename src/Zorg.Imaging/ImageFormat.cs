@@ -58,7 +58,7 @@ public sealed class ImageFormat
 
     /// <summary>TIFF, little- or big-endian. Recognised, not supported.</summary>
     /// <example><code>bool tiff = ImageFormats.Detect(head) == ImageFormat.Tiff;</code></example>
-    public static ImageFormat Tiff { get; } = new("TIFF", "image/tiff", isSupported: false, ".tif", ".tiff");
+    public static ImageFormat Tiff { get; } = new("TIFF", "image/tiff", isSupported: true, ".tif", ".tiff");
 
     /// <summary>Windows bitmap (BMP). Recognised, not supported.</summary>
     /// <example><code>bool bmp = ImageFormats.Detect(head) == ImageFormat.Bmp;</code></example>
@@ -88,7 +88,7 @@ public sealed class ImageFormat
     /// <example><code>string fileName = "upload" + format.FileExtensions[0];</code></example>
     public IReadOnlyList<string> FileExtensions { get; }
 
-    /// <summary>Whether this library can identify and decode the format. True for PNG, JPEG, GIF, WebP and BMP.</summary>
+    /// <summary>Whether this library can identify and decode the format. True for PNG, JPEG, GIF, WebP, BMP and TIFF.</summary>
     /// <example>
     /// <code>
     /// if (ImageFormats.Detect(head) is not { IsSupported: true })

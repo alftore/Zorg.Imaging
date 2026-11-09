@@ -34,8 +34,9 @@ public class ImageFormatsTests
     {
         ImageFormat[] supported = [.. ImageFormats.Known.Where(f => f.IsSupported)];
 
-        Assert.Equal(5, supported.Length);
+        Assert.Equal(6, supported.Length);
         Assert.Contains(ImageFormat.Bmp, supported);
+        Assert.Contains(ImageFormat.Tiff, supported);
         Assert.Contains(ImageFormat.Png, supported);
         Assert.Contains(ImageFormat.Jpeg, supported);
         Assert.Contains(ImageFormat.Gif, supported);
@@ -47,7 +48,7 @@ public class ImageFormatsTests
     public void IsSupported_is_true_only_for_the_built_in_formats(string name)
     {
         (ImageFormat format, byte[] bytes) = SignatureSamples.Signatures[name];
-        bool builtIn = format == ImageFormat.Png || format == ImageFormat.Jpeg || format == ImageFormat.Gif || format == ImageFormat.Webp || format == ImageFormat.Bmp;
+        bool builtIn = format == ImageFormat.Png || format == ImageFormat.Jpeg || format == ImageFormat.Gif || format == ImageFormat.Webp || format == ImageFormat.Bmp || format == ImageFormat.Tiff;
 
         Assert.Equal(builtIn, ImageFormats.IsSupported(bytes));
         Assert.Equal(builtIn, format.IsSupported);
@@ -348,11 +349,11 @@ public class ImageFormatsTests
     [Theory]
     [InlineData("tiff-le")]
     [InlineData("tiff-be")]
-    public void Identify_of_a_tiff_is_UnsupportedFormat(string name)
+    public void Identify_of_a_bare_tiff_signature_is_Truncated(string name)
     {
         IdentifyResult result = Image.Identify(SignatureSamples.Signatures[name].Bytes);
 
-        Assert.Equal(IdentifyStatus.UnsupportedFormat, result.Status);
+        Assert.Equal(IdentifyStatus.Truncated, result.Status);
         Assert.Same(ImageFormat.Tiff, result.Format);
         Assert.Null(result.Info);
         Assert.False(string.IsNullOrWhiteSpace(result.Message));

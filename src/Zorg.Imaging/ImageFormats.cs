@@ -61,7 +61,7 @@ public static class ImageFormats
 
     /// <summary>Whether the bytes start with the signature of a format this library supports.</summary>
     /// <param name="head">The start of the file, as for <see cref="Detect"/>.</param>
-    /// <returns><see langword="true"/> for PNG, JPEG, GIF, WebP and BMP.</returns>
+    /// <returns><see langword="true"/> for PNG, JPEG, GIF, WebP, BMP and TIFF.</returns>
     /// <example>
     /// <code>
     /// if (!ImageFormats.IsSupported(bytes))
