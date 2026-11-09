@@ -29,6 +29,7 @@ internal static class GifEncoder
         using (Parallelism.Use(options.MaxDegreeOfParallelism))
         {
             (uint[] argb, _) = Argb.FromImage(image);
+            OneBitAlpha.Apply(argb, image.Width, image.Height, options);
             Palettizer.Result result = Palettizer.Run(argb, image.Width, image.Height, options.MaxColors, options.Dithering);
             file = Write(image.Width, image.Height, result, profile.Span);
         }

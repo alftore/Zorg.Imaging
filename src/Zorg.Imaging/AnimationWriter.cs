@@ -220,6 +220,11 @@ public sealed class AnimationWriter
             converted?.Dispose();
         }
 
+        if (_gif is not null)
+        {
+            OneBitAlpha.Apply(argb, image.Width, image.Height, _gif);
+        }
+
         if (_pending is not null && Same(_pending, argb))
         {
             _pendingDuration += duration;

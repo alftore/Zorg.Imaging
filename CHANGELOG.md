@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added control over how GIF turns soft alpha into its one-bit transparency, for stills and animations: `GifEncoderOptions.AlphaThreshold` (the alpha from which a pixel is kept, 128 by default, as before), `AlphaDithering` (0 to 1: a soft edge or shadow becomes a pattern of opaque pixels, as dense as its alpha, instead of a hard cut) and `Matte` (a colour to blend kept soft pixels over, for a known page background). The defaults are unchanged.
+
 - Lossy WebP pictures of tens of megapixels keep most of their subblock modes. When a picture's macroblock modes didn't fit the 512 KB the format allows for them, the encoder used to code it again with no subblock modes at all. It now gives each row of macroblocks a share of the room in proportion to what it needs, and gives up subblock modes only where a row runs over its share. On an 11158 x 2156 panorama at quality 80, the file is 10% smaller at the same PSNR.
 - Lossy WebP with alpha is faster on more than one core: the picture and its alpha are coded side by side, and so are the alpha's two candidate codings. The alpha no longer goes through the cross-colour search, as it has no red or blue. An 800 x 600 cut-out takes about 30% less time on 16 cores.
 

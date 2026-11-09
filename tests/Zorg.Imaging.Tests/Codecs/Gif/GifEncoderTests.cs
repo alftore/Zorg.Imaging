@@ -73,6 +73,101 @@ public class GifEncoderTests
     }
 
     [Fact]
+    public void A_lower_threshold_keeps_fainter_pixels()
+    {
+        using var image = new Image(3, 1, PixelFormat.Rgba32);
+        Span<Rgba32> pixels = image.GetRow<Rgba32>(0);
+        pixels[0] = new Rgba32(10, 20, 30, 40);
+        pixels[1] = new Rgba32(10, 20, 30, 31);
+        pixels[2] = new Rgba32(10, 20, 30, 0);
+        using Image decoded = Image.Decode(Save(image, new GifEncoderOptions { AlphaThreshold = 32 }));
+        Span<Rgba32> back = decoded.GetRow<Rgba32>(0);
+        Assert.Equal(new Rgba32(10, 20, 30, 255), back[0]);
+        Assert.Equal(0, back[1].A);
+        Assert.Equal(0, back[2].A);
+    }
+
+    [Theory]
+    [InlineData(64)]
+    [InlineData(128)]
+    [InlineData(200)]
+    public void Dithered_alpha_keeps_about_as_many_pixels_as_the_alpha_says(int alpha)
+    {
+        // A band of one partial alpha between a clear stripe and a solid one: the band comes out as a pattern whose
+        // share of opaque pixels is its alpha, and the clear and solid stripes are untouched.
+        const int Size = 96;
+        using var image = new Image(Size, Size, PixelFormat.Rgba32);
+        for (int y = 0; y < Size; y++)
+        {
+            Span<Rgba32> row = image.GetRow<Rgba32>(y);
+            for (int x = 0; x < Size; x++)
+            {
+                row[x] = new Rgba32(200, 40, 40, (byte)(x < 16 ? 0 : x >= Size - 16 ? 255 : alpha));
+            }
+        }
+
+        using Image decoded = Image.Decode(Save(image, new GifEncoderOptions { AlphaDithering = 1 }), new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        int kept = 0;
+        for (int y = 0; y < Size; y++)
+        {
+            Span<Rgba32> row = decoded.GetRow<Rgba32>(y);
+            for (int x = 0; x < Size; x++)
+            {
+                if (x < 16)
+                {
+                    Assert.Equal(0, row[x].A);
+                }
+                else if (x >= Size - 16)
+                {
+                    Assert.Equal(new Rgba32(200, 40, 40, 255), row[x]);
+                }
+                else if (row[x].A == 255)
+                {
+                    kept++;
+                }
+            }
+        }
+
+        double share = kept / (double)(Size * (Size - 32));
+        Assert.InRange(share, (alpha / 255.0) - 0.02, (alpha / 255.0) + 0.02);
+    }
+
+    [Fact]
+    public void A_matte_blends_kept_pixels_and_leaves_opaque_ones()
+    {
+        using var image = new Image(3, 1, PixelFormat.Rgba32);
+        Span<Rgba32> pixels = image.GetRow<Rgba32>(0);
+        pixels[0] = new Rgba32(255, 0, 0, 255);
+        pixels[1] = new Rgba32(255, 0, 0, 153);
+        pixels[2] = new Rgba32(255, 0, 0, 100);
+        using Image decoded = Image.Decode(Save(image, new GifEncoderOptions { Matte = new Rgba32(255, 255, 255, 0) }));
+        Span<Rgba32> back = decoded.GetRow<Rgba32>(0);
+        Assert.Equal(new Rgba32(255, 0, 0, 255), back[0]);
+        Assert.Equal(new Rgba32(255, 102, 102, 255), back[1]);
+        Assert.Equal(0, back[2].A);
+    }
+
+    [Fact]
+    public void Animation_frames_take_the_alpha_options()
+    {
+        using var frame = new Image(40, 40, PixelFormat.Rgba32);
+        Span<Rgba32> pixels = MemoryMarshal.Cast<byte, Rgba32>(frame.GetPixelBytes());
+        pixels.Fill(new Rgba32(0, 90, 200, 100));
+        using var output = new MemoryStream();
+        var writer = AnimationWriter.CreateGif(output, options: new GifEncoderOptions { AlphaDithering = 1 });
+        writer.WriteFrame(frame, TimeSpan.FromMilliseconds(100));
+        writer.Complete();
+        using Image decoded = Image.Decode(output.ToArray(), new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        int kept = 0;
+        foreach (Rgba32 p in MemoryMarshal.Cast<byte, Rgba32>(decoded.GetPixelBytes()))
+        {
+            kept += p.A == 255 ? 1 : 0;
+        }
+
+        Assert.InRange(kept / 1600.0, 0.33, 0.45);
+    }
+
+    [Fact]
     public void A_wholly_transparent_image_is_written()
     {
         using var image = new Image(3, 2, PixelFormat.Rgba32);
@@ -159,6 +254,10 @@ public class GifEncoderTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new GifEncoderOptions { MaxColors = 257 });
         Assert.Throws<ArgumentOutOfRangeException>(() => new GifEncoderOptions { Dithering = double.NaN });
         Assert.Throws<ArgumentOutOfRangeException>(() => new GifEncoderOptions { Dithering = 1.5 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GifEncoderOptions { AlphaThreshold = 0 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GifEncoderOptions { AlphaThreshold = 256 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GifEncoderOptions { AlphaDithering = double.NaN });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GifEncoderOptions { AlphaDithering = -0.1 });
     }
 
     [Fact]

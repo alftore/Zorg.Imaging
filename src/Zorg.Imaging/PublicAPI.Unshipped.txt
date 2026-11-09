@@ -475,3 +475,10 @@ Zorg.Imaging.PngEncoderOptions.Dithering.get -> double
 Zorg.Imaging.PngEncoderOptions.Dithering.init -> void
 Zorg.Imaging.PngEncoderOptions.MaxColors.get -> int
 Zorg.Imaging.PngEncoderOptions.MaxColors.init -> void
+const Zorg.Imaging.GifEncoderOptions.DefaultAlphaThreshold = 128 -> int
+Zorg.Imaging.GifEncoderOptions.AlphaDithering.get -> double
+Zorg.Imaging.GifEncoderOptions.AlphaDithering.init -> void
+Zorg.Imaging.GifEncoderOptions.AlphaThreshold.get -> int
+Zorg.Imaging.GifEncoderOptions.AlphaThreshold.init -> void
+Zorg.Imaging.GifEncoderOptions.Matte.get -> Zorg.Imaging.Rgba32?
+Zorg.Imaging.GifEncoderOptions.Matte.init -> void
