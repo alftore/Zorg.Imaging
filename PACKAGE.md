@@ -1,7 +1,17 @@
 # Zorg.Imaging
 
-Managed image decoding, resizing and encoding for .NET 10: PNG, JPEG, GIF and WebP, written in C# only, with no native binaries and no dependencies.
+Managed image decoding, resizing and encoding for .NET 10, written in C# only, with no native binaries and no dependencies.
 
-**Early development. Nothing has been released. The main API is `ImagePipeline`: load, fit, save, in one chain. The public API so far is the format check (`ImageFormats.Detect`, `Image.Identify`), the pixel buffer (`Image`, `PixelFormat`, 8- and 16-bit pixels), colour spaces and conversion to sRGB (`ColorSpace`, `ToSrgb`, `ColorSpaceHandling`), resizing in linear light (`Image.Resize`, `Resampler`), the everyday operations (`Fit`, `Fill`, `Pad`, `Crop`, `Rotate`, `FlipHorizontal`, `FlipVertical`, `Flatten`), PNG decode and encode, JPEG decode (with shrink-on-load in the pipeline) and encode, WebP decode and encode (lossy and lossless), and GIF decode (the first frame) and encode, which keep wide-gamut and HDR colour information.**
+**Early development: preview releases, and the API may still change.**
+
+- **Formats:** PNG, JPEG, WebP (lossy and lossless) and GIF, decoded and encoded. BMP and TIFF are decoded.
+- **Pipeline:** `ImagePipeline` loads, fits and saves in one chain. JPEG shrinks on load, so a thumbnail never decodes every pixel.
+- **Operations:** `Resize`, `Fit`, `Fill`, `Pad`, `Crop`, `Rotate`, `FlipHorizontal`, `FlipVertical` and `Flatten`. Resizing works in linear light.
+- **Effects:** `Blur`, `Sharpen`, `DrawImage` for watermarks, `Trim`, and `ToBlurHash` for placeholders.
+- **Animations:** `AnimationReader` and `AnimationWriter` read and write animated GIF and WebP one frame at a time.
+- **Smaller PNGs:** `PngEncoderOptions.MaxColors` saves a palette PNG with full alpha.
+- **Colour:** colour spaces are kept, and `ToSrgb` converts to sRGB.
+- **Metadata:** stripped by default. It can be kept, or kept without personal data.
+- **Safe on untrusted files:** limits are checked before anything is allocated.
 
 See the [repository](https://github.com/alftore/Zorg.Imaging) for documentation.

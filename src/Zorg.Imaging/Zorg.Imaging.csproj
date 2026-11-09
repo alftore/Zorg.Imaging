@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>Managed image decoding, resizing and encoding for .NET: PNG, JPEG, GIF and WebP, with no native dependencies.</Description>
+    <Description>Managed image decoding, resizing and encoding for .NET: PNG, JPEG, GIF and WebP, including animations, plus BMP and TIFF decoding, with no native dependencies.</Description>
     <PackageTags>image;imaging;resize;thumbnail;png;jpeg;gif;webp;exif</PackageTags>
   </PropertyGroup>
 
