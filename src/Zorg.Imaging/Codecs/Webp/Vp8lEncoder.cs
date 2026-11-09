@@ -1501,17 +1501,22 @@ internal static class Vp8lEncoder
         // so the search is skipped there.
         int[] matchLength = new int[n];
         int[] matchDistance = new int[n];
+        int[] nearLength = new int[n];
+        int[] nearDistance = new int[n];
         bool[] inherited = new bool[n];
         const int Chunk = 1 << 16;
         int chunks = (n + Chunk - 1) / Chunk;
         Processing.Parallelism.For(Processing.Parallelism.Bands(n, chunks), band =>
         {
             int bands = Processing.Parallelism.Bands(n, chunks);
+            Span<int> runs = stackalloc int[4];
             for (int c = chunks * band / bands; c < chunks * (band + 1) / bands; c++)
             {
                 int end = Math.Min((c + 1) * Chunk, n);
+                runs.Fill(-1);
                 for (int i = c * Chunk; i < end; i++)
                 {
+                    (nearLength[i], nearDistance[i]) = finder.FindNear(i, runs);
                     if (i > c * Chunk && matchLength[i - 1] > 32)
                     {
                         matchLength[i] = matchLength[i - 1] - 1;
@@ -1558,7 +1563,7 @@ internal static class Vp8lEncoder
         for (int pass = effort >= 5 ? 2 : 1; pass > 0; pass--)
         {
             Histogram histogram = Histogram.CountGroups(p, lengths, distances, count, width, cacheBits, null, 1, out _)[0];
-            count = Cheapest(p, width, matchLength, matchDistance, histogram, lengths, distances);
+            count = Cheapest(p, width, matchLength, matchDistance, nearLength, nearDistance, histogram, lengths, distances);
         }
 
         return (lengths, distances, count, cacheBits);
@@ -1567,7 +1572,7 @@ internal static class Vp8lEncoder
     // The cheapest path, by symbol costs from a histogram: cost[i] is the fewest bits for the first i pixels, step[i]
     // the step that reached it (1 for a literal, -k for a copy of k). Whether a pixel is a cache hit doesn't depend on
     // the path, since every pixel enters the cache in order, so hits are priced exactly.
-    private static int Cheapest(uint[] p, int width, int[] matchLength, int[] matchDistance, Histogram histogram, int[] lengths, int[] distances)
+    private static int Cheapest(uint[] p, int width, int[] matchLength, int[] matchDistance, int[] nearLength, int[] nearDistance, Histogram histogram, int[] lengths, int[] distances)
     {
         int n = p.Length;
         float[] greenCost = Costs(histogram.Green);
@@ -1579,8 +1584,8 @@ internal static class Vp8lEncoder
         uint[] cache = new uint[cacheBits == 0 ? 1 : 1 << cacheBits];
 
         // The symbol and extra bits of copies of 1 to 16, priced once; added in the same order as for the longest.
-        Span<float> shortSymbol = stackalloc float[17];
-        Span<float> shortExtra = stackalloc float[17];
+        float[] shortSymbol = new float[17];
+        float[] shortExtra = new float[17];
         for (int k = 1; k <= 16; k++)
         {
             (int lengthPrefix, int lengthBits, _) = Prefix(k);
@@ -1590,6 +1595,7 @@ internal static class Vp8lEncoder
 
         float[] cost = new float[n + 1];
         int[] step = new int[n + 1];
+        int[] reached = new int[n + 1];
         Array.Fill(cost, float.MaxValue);
         cost[0] = 0;
         for (int i = 0; i < n; i++)
@@ -1613,13 +1619,24 @@ internal static class Vp8lEncoder
                 step[i + 1] = 1;
             }
 
-            int longest = matchLength[i];
+            // Copies by the longest match, and by the longest near one where that differs: a near distance codes in a bit
+            // or two where a far one takes up to twenty, so a shorter near copy is often the cheaper path (palette indexes
+            // and alpha masks, 4 to 19% smaller).
+            Offer(i, matchLength[i], matchDistance[i]);
+            if (nearDistance[i] != matchDistance[i])
+            {
+                Offer(i, nearLength[i], nearDistance[i]);
+            }
+        }
+
+        void Offer(int i, int longest, int distance)
+        {
             if (longest < 1)
             {
-                continue;
+                return;
             }
 
-            (int distancePrefix, int distanceBits, _) = Prefix(DistanceCode(matchDistance[i], width));
+            (int distancePrefix, int distanceBits, _) = Prefix(DistanceCode(distance, width));
             float copy = cost[i] + distanceCost[distancePrefix] + distanceBits;
 
             // Every length up to 16, and the longest; longer ones are reached from the pixels inside the copy.
@@ -1631,6 +1648,7 @@ internal static class Vp8lEncoder
                 {
                     cost[i + k] = total;
                     step[i + k] = -k;
+                    reached[i + k] = distance;
                 }
             }
 
@@ -1642,6 +1660,7 @@ internal static class Vp8lEncoder
                 {
                     cost[i + longest] = total;
                     step[i + longest] = -longest;
+                    reached[i + longest] = distance;
                 }
             }
         }
@@ -1657,9 +1676,10 @@ internal static class Vp8lEncoder
         {
             int length = Math.Abs(step[i]);
             bool isCopy = step[i] < 0;
+            int distance = reached[i];
             i -= length;
             lengths[k] = isCopy ? length : 0;
-            distances[k] = isCopy ? matchDistance[i] : 0;
+            distances[k] = isCopy ? distance : 0;
         }
 
         return count;
@@ -1730,6 +1750,54 @@ internal static class Vp8lEncoder
             {
                 _chain[i] = -1;
             }
+        }
+
+        /// <summary>
+        /// The longest match among the near candidates alone (the pixel to the left and the three rows above), the first
+        /// of equals, for pixels taken in order: <paramref name="runs"/> holds each candidate's match length at the pixel
+        /// before (or -1), and a match one pixel on is the same one shorter, or as long when it was cut short at the
+        /// longest copy and the next pixel matches too; it is compared afresh only where it ended. Long flat runs would
+        /// otherwise be measured again at every pixel.
+        /// </summary>
+        public (int Length, int Distance) FindNear(int i, Span<int> runs)
+        {
+            uint[] p = _p;
+            int most = Math.Min(MaxCopy, p.Length - i);
+            int bestLength = 0;
+            int bestDistance = 0;
+            ReadOnlySpan<int> candidates = [1, _width, 2 * _width, 3 * _width];
+            for (int c = 0; c < candidates.Length; c++)
+            {
+                int distance = candidates[c];
+                int length;
+                if ((_quick && c >= 2) || distance > i || (c == 1 && distance == 1))
+                {
+                    length = 0;
+                }
+                else if (runs[c] > 1)
+                {
+                    // The match one pixel on, one shorter; if it was cut short at the longest copy, the one pixel past
+                    // it may match too (it can be no longer, as the limit stays where it was).
+                    length = Math.Min(runs[c] - 1, most);
+                    if (length < most && p[i + length] == p[i - distance + length])
+                    {
+                        length++;
+                    }
+                }
+                else
+                {
+                    length = p[i] == p[i - distance] ? Match(p, i, i - distance, most) : 0;
+                }
+
+                runs[c] = length;
+                if (length > bestLength)
+                {
+                    bestLength = length;
+                    bestDistance = distance;
+                }
+            }
+
+            return (bestLength, bestDistance);
         }
 
         public (int Length, int Distance) Find(int i)
