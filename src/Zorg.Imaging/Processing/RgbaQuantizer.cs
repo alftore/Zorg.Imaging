@@ -15,7 +15,8 @@ namespace Zorg.Imaging.Processing;
 /// keeping its count and sums. Median cut splits the cells into as many boxes as there are colours, always the box with
 /// the largest squared error, across its widest channel at the weighted median; then a few rounds of k-means move each
 /// colour to the mean of the cells nearest it. A colour whose pixels are all opaque stays exactly opaque. Fully
-/// transparent pixels share one transparent entry.
+/// transparent pixels share one transparent entry. When any pixel is translucent, colours are compared by how they
+/// differ over both black and white, so an error in alpha counts as much as a page shows it.
 /// </para>
 /// <para>
 /// Pixels are matched to their exact nearest colour through a cache of the colours that can be nearest in each cell, with
@@ -33,11 +34,13 @@ internal static class RgbaQuantizer
     public static Result Run(uint[] argb, int width, int height, int maxColours, double dither)
     {
         bool anyTransparent = false;
+        bool anyAlpha = false;
         var exact = new HashSet<uint>();
         foreach (uint p in argb)
         {
             uint key = p < 0x01000000u ? 0u : p;
             anyTransparent |= key == 0;
+            anyAlpha |= p < 0xFF000000u;
             if (exact.Count <= maxColours)
             {
                 exact.Add(key);
@@ -52,7 +55,7 @@ internal static class RgbaQuantizer
         int colours = maxColours - (anyTransparent ? 1 : 0);
         Cells cells = Cells.Count(argb);
         Vector128<float>[] means = MedianCut(cells, Math.Max(colours, 1));
-        bool[] opaque = Refine(cells, means);
+        bool[] opaque = Refine(cells, means, anyAlpha);
 
         var palette = new List<uint>(means.Length + 1);
         var premultiplied = new List<Vector128<float>>(means.Length + 1);
@@ -71,7 +74,7 @@ internal static class RgbaQuantizer
             premultiplied.Add(Vector128<float>.Zero);
         }
 
-        byte[] indices = Map(argb, width, height, [.. premultiplied], transparentIndex, dither);
+        byte[] indices = Map(argb, width, height, [.. premultiplied], transparentIndex, dither, anyAlpha);
         return new Result([.. palette], indices);
     }
 
@@ -108,10 +111,22 @@ internal static class RgbaQuantizer
         return ((uint)a << 24) | (Channel(1) << 16) | (Channel(2) << 8) | Channel(3);
     }
 
-    private static float Distance(Vector128<float> a, Vector128<float> b)
+    // The squared distance between premultiplied colours. With overPage, the difference as it shows over black plus as it
+    // shows over white: over white a premultiplied colour adds 255 less its alpha to each channel, so the difference there
+    // is the colour difference less the alpha difference. An error in alpha then counts as much as the page shows it,
+    // where the plain distance counted it once whatever the colour. It is still a Euclidean distance (in six
+    // dimensions), so means and the candidate bounds below hold.
+    private static float Distance(Vector128<float> a, Vector128<float> b, bool overPage)
     {
         Vector128<float> d = a - b;
-        return Vector128.Sum(d * d);
+        if (!overPage)
+        {
+            return Vector128.Sum(d * d);
+        }
+
+        Vector128<float> colour = d.WithElement(0, 0f);
+        Vector128<float> onWhite = colour - Vector128.Create(0f, d.GetElement(0), d.GetElement(0), d.GetElement(0));
+        return Vector128.Sum(colour * colour) + Vector128.Sum(onWhite * onWhite);
     }
 
     // The boxes, split until there are enough or none can be split: each step takes the box with the largest squared
@@ -193,7 +208,7 @@ internal static class RgbaQuantizer
 
     // Rounds of k-means over the cells: each cell goes to its nearest colour, then each colour to the mean of its cells.
     // Returns, per colour, whether all its pixels are opaque.
-    private static bool[] Refine(Cells cells, Vector128<float>[] means)
+    private static bool[] Refine(Cells cells, Vector128<float>[] means, bool overPage)
     {
         int[] nearest = new int[cells.Length];
         bool[] opaque = new bool[means.Length];
@@ -204,7 +219,7 @@ internal static class RgbaQuantizer
                 int bands = Parallelism.Bands((long)cells.Length * means.Length / 16, 64);
                 for (int c = (int)((long)cells.Length * band / bands); c < (int)((long)cells.Length * (band + 1) / bands); c++)
                 {
-                    nearest[c] = Nearest(means, cells.Mean(c));
+                    nearest[c] = Nearest(means, cells.Mean(c), overPage);
                 }
             });
 
@@ -239,18 +254,19 @@ internal static class RgbaQuantizer
     }
 
     // The share of each pixel's error that full-strength dithering passes on: all of it left photos grainy, about 4 dB
-    // further from the source, for hardly less banding.
+    // further from the source, for hardly less banding. (Dithering less where the picture is flat scored better on PSNR
+    // and SSIM but left visible bands in smooth gradients, so every pixel passes on the same share.)
     private const double DitherShare = 0.6;
 
     // The colours, in index order, that can be nearest to some value within 4 a channel of the centre.
-    private static int[] Candidates(Vector128<float>[] palette, Vector128<float> centre)
+    private static int[] Candidates(Vector128<float>[] palette, Vector128<float> centre, bool overPage)
     {
-        float nearest = Distance(palette[Nearest(palette, centre)], centre);
-        float radius = MathF.Sqrt(nearest) + 16.01f;
+        float nearest = Distance(palette[Nearest(palette, centre, overPage)], centre, overPage);
+        float radius = MathF.Sqrt(nearest) + (overPage ? Reach : 16.01f);
         var list = new List<int>(4);
         for (int k = 0; k < palette.Length; k++)
         {
-            if (Distance(palette[k], centre) <= radius * radius)
+            if (Distance(palette[k], centre, overPage) <= radius * radius)
             {
                 list.Add(k);
             }
@@ -259,13 +275,17 @@ internal static class RgbaQuantizer
         return [.. list];
     }
 
-    private static int Nearest(Vector128<float>[] palette, Vector128<float> colour)
+    // Twice the farthest a value in a cell lies from its centre under the over-the-page distance: up to 4 in each channel
+    // and in alpha makes up to 4 over black and 8 over white in each of three channels, sqrt(3 x 4^2 + 3 x 8^2), about 15.5.
+    private const float Reach = 31.01f;
+
+    private static int Nearest(Vector128<float>[] palette, Vector128<float> colour, bool overPage)
     {
         int best = 0;
         float least = float.MaxValue;
         for (int k = 0; k < palette.Length; k++)
         {
-            float d = Distance(palette[k], colour);
+            float d = Distance(palette[k], colour, overPage);
             if (d < least)
             {
                 (least, best) = (d, k);
@@ -283,7 +303,7 @@ internal static class RgbaQuantizer
     // the error at full strength. Fully transparent pixels take the transparent index. A cache of 32 levels a channel
     // keeps, for each cell, the colours that can be nearest to some value in it: those within the distance of the colour
     // nearest the cell's centre plus twice the farthest a value lies from the centre (4 a channel, so 8 in all).
-    private static byte[] Map(uint[] argb, int width, int height, Vector128<float>[] palette, int transparentIndex, double dither)
+    private static byte[] Map(uint[] argb, int width, int height, Vector128<float>[] palette, int transparentIndex, double dither, bool overPage)
     {
         Vector128<float>[] colours = transparentIndex >= 0 ? palette[..transparentIndex] : palette;
         int[]?[] cache = new int[]?[1 << 20];
@@ -291,7 +311,7 @@ internal static class RgbaQuantizer
         {
             Vector128<int> level = Vector128.Min(Vector128.Max(Vector128.ConvertToInt32(p) >> 3, Vector128<int>.Zero), Vector128.Create(31));
             int key = (level.GetElement(0) << 15) | (level.GetElement(1) << 10) | (level.GetElement(2) << 5) | level.GetElement(3);
-            int[] candidates = cache[key] ??= Candidates(colours, Vector128.ConvertToSingle((level << 3) + Vector128.Create(4)));
+            int[] candidates = cache[key] ??= Candidates(colours, Vector128.ConvertToSingle((level << 3) + Vector128.Create(4)), overPage);
             if (candidates.Length == 1)
             {
                 return candidates[0];
@@ -301,7 +321,7 @@ internal static class RgbaQuantizer
             float least = float.MaxValue;
             foreach (int k in candidates)
             {
-                float d = Distance(colours[k], p);
+                float d = Distance(colours[k], p, overPage);
                 if (d < least)
                 {
                     (least, best) = (d, k);
