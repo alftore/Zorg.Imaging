@@ -54,17 +54,29 @@ internal static class Vp8lEncoder
         }
 
         uint[]? palette = Palette(argb);
-        ReadOnlySpan<byte> body = palette is null || effort > 0 ? Predicted(argb, width, height, effort) : [];
-        if (palette is not null)
+        if (palette is null || effort == 0)
         {
-            ReadOnlySpan<byte> indexed = Indexed(argb, width, height, palette, effort);
-            if (body.IsEmpty || indexed.Length < body.Length)
-            {
-                body = indexed;
-            }
+            ReadOnlySpan<byte> only = palette is null ? Predicted(argb, width, height, effort) : Indexed(argb, width, height, palette, effort);
+            return [.. header, .. only];
         }
 
-        return [.. header, .. body];
+        // Both codings, side by side when there are cores for them; the smaller is kept, the predicted one on a tie.
+        byte[][] bodies = new byte[2][];
+        int bands = Processing.Parallelism.Bands(argb.Length, 2);
+        Processing.Parallelism.For(bands, band =>
+        {
+            if (band == 0)
+            {
+                bodies[0] = Predicted(argb, width, height, effort).ToArray();
+            }
+
+            if (band == bands - 1)
+            {
+                bodies[1] = Indexed(argb, width, height, palette, effort).ToArray();
+            }
+        });
+
+        return [.. header, .. bodies[1].Length < bodies[0].Length ? bodies[1] : bodies[0]];
     }
 
     // Section 4.4 then the main image: the colour table, delta coded, and the indexes.
@@ -89,12 +101,15 @@ internal static class Vp8lEncoder
     }
 
     // Sections 4.1 to 4.3 then the main image: subtract-green where the analysis favours it, the predictor (on tiles of
-    // 32 at effort 0 and 1, 16 above, which saves about 0.3% on photos), then from effort 1 cross-colour.
+    // 32 at effort 0 and 1, 16 above, which saves about 0.3% on photos), then from effort 1 cross-colour. An image with
+    // no red or blue, as a lossy picture's alpha is coded, gains nothing from subtract-green or cross-colour, and the
+    // search for cross-colour's multipliers costs about a fifth of the time, so neither is tried.
     private static ReadOnlySpan<byte> Predicted(uint[] argb, int width, int height, int effort)
     {
         var bits = new Vp8lBitWriter((argb.Length / 2) + 1024);
         uint[] pixels = (uint[])argb.Clone();
-        if (SubtractGreenHelps(pixels, width))
+        bool greenOnly = GreenOnly(pixels);
+        if (!greenOnly && SubtractGreenHelps(pixels, width))
         {
             bits.Write(1, 1);
             bits.Write((uint)Vp8lDecoder.TransformType.SubtractGreen, 2);
@@ -107,7 +122,7 @@ internal static class Vp8lEncoder
         bits.Write((uint)(tileBits - 2), 3);
         (pixels, uint[] modes) = Predict(pixels, width, height, tileBits, effort);
         EncodeImage(bits, modes, DivideUp(width, tileBits), effort, main: false);
-        if (effort >= 1)
+        if (effort >= 1 && !greenOnly)
         {
             int colourBits = 5;
             bits.Write(1, 1);
@@ -166,6 +181,30 @@ internal static class Vp8lEncoder
 
             return total;
         }
+    }
+
+    // Whether every pixel's red and blue are 0.
+    private static bool GreenOnly(ReadOnlySpan<uint> pixels)
+    {
+        var mask = new Vector<uint>(0x00FF00FFu);
+        int i = 0;
+        for (; i <= pixels.Length - Vector<uint>.Count; i += Vector<uint>.Count)
+        {
+            if (!Vector.EqualsAll(new Vector<uint>(pixels[i..]) & mask, Vector<uint>.Zero))
+            {
+                return false;
+            }
+        }
+
+        for (; i < pixels.Length; i++)
+        {
+            if ((pixels[i] & 0x00FF00FFu) != 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static int DivideUp(int value, int bits) => (value + (1 << bits) - 1) >> bits;

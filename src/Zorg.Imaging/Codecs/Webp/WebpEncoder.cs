@@ -57,9 +57,25 @@ internal static class WebpEncoder
             return (Vp8lEncoder.Encode(argb, width, height, alpha, options.Effort), []);
         }
 
-        (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height);
-        byte[] vp8 = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
-        return (vp8, alpha ? AlphaChunk(argb, width, height, options.Effort) : []);
+        // The picture and its alpha are coded apart, side by side when there are cores for both.
+        byte[] vp8 = [];
+        byte[] alphaChunk = [];
+        int bands = alpha ? Parallelism.Bands(argb.Length, 2) : 1;
+        Parallelism.For(bands, band =>
+        {
+            if (band == 0)
+            {
+                (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height);
+                vp8 = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
+            }
+
+            if (alpha && band == bands - 1)
+            {
+                alphaChunk = AlphaChunk(argb, width, height, options.Effort);
+            }
+        });
+
+        return (vp8, alphaChunk);
     }
 
     /// <summary>

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Lossy WebP pictures of tens of megapixels keep most of their subblock modes. When a picture's macroblock modes didn't fit the 512 KB the format allows for them, the encoder used to code it again with no subblock modes at all. It now gives each row of macroblocks a share of the room in proportion to what it needs, and gives up subblock modes only where a row runs over its share. On an 11158 x 2156 panorama at quality 80, the file is 10% smaller at the same PSNR.
+- Lossy WebP with alpha is faster on more than one core: the picture and its alpha are coded side by side, and so are the alpha's two candidate codings. The alpha no longer goes through the cross-colour search, as it has no red or blue. An 800 x 600 cut-out takes about 30% less time on 16 cores.
+
 ## 0.1.0-preview.4
 
 - Fixed lossless WebP encoding writing a file that no decoder can read. It happened at efforts 2 to 4 (4 is the default) on some images that mix photo and flat areas. When every block of the image moved out of one group of codes, the encoder still wrote that group's codes, and the decoder read the rest of the file out of step. Files written by 0.1.0-preview.3 and earlier may have this fault.

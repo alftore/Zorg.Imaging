@@ -293,6 +293,59 @@ public class WebpEncoderTests
         Assert.Equal(Rgba(photo), decoded.GetPixelBytes().ToArray());
     }
 
+    [Fact]
+    public void Lossy_with_alpha_is_the_same_on_one_core_and_on_many()
+    {
+        using Image photo = JpegEncoderTests.Photo(1250, 640, PixelFormat.Rgba32, seed: 12);
+        byte[] one = Save(photo, new WebpEncoderOptions { Quality = 80, MaxDegreeOfParallelism = 1 });
+        byte[] many = Save(photo, new WebpEncoderOptions { Quality = 80, MaxDegreeOfParallelism = 8 });
+        Assert.Equal(one, many);
+    }
+
+    [Theory]
+    [InlineData(1, 20_000)]
+    [InlineData(8, 20_000)]
+    [InlineData(1, 16_000)]
+    public void A_picture_whose_modes_overflow_the_first_partition_keeps_within_it(int cores, int limit)
+    {
+        // Noise makes most macroblocks take subblock modes: this picture's modes need about 24 KB, so under a smaller
+        // limit (the format's is 512 KB, reached only by pictures of tens of megapixels) rows are given shares of the
+        // room, and the frame fills most of it rather than giving up subblock modes everywhere.
+        const int Width = 1024;
+        const int Height = 768;
+        uint[] argb = new uint[Width * Height];
+        var random = new Random(5);
+        for (int i = 0; i < argb.Length; i++)
+        {
+            argb[i] = 0xFF000000u | (uint)random.Next(1 << 24);
+        }
+
+        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height);
+        byte[] unlimited;
+        byte[] frame;
+        using (Zorg.Imaging.Processing.Parallelism.Use(cores))
+        {
+            unlimited = Vp8Encoder.Encode(y, u, v, Width, Height, Vp8Encoder.QuantiserFor(95), 4);
+            frame = Vp8Encoder.Encode(y, u, v, Width, Height, Vp8Encoder.QuantiserFor(95), 4, limit);
+        }
+
+        Assert.True(FirstPartition(unlimited) > limit, "the picture should need more than the limit");
+        int first = FirstPartition(frame);
+        Assert.InRange(first, limit - 4_500, limit - 1);
+
+        // In a RIFF container, it decodes to the picture's size, and close to the picture coded without a limit.
+        byte[] file = new byte[20 + frame.Length + (frame.Length & 1)];
+        "RIFF"u8.CopyTo(file);
+        BinaryPrimitives.WriteInt32LittleEndian(file.AsSpan(4), file.Length - 8);
+        "WEBPVP8 "u8.CopyTo(file.AsSpan(8));
+        BinaryPrimitives.WriteInt32LittleEndian(file.AsSpan(16), frame.Length);
+        frame.CopyTo(file, 20);
+        using Image decoded = Image.Decode(file);
+        Assert.Equal((Width, Height), (decoded.Width, decoded.Height));
+    }
+
+    private static int FirstPartition(byte[] frame) => (frame[0] | (frame[1] << 8) | (frame[2] << 16)) >> 5;
+
     [Theory]
     [InlineData(PixelFormat.Rgb24, 30)]
     [InlineData(PixelFormat.Rgba32, 30)]

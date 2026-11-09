@@ -61,6 +61,9 @@ internal sealed class Vp8Encoder
     private readonly long _lambdaSubblock;
     private readonly int _wholeCandidates;
     private readonly int _subblockCandidates;
+    private long[]? _rowModeBudget;
+    private int _partitionLimit = 1 << 19;
+    private long[] _rowModeBits = [];
     private bool _subblocks = true;
     private int[] _progress = [];
     private volatile bool _failed;
@@ -103,18 +106,57 @@ internal sealed class Vp8Encoder
         _lambdaSubblock = Math.Max((long)_y1Ac * _y1Ac * 3 / 16, 1);
     }
 
+    // The first partition's room for macroblock modes, in 1/256 of a bit: its limit less the rest of the frame header.
+    private long ModeRoom => (((_partitionLimit - 1L) * 8) - HeaderReserveBits) * 256;
+
+    // The frame header outside the macroblock modes, generously: about 60 bits of fields and, for each of the 1,056
+    // token probabilities, an update flag (at most 3 bits) and an 8-bit value: under 1.5 KB.
+    private const long HeaderReserveBits = 3 * 1024 * 8;
+
+    // The skip flags take at most a bit a macroblock in all, as their probability is fitted to the frame's share of
+    // skipped macroblocks; each is counted as one bit.
+    private const int SkipBits = 256;
+
+    // The most one macroblock's modes can take, in 1/256 of a bit: the skip flag (as 8 bits, the most a single one costs),
+    // subblock luma with every subblock mode at its dearest, and the dearest chroma mode.
+    private static long MostModeBits => (8 * 256) + LumaModeCosts[BPred] + (16L * SubblockModeCosts.Max()) + ChromaModeCosts.Max();
+
     /// <summary>Codes Y, U and V planes (luma <paramref name="width"/> x <paramref name="height"/>, chroma half that,
     /// both padded to whole macroblocks) as a VP8 frame: the payload of a <c>VP8 </c> chunk.</summary>
     /// <exception cref="NotSupportedException">The macroblock modes don't fit the 512 KB the first partition can hold,
     /// even without subblock modes: only for pictures of tens of megapixels.</exception>
-    public static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort)
+    public static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort) =>
+        Encode(y, u, v, width, height, quantiser, effort, 1 << 19);
+
+    /// <summary>As the other overload, with the first partition held below <paramref name="partitionLimit"/> bytes
+    /// (the format's 512 KB, or less to test the budget on a small picture).</summary>
+    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit)
     {
-        // Subblock modes take most of the first partition; a very large picture is tried again without them.
+        // Subblock modes take most of the first partition, which holds at most 512 KB. When a picture of tens of
+        // megapixels needs more, it is coded again with each row given a share of the room in proportion to the mode bits
+        // it took, less one macroblock's most so a row that spends its share at its last macroblock still fits; a row
+        // that runs ahead of its share codes whole-block luma until it is back within it. Without subblock modes at all
+        // as a last resort.
+        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = effort > 0, _partitionLimit = partitionLimit };
+        encoder.EncodeRows();
+        byte[]? frame = encoder.Write();
+        if (frame is not null)
+        {
+            return frame;
+        }
+
+        long demand = Math.Max(encoder._rowModeBits.Sum(), 1);
+        long[] budget = new long[encoder._mbHigh];
+        for (int row = 0; row < budget.Length; row++)
+        {
+            budget[row] = Math.Max((long)((double)encoder._rowModeBits[row] * encoder.ModeRoom / demand) - MostModeBits, 0);
+        }
+
         foreach (bool subblocks in new[] { effort > 0, false })
         {
-            var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = subblocks };
+            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit };
             encoder.EncodeRows();
-            byte[]? frame = encoder.Write();
+            frame = encoder.Write();
             if (frame is not null)
             {
                 return frame;
@@ -176,6 +218,7 @@ internal sealed class Vp8Encoder
     private void EncodeRows()
     {
         _progress = new int[_mbHigh];
+        _rowModeBits = new long[_mbHigh];
         int next = -1;
         int helpers = Processing.Parallelism.Bands((long)_mbWide * _mbHigh * 256, _mbHigh);
         ExceptionDispatchInfo? failure = null;
@@ -208,6 +251,7 @@ internal sealed class Vp8Encoder
         leftNonZero.Clear();
         leftModes.Clear();
         int[] edge = new int[13];
+        long spent = 0;
         for (int mx = 0; mx < _mbWide; mx++)
         {
             if (my > 0)
@@ -229,8 +273,10 @@ internal sealed class Vp8Encoder
             mb.Index = (my * _mbWide) + mx;
             Span<byte> aboveNonZero = _aboveNonZero.AsSpan(mx * 9, 9);
             Span<byte> aboveModes = _aboveModes.AsSpan(mx * 4, 4);
-            ChooseLuma(ref mb, mx, my, edge, leftNonZero, aboveNonZero, leftModes, aboveModes);
+            bool subblocks = _subblocks && (_rowModeBudget is null || spent <= _rowModeBudget[my] * mx / _mbWide);
+            spent += ChooseLuma(ref mb, mx, my, subblocks, edge, leftNonZero, aboveNonZero, leftModes, aboveModes);
             ChooseChroma(ref mb, mx, my, leftNonZero, aboveNonZero);
+            spent += SkipBits + ChromaModeCosts[mb.UvMode];
             mb.Skip = mb.NonZero == 0;
 
             // The above-right pixels of the next row's last macroblock repeat this row's last pixel, as the decoder
@@ -243,10 +289,13 @@ internal sealed class Vp8Encoder
 
             Volatile.Write(ref _progress[my], mx + 1);
         }
+
+        _rowModeBits[my] = spent;
     }
 
-    // Whole-block luma modes against subblock modes. The plane holds the chosen reconstruction afterwards.
-    private void ChooseLuma(ref Macroblock mb, int mx, int my, int[] edge, Span<byte> leftNonZero, Span<byte> aboveNonZero, Span<byte> leftModes, Span<byte> aboveModes)
+    // Whole-block luma modes against subblock modes, when allowed. The plane holds the chosen reconstruction afterwards.
+    // Returns the bits the luma modes take, in 1/256 of a bit.
+    private int ChooseLuma(ref Macroblock mb, int mx, int my, bool subblocks, int[] edge, Span<byte> leftNonZero, Span<byte> aboveNonZero, Span<byte> leftModes, Span<byte> aboveModes)
     {
         int x0 = mx * 16;
         int y0 = my * 16;
@@ -295,7 +344,8 @@ internal sealed class Vp8Encoder
         Span<short> trialLevels = stackalloc short[4 * 16];
         Span<byte> trialReconstructions = stackalloc byte[4 * 16];
         Span<long> trialDistortions = stackalloc long[4];
-        long subTotal = _subblocks ? _lambda * ModeCost(BPred) : long.MaxValue;
+        long subTotal = subblocks ? _lambda * ModeCost(BPred) : long.MaxValue;
+        int subModeBits = ModeCost(BPred);
         for (int i = 0; i < 16 && subTotal < best; i++)
         {
             int bx = x0 + ((i & 3) * 4);
@@ -351,6 +401,7 @@ internal sealed class Vp8Encoder
 
             Restore(_y, bx, by, 4, reconstruction);
             subModes[i] = (byte)bestSubMode;
+            subModeBits += modeCosts[bestSubMode];
             subLeft[i >> 2] = subAbove[i & 3] = (byte)(bestNonZero ? 1 : 0);
             subTotal += bestSub;
         }
@@ -376,7 +427,7 @@ internal sealed class Vp8Encoder
                 leftModes[r] = subModes[(r * 4) + 3];
             }
 
-            return;
+            return subModeBits;
         }
 
         // Back to the best whole-block mode: predict and reconstruct it again.
@@ -389,6 +440,7 @@ internal sealed class Vp8Encoder
         byte implied = bestMode switch { VPred => BVePred, HPred => BHePred, TmPred => BTmPred, _ => BDcPred };
         aboveModes.Fill(implied);
         leftModes.Fill(implied);
+        return ModeCost(bestMode);
     }
 
     // One whole-block luma candidate, predicted in the plane: transform, quantise, reconstruct in place, and score.
@@ -1507,7 +1559,7 @@ internal sealed class Vp8Encoder
         WalkTokens(ref tokenSink);
 
         ReadOnlySpan<byte> first = header.Finish();
-        if (first.Length >= 1 << 19)
+        if (first.Length >= _partitionLimit)
         {
             return null;
         }
