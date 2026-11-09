@@ -37,9 +37,10 @@ public sealed class GifEncoderOptions
     } = DefaultMaxColors;
 
     /// <summary>
-    /// How much Floyd–Steinberg dithering to use when colours are reduced, 0 (none) to 1 (full, the default). Dithering
-    /// hides banding in gradients and photos; without it, flat areas compress better. Images stored exactly aren't
-    /// dithered.
+    /// How much Floyd–Steinberg dithering to use when colours are reduced, 0 (none) to 1 (the default). Dithering hides
+    /// banding in gradients and photos; without it, flat areas compress better. At 1 each pixel passes on 60% of its
+    /// colour error, which hides banding about as well as passing on all of it, without the grain. Images stored
+    /// exactly aren't dithered.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value isn't 0 to 1.</exception>
     /// <example><code>var flat = new GifEncoderOptions { Dithering = 0 };</code></example>

@@ -92,12 +92,13 @@ public class PngLossyTests
         double psnr = JpegEncoderTests.Psnr(back.GetPixelBytes(), photo.GetPixelBytes());
         Assert.True(psnr > 22, $"{psnr:0.0} dB");
 
-        // Without dithering, at least as close as the GIF encoder's Wu quantiser.
+        // Without dithering, about as close as the GIF encoder's quantiser. That one now refines Wu's palette at 64 levels
+        // a channel and matches pixels exactly, which this one (32 levels, with alpha) doesn't yet: within 0.5 dB.
         using Image plain = Image.Decode(PngEncoderTests.Save(photo, new PngEncoderOptions { MaxColors = 64, Dithering = 0 }));
         using Image gif = Image.Decode(Gif.GifEncoderTests.Save(photo, new GifEncoderOptions { MaxColors = 64, Dithering = 0 }));
         double ours = JpegEncoderTests.Psnr(plain.GetPixelBytes(), photo.GetPixelBytes());
         double wu = JpegEncoderTests.Psnr(gif.GetPixelBytes(), photo.GetPixelBytes());
-        Assert.True(ours >= wu - 0.3, $"{ours:0.00} dB against Wu's {wu:0.00} dB");
+        Assert.True(ours >= wu - 0.5, $"{ours:0.00} dB against the GIF quantiser's {wu:0.00} dB");
     }
 
     [Fact]

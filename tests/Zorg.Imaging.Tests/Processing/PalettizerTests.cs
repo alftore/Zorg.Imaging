@@ -30,12 +30,11 @@ public class PalettizerTests
         for (int round = 0; round < 20_000; round++)
         {
             int r = random.Next(256), g = random.Next(256), b = random.Next(256);
-            int cr = ((r >> 2) << 2) + 2, cg = ((g >> 2) << 2) + 2, cb = ((b >> 2) << 2) + 2;
             int best = 0;
             int bestDistance = int.MaxValue;
             for (int i = 0; i < colours; i++)
             {
-                int dr = cr - (int)((palette[i] >> 16) & 0xFF), dg = cg - (int)((palette[i] >> 8) & 0xFF), db = cb - (int)(palette[i] & 0xFF);
+                int dr = r - (int)((palette[i] >> 16) & 0xFF), dg = g - (int)((palette[i] >> 8) & 0xFF), db = b - (int)(palette[i] & 0xFF);
                 int distance = (dr * dr) + (dg * dg) + (db * db);
                 if (distance < bestDistance)
                 {
