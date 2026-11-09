@@ -1,8 +1,10 @@
 using System;
 using System.Buffers.Binary;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using static Zorg.Imaging.Codecs.Webp.Vp8Decoder;
@@ -345,7 +347,7 @@ internal sealed class Vp8Encoder
             rank[mode] = Rank(PredictionError(_sourceY, (y0 * _strideY) + x0, _strideY, _y, x0, y0, 16) + (_lambda * ModeCost(mode)), mode);
         }
 
-        rank.Sort();
+        SortFirst(rank, _wholeCandidates);
         long best = long.MaxValue;
         int bestMode = DcPred;
         for (int k = 0; k < _wholeCandidates; k++)
@@ -395,15 +397,16 @@ internal sealed class Vp8Encoder
             // full trials below copy into the plane instead of predicting again.
             FillSubblockEdge(_y, edge, bx, by, (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
             Gather4x4(_sourceY, (by * _strideY) + bx, _strideY, original);
+            Vector128<byte> source = Vector128.Create<byte>(original);
             for (int mode = BDcPred; mode <= BHuPred; mode++)
             {
                 Span<byte> prediction = predictions.Slice(mode * 16, 16);
                 PredictSubblock(edge, mode, prediction);
-                long error = (long)SquaredError(Vector128.Create<byte>(original), Vector128.Create<byte>(prediction)) << 8;
+                long error = (long)SquaredError(source, Vector128.Create<byte>(prediction)) << 8;
                 subRank[mode] = Rank(error + (_lambdaSubblock * modeCosts[mode]), mode);
             }
 
-            subRank.Sort();
+            SortFirst(subRank, _subblockCandidates);
 
             // The best few candidates in rank order, four at a time through the vector trial (TrialFour).
             for (int group = 0; group < _subblockCandidates; group += 4)
@@ -433,7 +436,7 @@ internal sealed class Vp8Encoder
                 }
             }
 
-            Restore(_y, bx, by, 4, reconstruction);
+            Restore(_y, bx, by, reconstruction);
             subModes[i] = (byte)bestSubMode;
             subModeBits += modeCosts[bestSubMode];
             subLeft[i >> 2] = subAbove[i & 3] = (byte)(bestNonZero ? 1 : 0);
@@ -642,25 +645,32 @@ internal sealed class Vp8Encoder
     // of 1 the DC is left at 0 in both.
     private static void QuantiseLanes(ReadOnlySpan<Vector128<int>> coefficients, int first, int dc, int ac, Span<Vector128<int>> levels, Span<Vector128<int>> dequantised)
     {
-        Vector128<int> top = Vector128.Create(2048);
-        for (int n = 0; n < 16; n++)
+        if (first == 0)
         {
-            if (n < first)
-            {
-                levels[n] = Vector128<int>.Zero;
-                dequantised[n] = Vector128<int>.Zero;
-                continue;
-            }
-
-            int q = n == 0 ? dc : ac;
-            (uint multiplier, int shift) = Magic[q];
-            Vector128<int> value = coefficients[n];
-            Vector128<int> magnitude = Vector128.Abs(value) + Vector128.Create(n == 0 ? q / 2 : (q * 3) / 8);
-            Vector128<int> level = Vector128.Min(Vector128.ShiftRightLogical(magnitude.AsUInt32() * Vector128.Create(multiplier), shift).AsInt32(), top);
-            level = Vector128.ConditionalSelect(Vector128.LessThan(value, Vector128<int>.Zero), -level, level);
-            levels[n] = level;
-            dequantised[n] = Short(level * q);
+            (uint dcMultiplier, int dcShift) = Magic[dc];
+            (levels[0], dequantised[0]) = QuantiseLane(coefficients[0], dc, dc / 2, dcMultiplier, dcShift);
         }
+        else
+        {
+            levels[0] = Vector128<int>.Zero;
+            dequantised[0] = Vector128<int>.Zero;
+        }
+
+        int bias = (ac * 3) / 8;
+        (uint multiplier, int shift) = Magic[ac];
+        for (int n = 1; n < 16; n++)
+        {
+            (levels[n], dequantised[n]) = QuantiseLane(coefficients[n], ac, bias, multiplier, shift);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (Vector128<int> Level, Vector128<int> Dequantised) QuantiseLane(Vector128<int> value, int q, int bias, uint multiplier, int shift)
+    {
+        Vector128<int> magnitude = Vector128.Abs(value) + Vector128.Create(bias);
+        Vector128<int> level = Vector128.Min(Vector128.ShiftRightLogical(magnitude.AsUInt32() * Vector128.Create(multiplier), shift).AsInt32(), Vector128.Create(2048));
+        level = Vector128.ConditionalSelect(Vector128.LessThan(value, Vector128<int>.Zero), -level, level);
+        return (level, Short(level * q));
     }
 
     // The four blocks' levels in scan order, sixteen each, one block after another.
@@ -779,7 +789,7 @@ internal sealed class Vp8Encoder
             rank[mode] = Rank(error + (_lambda * ChromaModeCosts[mode]), mode);
         }
 
-        rank.Sort();
+        SortFirst(rank, _wholeCandidates);
         long best = long.MaxValue;
         int bestMode = DcPred;
         for (int k = 0; k < _wholeCandidates; k++)
@@ -867,16 +877,38 @@ internal sealed class Vp8Encoder
         }
     }
 
-    private static void Restore(Plane plane, int x0, int y0, int size, ReadOnlySpan<byte> from)
+    private static void Restore(Plane plane, int x0, int y0, ReadOnlySpan<byte> from)
     {
-        for (int r = 0; r < size; r++)
+        byte[] data = plane.Data;
+        int stride = plane.Stride;
+        int at = ((y0 + 1) * stride) + x0 + 1;
+        for (int r = 0; r < 4; r++)
         {
-            from.Slice(r * size, size).CopyTo(plane.Row(y0 + r).Slice(x0, size));
+            MemoryMarshal.Write(data.AsSpan(at + (r * stride), 4), MemoryMarshal.Read<uint>(from.Slice(r * 4, 4)));
         }
     }
 
     // A score and a mode in one sortable value: the score above, the mode in the low 4 bits, so ties go to the lower mode.
     private static long Rank(long score, int mode) => (score << 4) | (long)mode;
+
+    // Puts the count smallest ranks first, in order; the rest are left in any order. Only those are tried, and a few
+    // passes of selection cost less than a full sort.
+    private static void SortFirst(Span<long> ranks, int count)
+    {
+        for (int k = 0; k < count && k < ranks.Length - 1; k++)
+        {
+            int smallest = k;
+            for (int j = k + 1; j < ranks.Length; j++)
+            {
+                if (ranks[j] < ranks[smallest])
+                {
+                    smallest = j;
+                }
+            }
+
+            (ranks[k], ranks[smallest]) = (ranks[smallest], ranks[k]);
+        }
+    }
 
     // The squared error of the prediction now in the plane, over a square, in the same units as Distortion.
     private static long PredictionError(byte[] source, int at, int stride, Plane plane, int x0, int y0, int size)
@@ -925,28 +957,33 @@ internal sealed class Vp8Encoder
     }
 
     // A 4 x 4 block into 16 bytes, row by row.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void Gather4x4(byte[] source, int at, int stride, Span<byte> into)
     {
         for (int r = 0; r < 4; r++)
         {
-            source.AsSpan(at + (r * stride), 4).CopyTo(into.Slice(r * 4, 4));
+            MemoryMarshal.Write(into.Slice(r * 4, 4), MemoryMarshal.Read<uint>(source.AsSpan(at + (r * stride), 4)));
         }
     }
 
     private static void Gather4x4(Plane plane, int x0, int y0, Span<byte> into)
     {
-        for (int r = 0; r < 4; r++)
-        {
-            plane.Row(y0 + r).Slice(x0, 4).CopyTo(into.Slice(r * 4, 4));
-        }
+        Gather4x4(plane.Data, ((y0 + 1) * plane.Stride) + x0 + 1, plane.Stride, into);
     }
 
     // The sum of squared differences of 16 bytes: widened to 16 bits, where the difference of two bytes fits, then
     // squared and summed at 32 bits.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int SquaredError(Vector128<byte> a, Vector128<byte> b)
     {
         Vector128<short> low = (Vector128.WidenLower(a) - Vector128.WidenLower(b)).AsInt16();
         Vector128<short> high = (Vector128.WidenUpper(a) - Vector128.WidenUpper(b)).AsInt16();
+        if (Sse2.IsSupported)
+        {
+            // Each pair of squares summed in one step; at most 2 x 255 squared a lane.
+            return Vector128.Sum(Sse2.MultiplyAddAdjacent(low, low) + Sse2.MultiplyAddAdjacent(high, high));
+        }
+
         Vector128<int> sum = (Vector128.WidenLower(low) * Vector128.WidenLower(low)) + (Vector128.WidenUpper(low) * Vector128.WidenUpper(low))
             + (Vector128.WidenLower(high) * Vector128.WidenLower(high)) + (Vector128.WidenUpper(high) * Vector128.WidenUpper(high));
         return Vector128.Sum(sum);
@@ -1108,18 +1145,7 @@ internal sealed class Vp8Encoder
         return Vector128.ConditionalSelect(Vector128.LessThan(value, Vector128<int>.Zero), -level, level);
     }
 
-    private static bool HasLevels(ReadOnlySpan<short> levels, int first)
-    {
-        for (int c = first; c < 16; c++)
-        {
-            if (levels[c] != 0)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool HasLevels(ReadOnlySpan<short> levels, int first) => LastNonZero(levels, first) >= 0;
 
     // ---- Tokens ----
 
@@ -1154,81 +1180,59 @@ internal sealed class Vp8Encoder
 
     // The bits a block's tokens take, with the default token probabilities, which are the ones in force while modes are
     // chosen (the fitted ones come after, for writing). The same sum as walking the tokens (Tokens with a CostSink), with
-    // the walk for each level done once ahead: a level's cost in each of the 96 contexts (type, band, previous), up to
-    // 66, and for larger ones the category 6 prefix in each context plus its eleven extra bits.
+    // the walk for each level done once ahead: a token's cost in each of the 96 contexts (type, band, previous), for
+    // levels 0 to 66, and for larger ones the category 6 prefix in each context plus its eleven extra bits. A token's
+    // cost holds its sign and, after a non-zero level (previous 1 or 2), the "not the end" bit before it, so the walk is
+    // one lookup a coefficient.
     private static int BlockCost(ReadOnlySpan<short> levels, int type, int first, int context)
     {
-        int last = -1;
-        for (int c = 15; c >= first; c--)
-        {
-            if (levels[c] != 0)
-            {
-                last = c;
-                break;
-            }
-        }
-
-        ReadOnlySpan<byte> bands = Bands;
+        int last = LastNonZero(levels, first);
         ReadOnlySpan<byte> probabilities = Vp8Tables.DefaultCoefficientProbabilities;
         int table = type * 8 * 3;
-        int slot = table + (bands[first] * 3) + context;
-        int bits = BoolCost(probabilities[slot * 11], last >= 0);
+        int slot = table + (Bands[first] * 3) + context;
         if (last < 0)
         {
-            return bits;
+            return BoolCost(probabilities[slot * 11], false);
         }
 
-        int[] zeroCost = ZeroCost;
-        int[] levelCost = LevelCost;
-        for (int c = first; ;)
+        // The first token always has the "not the end" bit; the table holds it only after a non-zero level.
+        int bits = context == 0 ? BoolCost(probabilities[slot * 11], true) : 0;
+        // Unchecked reads: LastNonZero has checked there are sixteen levels and c stays within them, Bands has
+        // seventeen entries, and a slot below 96 and a value below 67 index within TokenCost.
+        ref short level = ref MemoryMarshal.GetReference(levels);
+        ref byte band = ref MemoryMarshal.GetReference(Bands);
+        ref int tokenCost = ref MemoryMarshal.GetArrayDataReference(TokenCost);
+        for (int c = first; c <= last; c++)
         {
-            int value = Math.Abs((int)levels[c]);
-            if (value == 0)
-            {
-                bits += zeroCost[slot];
-                c++;
-                slot = table + (bands[c] * 3);
-                continue;
-            }
-
-            bits += value < Category6 ? levelCost[(slot * Category6) + value] : Category6Prefix[slot] + Category6Extra[value - Category6];
-            bits += BoolCost(128, levels[c] < 0);
-            if (++c == 16)
-            {
-                return bits;
-            }
-
-            slot = table + (bands[c] * 3) + (value == 1 ? 1 : 2);
-            bits += BoolCost(probabilities[slot * 11], c <= last);
-            if (c > last)
-            {
-                return bits;
-            }
+            int value = Math.Abs((int)Unsafe.Add(ref level, c));
+            bits += value < Category6 ? Unsafe.Add(ref tokenCost, (slot * Category6) + value) : Category6Prefix[slot] + Category6Extra[value - Category6];
+            slot = table + (Unsafe.Add(ref band, c + 1) * 3) + Math.Min(value, 2);
         }
+
+        return last < 15 ? bits + BoolCost(probabilities[slot * 11], false) : bits;
+    }
+
+    // The position of the last non-zero level from first on, or -1.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int LastNonZero(ReadOnlySpan<short> levels, int first)
+    {
+        ref short at = ref MemoryMarshal.GetReference(levels[..16]);
+        uint zero = Vector128.Equals(Vector128.LoadUnsafe(ref at), Vector128<short>.Zero).ExtractMostSignificantBits()
+            | (Vector128.Equals(Vector128.LoadUnsafe(ref at, 8), Vector128<short>.Zero).ExtractMostSignificantBits() << 8);
+        uint nonZero = ~zero & 0xFFFFu & (0xFFFFu << first);
+        return 31 - System.Numerics.BitOperations.LeadingZeroCount(nonZero);
     }
 
     private const int Category6 = 67;
 
-    private static readonly int[] ZeroCost = BuildZeroCost();
-    private static readonly int[] LevelCost = BuildLevelCost(out Category6Prefix);
+    private static readonly int[] TokenCost = BuildTokenCost(out Category6Prefix);
     private static readonly int[] Category6Prefix;
     private static readonly int[] Category6Extra = BuildCategory6Extra();
 
-    private static int[] BuildZeroCost()
-    {
-        ReadOnlySpan<byte> p = Vp8Tables.DefaultCoefficientProbabilities;
-        int[] costs = new int[96];
-        for (int slot = 0; slot < 96; slot++)
-        {
-            costs[slot] = BoolCost(p[(slot * 11) + 1], false);
-        }
-
-        return costs;
-    }
-
-    // For each context and each level 1 to 66: the "not zero" bit, the value tree and its extra bits (not the sign), as
-    // Tokens puts them; and for category 6, the prefix alone.
-    private static int[] BuildLevelCost(out int[] category6Prefix)
+    // For each context and each level 0 to 66: the "not the end" bit when the previous level was non-zero, then the
+    // "not zero" bit, the value tree, its extra bits and the sign, as Tokens puts them; and for category 6, the same
+    // up to its prefix.
+    private static int[] BuildTokenCost(out int[] category6Prefix)
     {
         ReadOnlySpan<byte> p = Vp8Tables.DefaultCoefficientProbabilities;
         int[] costs = new int[96 * Category6];
@@ -1236,9 +1240,11 @@ internal sealed class Vp8Encoder
         for (int slot = 0; slot < 96; slot++)
         {
             int at = slot * 11;
+            int more = slot % 3 == 0 ? 0 : BoolCost(p[at], true);
+            costs[slot * Category6] = more + BoolCost(p[at + 1], false);
             for (int value = 1; value <= Category6; value++)
             {
-                var sink = new CostSink();
+                var sink = new CostSink { Bits = more };
                 sink.Put(p[at + 1], true, -1);
                 if (value == 1)
                 {
@@ -1291,6 +1297,7 @@ internal sealed class Vp8Encoder
                     }
                 }
 
+                sink.Put(128, false, -1);
                 if (value < Category6)
                 {
                     costs[(slot * Category6) + value] = sink.Bits;
@@ -1327,15 +1334,7 @@ internal sealed class Vp8Encoder
     private void Tokens<TSink>(ref TSink sink, ReadOnlySpan<short> levels, int type, int first, int context)
         where TSink : struct, ISink
     {
-        int last = -1;
-        for (int c = 15; c >= first; c--)
-        {
-            if (levels[c] != 0)
-            {
-                last = c;
-                break;
-            }
-        }
+        int last = LastNonZero(levels, first);
 
         ReadOnlySpan<byte> bands = Bands;
         int table = type * 8 * 3 * 11;
@@ -1586,15 +1585,16 @@ internal sealed class Vp8Encoder
             }
         }
 
-        var tokens = new Vp8BoolEncoder(_width * _height / 2);
-        var tokenSink = new WriteSink(tokens);
-        WalkTokens(ref tokenSink);
-
+        // The first partition is complete, so an overflow is known before the tokens are written.
         ReadOnlySpan<byte> first = header.Finish();
         if (first.Length >= _partitionLimit)
         {
             return null;
         }
+
+        var tokens = new Vp8BoolEncoder(_width * _height / 2);
+        var tokenSink = new WriteSink(tokens);
+        WalkTokens(ref tokenSink);
 
         ReadOnlySpan<byte> second = tokens.Finish();
         byte[] frame = new byte[10 + first.Length + second.Length];

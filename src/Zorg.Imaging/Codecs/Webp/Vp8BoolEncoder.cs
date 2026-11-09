@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace Zorg.Imaging.Codecs.Webp;
 
@@ -31,8 +32,8 @@ internal sealed class Vp8BoolEncoder(int capacity)
             _range = split;
         }
 
-        // Doubled until it is at least 128, in as few steps as there are byte boundaries to cross: a carry out of the
-        // bits shifted past the top ripples into the bytes written, and each finished byte is written.
+        // Doubled until it is at least 128. Mostly that stays within the current byte; crossing a byte boundary is
+        // left to Shift, out of line, so this stays small where it is inlined into the token walk.
         int shift = BitOperations.LeadingZeroCount(_range) - 24;
         if (shift <= 0)
         {
@@ -40,6 +41,26 @@ internal sealed class Vp8BoolEncoder(int capacity)
         }
 
         _range <<= shift;
+        if (shift < _bitCount)
+        {
+            if ((_bottom >> (32 - shift)) != 0)
+            {
+                Carry();
+            }
+
+            _bottom <<= shift;
+            _bitCount -= shift;
+            return;
+        }
+
+        Shift(shift);
+    }
+
+    // Shifts bottom by shift bits, in as few steps as there are byte boundaries to cross: a carry out of the bits
+    // shifted past the top ripples into the bytes written, and each finished byte is written.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void Shift(int shift)
+    {
         while (shift > 0)
         {
             int step = Math.Min(shift, _bitCount);

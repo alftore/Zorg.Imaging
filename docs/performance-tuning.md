@@ -21,6 +21,27 @@ where it was measured. `docs/performance.md` has the current numbers.
   timing lines. Build the scratch run with `-p:EnforceCodeStyleInBuild=false -p:TreatWarningsAsErrors=false`, and remove
   the lines before committing (search for `Stopwatch` in `src/`).
 
+## Profiling
+
+- **`dotnet-trace` for a quick look, anywhere.** Install it into a scratch folder
+  (`dotnet tool install dotnet-trace --tool-path <dir>`), run a loop that repeats the work for 20 to 40 seconds after a
+  warm-up, and read the top methods without a viewer:
+  `dotnet-trace collect --profile dotnet-sampled-thread-time,dotnet-common -o run.nettrace -- <exe> <args>`, then
+  `dotnet-trace report run.nettrace topN -n 30`. It needs no admin rights and works on Windows.
+- **Its exclusive times lean towards methods with loops.** The EventPipe sampler stops threads where the runtime can
+  inspect them, so time inside a long loop can land on the method around it: it gave the lossy encoder's luma search
+  12% of its own time, where `perf` gave 6.5%. Use it to find the area, not to rank close neighbours.
+- **`perf` in the gate container for exact numbers.** `podman run --privileged` with the gate image, `apk add perf`,
+  then run with `DOTNET_PerfMapEnabled=1` and `DOTNET_EnableWriteXorExecute=0` (without that, JIT code sits in a
+  double-mapped file and shows as bare addresses), `perf record -F 2000 -g`, and
+  `perf report --no-children --sort sym --stdio`. Write `perf.data` inside the container: on a mounted Windows folder
+  `perf record` fails with "Bad address".
+- **Down to instructions:** `perf script -F ip` gives each sample's address; with the method's start from the
+  `/tmp/perf-<pid>.map` file and a listing from `DOTNET_JitDisasm=<method>` with `DOTNET_JitStdOutFile`, the hot
+  offsets map onto the code. (`perf inject --jit` crashed with this perf and runtime.)
+- **Inlined code counts in its caller** with both tools. To split a caller's time, mark helpers `NoInlining` for one
+  run, or read the profile for helpers that should have been inlined and were not.
+
 ## Keep hot state where the JIT can keep it in registers
 
 - **Copy fields into locals for a hot loop, and store them back once.** The JPEG Huffman decoder kept its 64-bit bit
@@ -180,6 +201,17 @@ where it was measured. `docs/performance.md` has the current numbers.
 - **Hoisting can make a loop slower.** Moving two divisions that depend only on DC or AC out of the quantiser's loop
   took that encode from 20 to 30 ms, most likely by changing the JIT's register use in the loop. Measure even the
   changes that can only remove work.
+- **Fold what is constant into the table.** Pricing a block's tokens looked up each level's cost, then added its sign
+  and the "not the end" bit before it as separate lookups and branches. Building those into the table for each context
+  left one lookup per coefficient: 9% of a lossy encode on one core. A vector compare finding the last non-zero level
+  replaced a scalar scan in the same loop and in `HasLevels`, which alone was 2.5%.
+- **Read the profile for helpers that weren't inlined.** A 4 x 4 squared error with vector types (3.4%) and a span sort
+  of ten ranks of which three are used (2.6%) showed up as their own methods. `AggressiveInlining`, a multiply-add
+  (`Sse2.MultiplyAddAdjacent`) for the squares, and a three-pass selection instead of the sort took another 7% off.
+- **Move the rare path out of line.** The bool encoder is inlined a dozen times into the token walk; moving the
+  byte-boundary case into a `NoInlining` method made each copy small, for about 1%.
+- **Transposes didn't beat element inserts.** Gathering four candidates into vector lanes with SSE2 unpacks, instead of
+  `Vector128.Create` from four scalars, measured the same: the JIT inserts from memory cheaply. The change was dropped.
 - **Check that a speed change leaves the output alone.** Hashing the encoder's output for a set of images, qualities and
   efforts before and after showed every one of these changes produced the same bytes.
 
