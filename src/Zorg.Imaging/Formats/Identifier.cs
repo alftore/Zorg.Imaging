@@ -22,7 +22,7 @@ internal static class Identifier
         ImageFormat? format = FormatSignatures.Detect(head.AsSpan(0, length));
         if (format is null)
         {
-            return IdentifyResult.Failed(IdentifyStatus.NotAnImage, format: null, "The file isn't a PNG, JPEG, GIF or WebP image.");
+            return IdentifyResult.Failed(IdentifyStatus.NotAnImage, format: null, "The file isn't a PNG, JPEG, GIF, WebP or BMP image.");
         }
 
         if (!format.IsSupported)
@@ -30,7 +30,7 @@ internal static class Identifier
             return IdentifyResult.Failed(
                 IdentifyStatus.UnsupportedFormat,
                 format,
-                string.Create(CultureInfo.InvariantCulture, $"{format.Name} images aren't supported. Use PNG, JPEG, GIF or WebP."));
+                string.Create(CultureInfo.InvariantCulture, $"{format.Name} images aren't supported. Use PNG, JPEG, GIF, WebP or BMP."));
         }
 
         reader.FormatName = format.Name;
@@ -61,6 +61,11 @@ internal static class Identifier
         if (format == ImageFormat.Gif)
         {
             return GifHeaderReader.ReadAsync(reader, options, cancellationToken);
+        }
+
+        if (format == ImageFormat.Bmp)
+        {
+            return Codecs.Bmp.BmpHeaderReader.ReadAsync(reader, options, cancellationToken);
         }
 
         return WebpHeaderReader.ReadAsync(reader, options, cancellationToken);

@@ -22,7 +22,7 @@ public sealed partial class Image
     /// <returns>The image, which the caller disposes.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="data"/> is <see langword="null"/>.</exception>
     /// <exception cref="UnsupportedImageFormatException">
-    /// The data isn't an image format this version can decode. So far that is PNG, JPEG, GIF and WebP; of an animation, the first frame.
+    /// The data isn't an image format this version can decode. So far that is PNG, JPEG, GIF, WebP and BMP; of an animation, the first frame.
     /// </exception>
     /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
     /// <exception cref="ImageLimitException">The image is larger than <see cref="ImageLimits"/> allows.</exception>
@@ -105,6 +105,11 @@ public sealed partial class Image
         if (format == ImageFormat.Webp)
         {
             return await WebpDecoder.DecodeAsync(reader, options, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (format == ImageFormat.Bmp)
+        {
+            return await Codecs.Bmp.BmpDecoder.DecodeAsync(reader, options, cancellationToken).ConfigureAwait(false);
         }
 
         throw format is null

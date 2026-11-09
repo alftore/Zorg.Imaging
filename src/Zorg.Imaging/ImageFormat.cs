@@ -62,7 +62,7 @@ public sealed class ImageFormat
 
     /// <summary>Windows bitmap (BMP). Recognised, not supported.</summary>
     /// <example><code>bool bmp = ImageFormats.Detect(head) == ImageFormat.Bmp;</code></example>
-    public static ImageFormat Bmp { get; } = new("BMP", "image/bmp", isSupported: false, ".bmp", ".dib");
+    public static ImageFormat Bmp { get; } = new("BMP", "image/bmp", isSupported: true, ".bmp", ".dib");
 
     /// <summary>Windows icon (ICO). Recognised, not supported.</summary>
     /// <example><code>bool ico = ImageFormats.Detect(head) == ImageFormat.Ico;</code></example>
@@ -88,7 +88,7 @@ public sealed class ImageFormat
     /// <example><code>string fileName = "upload" + format.FileExtensions[0];</code></example>
     public IReadOnlyList<string> FileExtensions { get; }
 
-    /// <summary>Whether this library can identify and decode the format. True for PNG, JPEG, GIF and WebP.</summary>
+    /// <summary>Whether this library can identify and decode the format. True for PNG, JPEG, GIF, WebP and BMP.</summary>
     /// <example>
     /// <code>
     /// if (ImageFormats.Detect(head) is not { IsSupported: true })

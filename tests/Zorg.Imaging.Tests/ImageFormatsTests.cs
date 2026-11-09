@@ -30,11 +30,12 @@ public class ImageFormatsTests
     public void MaxSignatureLength_is_64() => Assert.Equal(64, ImageFormats.MaxSignatureLength);
 
     [Fact]
-    public void Only_the_four_built_in_formats_are_supported()
+    public void Only_the_built_in_formats_are_supported()
     {
         ImageFormat[] supported = [.. ImageFormats.Known.Where(f => f.IsSupported)];
 
-        Assert.Equal(4, supported.Length);
+        Assert.Equal(5, supported.Length);
+        Assert.Contains(ImageFormat.Bmp, supported);
         Assert.Contains(ImageFormat.Png, supported);
         Assert.Contains(ImageFormat.Jpeg, supported);
         Assert.Contains(ImageFormat.Gif, supported);
@@ -46,7 +47,7 @@ public class ImageFormatsTests
     public void IsSupported_is_true_only_for_the_built_in_formats(string name)
     {
         (ImageFormat format, byte[] bytes) = SignatureSamples.Signatures[name];
-        bool builtIn = format == ImageFormat.Png || format == ImageFormat.Jpeg || format == ImageFormat.Gif || format == ImageFormat.Webp;
+        bool builtIn = format == ImageFormat.Png || format == ImageFormat.Jpeg || format == ImageFormat.Gif || format == ImageFormat.Webp || format == ImageFormat.Bmp;
 
         Assert.Equal(builtIn, ImageFormats.IsSupported(bytes));
         Assert.Equal(builtIn, format.IsSupported);
@@ -361,7 +362,6 @@ public class ImageFormatsTests
     [InlineData("avif", "AVIF")]
     [InlineData("heic", "HEIF")]
     [InlineData("jxl-codestream", "JPEG XL")]
-    [InlineData("bmp", "BMP")]
     [InlineData("ico", "ICO")]
     [InlineData("psd", "PSD")]
     [InlineData("qoi", "QOI")]
