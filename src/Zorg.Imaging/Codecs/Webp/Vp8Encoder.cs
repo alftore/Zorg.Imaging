@@ -61,6 +61,12 @@ internal sealed class Vp8Encoder
     private readonly int _uvAc;
     private readonly long _lambda;
     private readonly long _lambdaSubblock;
+
+    // Lambda for mode bits alone, raised above lambda (by ModePrice) for a picture whose modes would not otherwise fit
+    // the first partition: every mode decision then weighs its mode bits higher, and cheaper modes win where they cost
+    // least in distortion.
+    private long _modeLambda;
+    private long _modeLambdaSubblock;
     private readonly int _wholeCandidates;
     private readonly int _subblockCandidates;
     private readonly int _effort;
@@ -109,6 +115,18 @@ internal sealed class Vp8Encoder
         // Distortion is in squared pixel steps and bits in 1/256 of a bit, so lambda carries 1/256 too.
         _lambda = Math.Max((long)_y1Ac * _y1Ac * 3 / 16, 1);
         _lambdaSubblock = Math.Max((long)_y1Ac * _y1Ac * 3 / 16, 1);
+        _modeLambda = _lambda;
+        _modeLambdaSubblock = _lambdaSubblock;
+    }
+
+    // The price of a mode bit against a token bit, in sixteenths: 16 is the same price.
+    private int ModePrice
+    {
+        init
+        {
+            _modeLambda = _lambda * value / 16;
+            _modeLambdaSubblock = _lambdaSubblock * value / 16;
+        }
     }
 
     // The first partition's room for macroblock modes, in 1/256 of a bit: its limit less the rest of the frame header.
@@ -138,12 +156,15 @@ internal sealed class Vp8Encoder
     /// <paramref name="filterLevel"/>, or chosen when it is -1.</summary>
     internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit, int filterLevel)
     {
-        // Subblock modes take most of the first partition, which holds at most 512 KB. When a picture of tens of
-        // megapixels needs more, it is coded again with each row given a share of the room in proportion to the mode bits
-        // it took, less one macroblock's most so a row that spends its share at its last macroblock still fits; a row
-        // that runs ahead of its share codes whole-block luma until it is back within it. Without subblock modes at all
-        // as a last resort.
-        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel };
+        // Subblock modes take most of the first partition, which holds at most 512 KB. For a picture of tens of
+        // megapixels the modes' bits are estimated first, and if they would not fit, every mode decision prices mode
+        // bits higher (ChooseModePrice), so the picture is coded once and spends fewer bits on modes where that costs
+        // least. If it still doesn't fit, it is coded again with each row given a share of the room in proportion to the
+        // mode bits it took, less one macroblock's most so a row that spends its share at its last macroblock still
+        // fits; a row that runs ahead of its share codes whole-block luma until it is back within it. Without subblock
+        // modes at all as a last resort.
+        int price = ChooseModePrice(y, u, v, width, height, quantiser, effort, partitionLimit);
+        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
         encoder.EncodeRows();
         byte[]? frame = encoder.Write();
         if (frame is not null)
@@ -160,7 +181,7 @@ internal sealed class Vp8Encoder
 
         foreach (bool subblocks in new[] { effort > 0, false })
         {
-            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel };
+            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
             encoder.EncodeRows();
             frame = encoder.Write();
             if (frame is not null)
@@ -172,6 +193,109 @@ internal sealed class Vp8Encoder
         throw new NotSupportedException(string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
             $"A {width} x {height} picture has too many macroblocks for lossy WebP's first partition (512 KB); save it smaller or as lossless WebP."));
+    }
+
+    // The mode price for a picture: 16 (a mode bit costs what a token bit does) unless the picture has so many
+    // macroblocks that its modes may not fit the first partition. Then the modes' bits are estimated from sample rows,
+    // and if they would not fit, the price rises until the estimate is within the room, so the picture is coded once
+    // with dearer modes instead of twice with a budget.
+    private static int ChooseModePrice(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit)
+    {
+        long macroblocks = (long)((width + 15) / 16) * ((height + 15) / 16);
+        long room = (((partitionLimit - 1L) * 8) - HeaderReserveBits) * 256;
+        if (effort == 0 || room / macroblocks >= MayOverflowBits || height <= 16)
+        {
+            return 16;
+        }
+
+        // Aim a little inside the room: the estimate is within about 1% of the picture on photos and on noise.
+        long target = room / 50 * 49;
+        long bits = EstimateModeBits(y, u, v, width, height, quantiser, effort, 16);
+        if (bits <= target)
+        {
+            return 16;
+        }
+
+        // The modes' bits fall smoothly as the price rises, close to a power of it, so each guess is where that curve
+        // meets the target: first from the dearest price that doesn't fit, with the exponent of the last step (a quarter,
+        // typical of photos, to start); once a price fits, between it and the dearest that doesn't, until the fitting one
+        // uses most of the room.
+        int low = 16;
+        long lowBits = bits;
+        int high = 0;
+        long highBits = 0;
+        double exponent = 0.25;
+        for (int step = 0; step < 8; step++)
+        {
+            int next;
+            if (high == 0)
+            {
+                if (low >= MaxModePrice)
+                {
+                    break;
+                }
+
+                next = Math.Clamp((int)Math.Ceiling(low * Math.Pow((double)lowBits / target, 1 / exponent)), low + 1, MaxModePrice);
+            }
+            else
+            {
+                if (highBits >= target / 25 * 24 || high - low <= Math.Max(low / 16, 1))
+                {
+                    break;
+                }
+
+                double along = Math.Log((double)lowBits / target) / Math.Log((double)lowBits / highBits);
+                next = Math.Clamp((int)Math.Ceiling(low * Math.Pow((double)high / low, along)), low + 1, high - 1);
+            }
+
+            long nextBits = EstimateModeBits(y, u, v, width, height, quantiser, effort, next);
+            if (nextBits <= target)
+            {
+                (high, highBits) = (next, nextBits);
+            }
+            else
+            {
+                if (high == 0)
+                {
+                    exponent = nextBits < lowBits ? Math.Clamp(Math.Log((double)lowBits / nextBits) / Math.Log((double)next / low), 0.05, 1) : 0.05;
+                }
+
+                (low, lowBits) = (next, nextBits);
+            }
+        }
+
+        return high > 0 ? high : MaxModePrice;
+    }
+
+    // The dearest mode price tried: a mode bit at sixteen token bits.
+    private const int MaxModePrice = 256;
+
+    // Below this much room a macroblock (in 1/256 of a bit), modes are estimated before coding: 128 bits, about twice
+    // what photos at high quality need.
+    private const long MayOverflowBits = 128 * 256;
+
+    // The macroblock modes' bits, in 1/256 of a bit, that the whole picture would take at a mode price, estimated from
+    // eight sample rows spread evenly down it. Each is coded on its own below the row above it, which is coded too but
+    // not counted, so the sample row's predictions and contexts are those it has in the picture.
+    private static long EstimateModeBits(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int price)
+    {
+        const int Samples = 8;
+        int mbWide = (width + 15) / 16;
+        int mbHigh = (height + 15) / 16;
+        long[] bits = new long[Samples];
+        Processing.Parallelism.For(Samples, k =>
+        {
+            int row = Math.Clamp((int)((((2L * k) + 1) * mbHigh) / (2 * Samples)), 1, mbHigh - 1);
+            int first = row - 1;
+            byte[] bandY = y.AsSpan(first * 16 * mbWide * 16, 2 * 16 * mbWide * 16).ToArray();
+            byte[] bandU = u.AsSpan(first * 8 * mbWide * 8, 2 * 8 * mbWide * 8).ToArray();
+            byte[] bandV = v.AsSpan(first * 8 * mbWide * 8, 2 * 8 * mbWide * 8).ToArray();
+            var band = new Vp8Encoder(bandY, bandU, bandV, width, 2 * 16, quantiser, effort) { _subblocks = true, ModePrice = price };
+            band.EncodeRows();
+            bits[k] = band._rowModeBits[1];
+        });
+
+        return bits.Sum() * mbHigh / Samples;
     }
 
     // Quality to quantiser index, between these points: fitted so a quality gives about cwebp's file size for the same
@@ -344,7 +468,7 @@ internal sealed class Vp8Encoder
         for (int mode = DcPred; mode <= TmPred; mode++)
         {
             PredictBlock(_y, x0, y0, 16, mode, mx == 0, my == 0);
-            rank[mode] = Rank(PredictionError(_sourceY, (y0 * _strideY) + x0, _strideY, _y, x0, y0, 16) + (_lambda * ModeCost(mode)), mode);
+            rank[mode] = Rank(PredictionError(_sourceY, (y0 * _strideY) + x0, _strideY, _y, x0, y0, 16) + (_modeLambda * ModeCost(mode)), mode);
         }
 
         SortFirst(rank, _wholeCandidates);
@@ -356,7 +480,7 @@ internal sealed class Vp8Encoder
             PredictBlock(_y, x0, y0, 16, mode, mx == 0, my == 0);
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
-            long score = WholeLuma(x0, y0, levels, contextLeft, contextAbove, out _) + (_lambda * ModeCost(mode));
+            long score = WholeLuma(x0, y0, levels, contextLeft, contextAbove, out _) + (_modeLambda * ModeCost(mode));
             if (score < best)
             {
                 best = score;
@@ -380,7 +504,7 @@ internal sealed class Vp8Encoder
         Span<short> trialLevels = stackalloc short[4 * 16];
         Span<byte> trialReconstructions = stackalloc byte[4 * 16];
         Span<long> trialDistortions = stackalloc long[4];
-        long subTotal = subblocks ? _lambda * ModeCost(BPred) : long.MaxValue;
+        long subTotal = subblocks ? _modeLambda * ModeCost(BPred) : long.MaxValue;
         int subModeBits = ModeCost(BPred);
         for (int i = 0; i < 16 && subTotal < best; i++)
         {
@@ -403,7 +527,7 @@ internal sealed class Vp8Encoder
                 Span<byte> prediction = predictions.Slice(mode * 16, 16);
                 PredictSubblock(edge, mode, prediction);
                 long error = (long)SquaredError(source, Vector128.Create<byte>(prediction)) << 8;
-                subRank[mode] = Rank(error + (_lambdaSubblock * modeCosts[mode]), mode);
+                subRank[mode] = Rank(error + (_modeLambdaSubblock * modeCosts[mode]), mode);
             }
 
             SortFirst(subRank, _subblockCandidates);
@@ -423,8 +547,7 @@ internal sealed class Vp8Encoder
                 {
                     int mode = (int)(subRank[group + k] & 0xF);
                     ReadOnlySpan<short> candidate = trialLevels.Slice(k * 16, 16);
-                    int bits = BlockCost(candidate, 3, 0, context) + modeCosts[mode];
-                    long score = trialDistortions[k] + (_lambdaSubblock * bits);
+                    long score = trialDistortions[k] + (_lambdaSubblock * BlockCost(candidate, 3, 0, context)) + (_modeLambdaSubblock * modeCosts[mode]);
                     if (score < bestSub)
                     {
                         bestSub = score;
@@ -786,7 +909,7 @@ internal sealed class Vp8Encoder
             PredictBlock(_v, cx, cy, 8, mode, mx == 0, my == 0);
             long error = PredictionError(_sourceU, (cy * _strideUv) + cx, _strideUv, _u, cx, cy, 8)
                 + PredictionError(_sourceV, (cy * _strideUv) + cx, _strideUv, _v, cx, cy, 8);
-            rank[mode] = Rank(error + (_lambda * ChromaModeCosts[mode]), mode);
+            rank[mode] = Rank(error + (_modeLambda * ChromaModeCosts[mode]), mode);
         }
 
         SortFirst(rank, _wholeCandidates);
@@ -799,7 +922,7 @@ internal sealed class Vp8Encoder
             PredictBlock(_v, cx, cy, 8, mode, mx == 0, my == 0);
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
-            long score = WholeChroma(cx, cy, levels, contextLeft, contextAbove, out _) + (_lambda * ChromaModeCosts[mode]);
+            long score = WholeChroma(cx, cy, levels, contextLeft, contextAbove, out _) + (_modeLambda * ChromaModeCosts[mode]);
             if (score < best)
             {
                 best = score;
