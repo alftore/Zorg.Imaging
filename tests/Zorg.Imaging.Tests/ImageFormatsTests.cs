@@ -389,25 +389,25 @@ public class ImageFormatsTests
     }
 
     [Fact]
-    public async Task IdentifyAsync_of_a_tiff_on_a_non_seekable_stream_is_UnsupportedFormat()
+    public async Task IdentifyAsync_of_a_psd_on_a_non_seekable_stream_is_UnsupportedFormat()
     {
-        using NonSeekableStream stream = new(new MemoryStream(Sequence(500, "tiff-le")), 3);
+        using NonSeekableStream stream = new(new MemoryStream(Sequence(500, "psd")), 3);
 
         IdentifyResult result = await Image.IdentifyAsync(stream, cancellationToken: Token);
 
         Assert.Equal(IdentifyStatus.UnsupportedFormat, result.Status);
-        Assert.Same(ImageFormat.Tiff, result.Format);
+        Assert.Same(ImageFormat.Psd, result.Format);
     }
 
     [Fact]
-    public async Task IdentifyAsync_of_a_tiff_on_a_seekable_stream_is_UnsupportedFormat()
+    public async Task IdentifyAsync_of_a_qoi_on_a_seekable_stream_is_UnsupportedFormat()
     {
-        using MemoryStream stream = new(Sequence(500, "tiff-be"));
+        using MemoryStream stream = new(Sequence(500, "qoi"));
 
         IdentifyResult result = await Image.IdentifyAsync(stream, cancellationToken: Token);
 
         Assert.Equal(IdentifyStatus.UnsupportedFormat, result.Status);
-        Assert.Same(ImageFormat.Tiff, result.Format);
+        Assert.Same(ImageFormat.Qoi, result.Format);
     }
 
     [Fact]
