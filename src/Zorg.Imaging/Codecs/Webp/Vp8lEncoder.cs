@@ -112,20 +112,25 @@ internal static class Vp8lEncoder
         var bits = new Vp8lBitWriter((argb.Length / 2) + 1024);
         uint[] pixels = (uint[])argb.Clone();
         bool greenOnly = GreenOnly(pixels);
-        if (!greenOnly && SubtractGreenHelps(pixels, width))
+        int tileBits = effort <= 1 ? 5 : 3;
+        (bool predict, bool subtractGreen) = ChooseTransforms(pixels, width, height, tileBits);
+        if (!greenOnly && subtractGreen)
         {
             bits.Write(1, 1);
             bits.Write((uint)Vp8lDecoder.TransformType.SubtractGreen, 2);
             SubtractGreen(pixels);
         }
 
-        int tileBits = effort <= 1 ? 5 : 4;
-        bits.Write(1, 1);
-        bits.Write((uint)Vp8lDecoder.TransformType.Predictor, 2);
-        bits.Write((uint)(tileBits - 2), 3);
-        (pixels, uint[] modes) = Predict(pixels, width, height, tileBits, effort);
-        EncodeImage(bits, modes, DivideUp(width, tileBits), effort, main: false);
-        if (effort >= 1 && !greenOnly)
+        if (predict)
+        {
+            bits.Write(1, 1);
+            bits.Write((uint)Vp8lDecoder.TransformType.Predictor, 2);
+            bits.Write((uint)(tileBits - 2), 3);
+            (pixels, uint[] modes) = Predict(pixels, width, height, tileBits, effort);
+            EncodeImage(bits, modes, DivideUp(width, tileBits), effort, main: false);
+        }
+
+        if (effort >= 1 && !greenOnly && predict)
         {
             int colourBits = 5;
             bits.Write(1, 1);
@@ -143,47 +148,61 @@ internal static class Vp8lEncoder
     // Whether subtracting green makes the image cheaper, judged as libwebp's analysis does: the entropy of each pixel's
     // difference from its left neighbour, channel by channel, with and without green taken from red and blue. Photos,
     // whose channels move together, gain; flat graphics often lose.
-    internal static bool SubtractGreenHelps(uint[] pixels, int width)
+    // Which transforms to use, from the entropy each choice would leave (libwebp chooses the same way; this is our own
+    // account of it): per channel, the entropy of the pixels themselves and of their differences from the pixel to the
+    // left, each as they are and with green subtracted, over the pixels that don't simply repeat their left or upper
+    // neighbour (those become copies whatever the transforms); the predictor also pays for its modes, a choice of 14 a
+    // tile, and with subtract-green 24 counting cross-colour. Graphics and screenshots repeat exact colours, which the
+    // predictor's residuals would hide from copies and the colour cache: always predicting made such files up to 2.5
+    // times the size.
+    internal static (bool Predict, bool SubtractGreen) ChooseTransforms(uint[] p, int width, int height, int tileBits)
     {
-        int[] plain = new int[4 * 256];
-        int[] subtracted = new int[4 * 256];
+        // Rows of 256: alpha, red, green and blue as they are, then the same of the differences, then red and blue less
+        // green as they are and of the differences.
+        int[] counts = new int[12 * 256];
         uint previous = 0;
-        uint previousSubtracted = 0;
-        for (int i = 0; i < pixels.Length; i++)
+        for (int i = 0; i < p.Length; i++)
         {
-            uint p = pixels[i];
-            uint g = (p >> 8) & 0xFF;
-            uint sub = (p & 0xFF00FF00u) | ((((p >> 16) - g) & 0xFF) << 16) | ((p - g) & 0xFF);
-            if (i % width != 0)
+            uint pixel = p[i];
+            int x = i % width;
+            if ((x > 0 && pixel == p[i - 1]) || (i >= width && pixel == p[i - width]))
             {
-                uint d = Subtract(p, previous);
-                uint ds = Subtract(sub, previousSubtracted);
-                plain[(int)(d >> 24)]++;
-                plain[256 + (int)((d >> 16) & 0xFF)]++;
-                plain[512 + (int)((d >> 8) & 0xFF)]++;
-                plain[768 + (int)(d & 0xFF)]++;
-                subtracted[(int)(ds >> 24)]++;
-                subtracted[256 + (int)((ds >> 16) & 0xFF)]++;
-                subtracted[512 + (int)((ds >> 8) & 0xFF)]++;
-                subtracted[768 + (int)(ds & 0xFF)]++;
+                previous = pixel;
+                continue;
             }
 
-            previous = p;
-            previousSubtracted = sub;
+            uint d = Subtract(pixel, previous);
+            previous = pixel;
+            uint g = (pixel >> 8) & 0xFF;
+            uint dg = (d >> 8) & 0xFF;
+            counts[(int)(pixel >> 24)]++;
+            counts[256 + (int)((pixel >> 16) & 0xFF)]++;
+            counts[512 + (int)g]++;
+            counts[768 + (int)(pixel & 0xFF)]++;
+            counts[1024 + (int)(d >> 24)]++;
+            counts[1280 + (int)((d >> 16) & 0xFF)]++;
+            counts[1536 + (int)dg]++;
+            counts[1792 + (int)(d & 0xFF)]++;
+            counts[2048 + (int)((((pixel >> 16) & 0xFF) - g) & 0xFF)]++;
+            counts[2304 + (int)(((pixel & 0xFF) - g) & 0xFF)]++;
+            counts[2560 + (int)((((d >> 16) & 0xFF) - dg) & 0xFF)]++;
+            counts[2816 + (int)(((d & 0xFF) - dg) & 0xFF)]++;
         }
 
-        return Bits(subtracted) < Bits(plain);
-
-        static double Bits(int[] counts)
+        // A zero difference in every predicted row, so a picture of one colour still prices them.
+        foreach (int row in new[] { 4, 5, 6, 7, 10, 11 })
         {
-            double total = 0;
-            for (int channel = 0; channel < 4; channel++)
-            {
-                total += Entropy(counts.AsSpan(channel * 256, 256).ToArray());
-            }
-
-            return total;
+            counts[row * 256]++;
         }
+
+        double Row(int row) => Entropy(counts.AsSpan(row * 256, 256).ToArray());
+        double tiles = (double)DivideUp(width, tileBits) * DivideUp(height, tileBits);
+        double direct = Row(0) + Row(1) + Row(2) + Row(3);
+        double predicted = Row(4) + Row(5) + Row(6) + Row(7) + (tiles * Math.Log2(14));
+        double green = Row(0) + Row(2) + Row(8) + Row(9);
+        double both = Row(4) + Row(6) + Row(10) + Row(11) + (tiles * Math.Log2(24));
+        double least = Math.Min(Math.Min(direct, predicted), Math.Min(green, both));
+        return least == direct ? (false, false) : least == predicted ? (true, false) : least == green ? (false, true) : (true, true);
     }
 
     // Whether every pixel's red and blue are 0.
@@ -1135,7 +1154,9 @@ internal static class Vp8lEncoder
     private sealed class Histogram(int cacheBits)
     {
         // A rough cost of writing one code's lengths in the header, per symbol used.
-        private const double HeaderBitsPerSymbol = 4;
+        // A code's header, priced a symbol at a time: 4 undercounted the code-length code on small images, which then
+        // split into too many groups (a 64 x 64 icon spent a third of its bytes on code headers).
+        private const double HeaderBitsPerSymbol = 8;
 
         public int CacheBits { get; } = cacheBits;
 
@@ -1292,7 +1313,7 @@ internal static class Vp8lEncoder
                 }
             }
 
-            return used <= 1 ? 4 : TimesLog2(total) - sum + (used * HeaderBitsPerSymbol);
+            return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol);
         }
 
         private static double MergedArrayBits(int[] a, int[] b)
@@ -1311,7 +1332,7 @@ internal static class Vp8lEncoder
                 }
             }
 
-            return used <= 1 ? 4 : TimesLog2(total) - sum + (used * HeaderBitsPerSymbol);
+            return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol);
         }
 
         // c log2 c, from a table for the small counts that most symbols have.
@@ -1849,19 +1870,25 @@ internal static class Vp8lEncoder
         return Entropy(green) + Entropy(red) + Entropy(blue) + Entropy(alpha) + (cacheBits == 0 ? 0 : 4 << cacheBits);
     }
 
+    // The bits a prefix code needs for these counts: their Shannon entropy, but at least a bit a symbol once two or more
+    // are used, as no prefix code does better. Without the floor a nearly constant channel seemed to cost nothing, and
+    // the colour cache (one symbol a pixel) seemed not worth having on grey textures: 18% larger files.
     private static double Entropy(int[] counts)
     {
         long total = 0;
         double sum = 0;
+        int used = 0;
         foreach (int c in counts)
         {
             if (c > 0)
             {
                 total += c;
                 sum += c * Math.Log2(c);
+                used++;
             }
         }
 
-        return total == 0 ? 0 : (total * Math.Log2(total)) - sum;
+        double bits = total == 0 ? 0 : (total * Math.Log2(total)) - sum;
+        return used >= 2 ? Math.Max(bits, total) : bits;
     }
 }
