@@ -326,22 +326,53 @@ public class WebpEncoderTests
         using (Zorg.Imaging.Processing.Parallelism.Use(cores))
         {
             unlimited = Vp8Encoder.Encode(y, u, v, Width, Height, Vp8Encoder.QuantiserFor(95), 4);
-            frame = Vp8Encoder.Encode(y, u, v, Width, Height, Vp8Encoder.QuantiserFor(95), 4, limit);
+            frame = Vp8Encoder.Encode(y, u, v, Width, Height, Vp8Encoder.QuantiserFor(95), 4, limit, -1);
         }
 
         Assert.True(FirstPartition(unlimited) > limit, "the picture should need more than the limit");
         int first = FirstPartition(frame);
         Assert.InRange(first, limit - 4_500, limit - 1);
 
-        // In a RIFF container, it decodes to the picture's size, and close to the picture coded without a limit.
+        using Image decoded = Image.Decode(Riff(frame));
+        Assert.Equal((Width, Height), (decoded.Width, decoded.Height));
+    }
+
+    [Theory]
+    [InlineData(80)]
+    [InlineData(50)]
+    [InlineData(15)]
+    public void The_chosen_loop_filter_level_is_as_close_to_the_source_as_any_fixed_one(int quality)
+    {
+        // The search measures bands of rows through the decoder's filter; the whole decoded picture should then be at
+        // least as close to the source as with any fixed level (bits are the same whatever the level).
+        using Image photo = JpegEncoderTests.Photo(400, 304, PixelFormat.Rgba32, seed: 21);
+        (uint[] argb, _) = Zorg.Imaging.Processing.Argb.FromImage(photo);
+        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, photo.Width, photo.Height);
+        int quantiser = Vp8Encoder.QuantiserFor(quality);
+        byte[] chosen = Vp8Encoder.Encode(y, u, v, photo.Width, photo.Height, quantiser, 4, 1 << 19, -1);
+        using Image best = Image.Decode(Riff(chosen), AsRgba);
+        double chosenPsnr = PngLossyTests.Psnr(photo, best);
+        foreach (int level in new[] { 0, 4, 10, 20, 35, 63 })
+        {
+            byte[] fixedFrame = Vp8Encoder.Encode(y, u, v, photo.Width, photo.Height, quantiser, 4, 1 << 19, level);
+            Assert.Equal(chosen.Length, fixedFrame.Length);
+            using Image other = Image.Decode(Riff(fixedFrame), AsRgba);
+            Assert.True(chosenPsnr >= PngLossyTests.Psnr(photo, other) - 0.05, $"level {level}: {PngLossyTests.Psnr(photo, other):F2} dB against {chosenPsnr:F2}");
+        }
+    }
+
+    private static readonly DecodeOptions AsRgba = new() { PixelFormat = PixelFormat.Rgba32 };
+
+    // A VP8 frame in a RIFF container, as a file the decoder reads.
+    private static byte[] Riff(byte[] frame)
+    {
         byte[] file = new byte[20 + frame.Length + (frame.Length & 1)];
         "RIFF"u8.CopyTo(file);
         BinaryPrimitives.WriteInt32LittleEndian(file.AsSpan(4), file.Length - 8);
         "WEBPVP8 "u8.CopyTo(file.AsSpan(8));
         BinaryPrimitives.WriteInt32LittleEndian(file.AsSpan(16), frame.Length);
         frame.CopyTo(file, 20);
-        using Image decoded = Image.Decode(file);
-        Assert.Equal((Width, Height), (decoded.Width, decoded.Height));
+        return file;
     }
 
     private static int FirstPartition(byte[] frame) => (frame[0] | (frame[1] << 8) | (frame[2] << 16)) >> 5;

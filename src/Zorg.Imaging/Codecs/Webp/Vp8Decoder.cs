@@ -1199,7 +1199,7 @@ internal sealed class Vp8Decoder
         }
     }
 
-    private static void FilterNormal(Plane plane, int x0, int y0, int size, int mx, int my, int level, int interior, int hev, bool inner)
+    internal static void FilterNormal(Plane plane, int x0, int y0, int size, int mx, int my, int level, int interior, int hev, bool inner)
     {
         if (mx > 0)
         {

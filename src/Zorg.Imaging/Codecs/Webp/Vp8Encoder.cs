@@ -61,8 +61,10 @@ internal sealed class Vp8Encoder
     private readonly long _lambdaSubblock;
     private readonly int _wholeCandidates;
     private readonly int _subblockCandidates;
+    private readonly int _effort;
     private long[]? _rowModeBudget;
     private int _partitionLimit = 1 << 19;
+    private int _fixedFilterLevel = -1;
     private long[] _rowModeBits = [];
     private bool _subblocks = true;
     private int[] _progress = [];
@@ -71,6 +73,7 @@ internal sealed class Vp8Encoder
     private Vp8Encoder(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort)
     {
         // How many modes, ranked by prediction error alone, get the full test of transform, tokens and reconstruction.
+        _effort = effort;
         _wholeCandidates = effort >= 5 ? 4 : effort >= 2 ? 2 : 1;
         _subblockCandidates = effort switch { 0 => 1, 1 => 1, 2 => 2, 3 => 3, 4 => 3, 5 => 5, _ => 10 };
 
@@ -126,18 +129,19 @@ internal sealed class Vp8Encoder
     /// <exception cref="NotSupportedException">The macroblock modes don't fit the 512 KB the first partition can hold,
     /// even without subblock modes: only for pictures of tens of megapixels.</exception>
     public static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort) =>
-        Encode(y, u, v, width, height, quantiser, effort, 1 << 19);
+        Encode(y, u, v, width, height, quantiser, effort, 1 << 19, -1);
 
     /// <summary>As the other overload, with the first partition held below <paramref name="partitionLimit"/> bytes
-    /// (the format's 512 KB, or less to test the budget on a small picture).</summary>
-    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit)
+    /// (the format's 512 KB, or less to test the budget on a small picture), and the loop filter at
+    /// <paramref name="filterLevel"/>, or chosen when it is -1.</summary>
+    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit, int filterLevel)
     {
         // Subblock modes take most of the first partition, which holds at most 512 KB. When a picture of tens of
         // megapixels needs more, it is coded again with each row given a share of the room in proportion to the mode bits
         // it took, less one macroblock's most so a row that spends its share at its last macroblock still fits; a row
         // that runs ahead of its share codes whole-block luma until it is back within it. Without subblock modes at all
         // as a last resort.
-        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = effort > 0, _partitionLimit = partitionLimit };
+        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel };
         encoder.EncodeRows();
         byte[]? frame = encoder.Write();
         if (frame is not null)
@@ -154,7 +158,7 @@ internal sealed class Vp8Encoder
 
         foreach (bool subblocks in new[] { effort > 0, false })
         {
-            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit };
+            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel };
             encoder.EncodeRows();
             frame = encoder.Write();
             if (frame is not null)
@@ -1493,7 +1497,7 @@ internal sealed class Vp8Encoder
         header.WriteFlag(false);    // clamping type
         header.WriteFlag(false);    // segmentation
         header.WriteFlag(false);    // normal loop filter
-        header.WriteLiteral(FilterLevel(), 6);
+        header.WriteLiteral(ChooseFilterLevel(), 6);
         header.WriteLiteral(0, 3);  // sharpness
         header.WriteFlag(false);    // no filter deltas
         header.WriteLiteral(0, 2);  // one token partition
@@ -1638,6 +1642,141 @@ internal sealed class Vp8Encoder
 
     // A loop filter level for the quantiser: stronger as the steps grow, as blocking grows with them.
     private int FilterLevel() => Math.Clamp((_y1Ac * 3 / 8) + 2, 0, 63);
+
+    // The loop filter level that brings the decoded picture closest to the source. The filter runs after the frame is
+    // rebuilt, and intra prediction reads unfiltered pixels, so the level changes only what the decoder shows, not the
+    // bits: levels from none to a little past the quantiser's (FilterLevel) are tried on bands of macroblock rows, and
+    // the one with the least squared error over Y, U and V kept (the lower on a tie). Effort 0 takes FilterLevel.
+    private int ChooseFilterLevel()
+    {
+        int formula = FilterLevel();
+        if (_fixedFilterLevel >= 0)
+        {
+            return _fixedFilterLevel;
+        }
+
+        if (_effort == 0)
+        {
+            return formula;
+        }
+
+        int[] candidates = [.. new[] { 0, formula / 4, formula / 2, formula * 3 / 4, formula, Math.Min(formula * 5 / 4, 63) }.Distinct()];
+
+        // About a quarter of a megapixel of luma measured, in bands of up to four macroblock rows spread evenly; each
+        // band is filtered with the rows either side, so its rows end as the decoder leaves them.
+        int measured = Math.Min(Math.Max((1 << 18) / (_mbWide * 256), 4), _mbHigh);
+        int bandCount = (measured + 3) / 4;
+        var spans = new (int Start, int Count)[bandCount];
+        for (int k = 0; k < bandCount; k++)
+        {
+            int count = Math.Min(4, measured - (k * 4));
+            int start = (int)(((long)k * _mbHigh) / bandCount);
+            spans[k] = (start, Math.Min(count, _mbHigh - start));
+        }
+
+        long[] errors = new long[candidates.Length];
+        int bands = Processing.Parallelism.Bands((long)measured * _mbWide * 256 * 2 * candidates.Length, candidates.Length);
+        Processing.Parallelism.For(bands, band =>
+        {
+            for (int c = band; c < candidates.Length; c += bands)
+            {
+                long error = 0;
+                foreach ((int start, int count) in spans)
+                {
+                    error += FilteredError(start, count, candidates[c]);
+                }
+
+                errors[c] = error;
+            }
+        });
+
+        int best = 0;
+        for (int c = 1; c < candidates.Length; c++)
+        {
+            if (errors[c] < errors[best] || (errors[c] == errors[best] && candidates[c] < candidates[best]))
+            {
+                best = c;
+            }
+        }
+
+        return candidates[best];
+    }
+
+    // The squared error over Y, U and V of a run of macroblock rows as the decoder shows them at a filter level: the rows
+    // and those either side copied, filtered in the decoder's order, and the run compared with the source within the
+    // picture.
+    private long FilteredError(int first, int rows, int level)
+    {
+        int top = Math.Max(first - 1, 0);
+        int bottom = Math.Min(first + rows, _mbHigh - 1);
+        int count = bottom - top + 1;
+        var y = new Plane(_mbWide * 16, count * 16, extra: 4);
+        var u = new Plane(_mbWide * 8, count * 8, extra: 0);
+        var v = new Plane(_mbWide * 8, count * 8, extra: 0);
+        for (int line = 0; line < count * 16; line++)
+        {
+            _y.Row((top * 16) + line)[.._strideY].CopyTo(y.Row(line));
+        }
+
+        for (int line = 0; line < count * 8; line++)
+        {
+            _u.Row((top * 8) + line)[.._strideUv].CopyTo(u.Row(line));
+            _v.Row((top * 8) + line)[.._strideUv].CopyTo(v.Row(line));
+        }
+
+        if (level > 0)
+        {
+            int hev = (level >= 15 ? 1 : 0) + (level >= 40 ? 1 : 0);
+            for (int my = 0; my < count; my++)
+            {
+                for (int mx = 0; mx < _mbWide; mx++)
+                {
+                    Macroblock mb = _macroblocks[((top + my) * _mbWide) + mx];
+                    bool inner = mb.NonZero != 0 || mb.YMode == BPred;
+                    FilterNormal(y, mx * 16, my * 16, 16, mx, my, level, level, hev, inner);
+                    FilterNormal(u, mx * 8, my * 8, 8, mx, my, level, level, hev, inner);
+                    FilterNormal(v, mx * 8, my * 8, 8, mx, my, level, level, hev, inner);
+                }
+            }
+        }
+
+        int local = first - top;
+        long error = 0;
+        int lumaRows = Math.Min(rows * 16, _height - (first * 16));
+        for (int line = 0; line < lumaRows; line++)
+        {
+            error += SquaredError(_sourceY.AsSpan((((first * 16) + line) * _strideY), _width), y.Row((local * 16) + line)[.._width]);
+        }
+
+        int chromaWidth = (_width + 1) / 2;
+        int chromaRows = Math.Min(rows * 8, ((_height + 1) / 2) - (first * 8));
+        for (int line = 0; line < chromaRows; line++)
+        {
+            int at = ((first * 8) + line) * _strideUv;
+            error += SquaredError(_sourceU.AsSpan(at, chromaWidth), u.Row((local * 8) + line)[..chromaWidth]);
+            error += SquaredError(_sourceV.AsSpan(at, chromaWidth), v.Row((local * 8) + line)[..chromaWidth]);
+        }
+
+        return error;
+    }
+
+    private static long SquaredError(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
+    {
+        long sum = 0;
+        int i = 0;
+        for (; i <= a.Length - 16; i += 16)
+        {
+            sum += SquaredError(Vector128.Create<byte>(a.Slice(i, 16)), Vector128.Create<byte>(b.Slice(i, 16)));
+        }
+
+        for (; i < a.Length; i++)
+        {
+            int d = a[i] - b[i];
+            sum += d * d;
+        }
+
+        return sum;
+    }
 
     private Span<short> Levels(in Macroblock mb) => _levels.AsSpan(mb.Index * 25 * 16, 25 * 16);
 
