@@ -472,19 +472,31 @@ internal sealed class Vp8Encoder
         }
 
         SortFirst(rank, _wholeCandidates);
+        // The best candidate's reconstruction, levels, contexts and non-zero blocks are kept, to put back if it wins.
         long best = long.MaxValue;
         int bestMode = DcPred;
+        Span<byte> bestPixels = stackalloc byte[16 * 16];
+        Span<short> bestLevels = stackalloc short[17 * 16];
+        Span<byte> bestLeft = stackalloc byte[9];
+        Span<byte> bestAbove = stackalloc byte[9];
+        uint bestWholeNonZero = 0;
         for (int k = 0; k < _wholeCandidates; k++)
         {
             int mode = (int)(rank[k] & 0xF);
             PredictBlock(_y, x0, y0, 16, mode, mx == 0, my == 0);
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
-            long score = WholeLuma(x0, y0, levels, contextLeft, contextAbove, out _) + (_modeLambda * ModeCost(mode));
-            if (score < best)
+            long modeScore = _modeLambda * ModeCost(mode);
+            long score = WholeLuma(x0, y0, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero);
+            if (score != long.MaxValue && score + modeScore < best)
             {
-                best = score;
+                best = score + modeScore;
                 bestMode = mode;
+                SaveBlock(_y, x0, y0, 16, bestPixels);
+                levels.CopyTo(bestLevels);
+                contextLeft.CopyTo(bestLeft);
+                contextAbove.CopyTo(bestAbove);
+                bestWholeNonZero = nonZero;
             }
         }
 
@@ -522,11 +534,16 @@ internal sealed class Vp8Encoder
             FillSubblockEdge(_y, edge, bx, by, (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
             Gather4x4(_sourceY, (by * _strideY) + bx, _strideY, original);
             Vector128<byte> source = Vector128.Create<byte>(original);
+            // All ten predicted before any is read back as a vector: the predictors write single bytes, and a vector
+            // load straight after them waits for those stores to drain.
             for (int mode = BDcPred; mode <= BHuPred; mode++)
             {
-                Span<byte> prediction = predictions.Slice(mode * 16, 16);
-                PredictSubblock(edge, mode, prediction);
-                long error = (long)SquaredError(source, Vector128.Create<byte>(prediction)) << 8;
+                PredictSubblock(edge, mode, predictions.Slice(mode * 16, 16));
+            }
+
+            for (int mode = BDcPred; mode <= BHuPred; mode++)
+            {
+                long error = (long)SquaredError(source, Vector128.Create<byte>(predictions.Slice(mode * 16, 16))) << 8;
                 subRank[mode] = Rank(error + (_modeLambdaSubblock * modeCosts[mode]), mode);
             }
 
@@ -547,7 +564,14 @@ internal sealed class Vp8Encoder
                 {
                     int mode = (int)(subRank[group + k] & 0xF);
                     ReadOnlySpan<short> candidate = trialLevels.Slice(k * 16, 16);
-                    long score = trialDistortions[k] + (_lambdaSubblock * BlockCost(candidate, 3, 0, context)) + (_modeLambdaSubblock * modeCosts[mode]);
+                    // Token bits only add to the score, so a candidate already past the best without them can't win.
+                    long floor = trialDistortions[k] + (_modeLambdaSubblock * modeCosts[mode]);
+                    if (floor >= bestSub)
+                    {
+                        continue;
+                    }
+
+                    long score = floor + (_lambdaSubblock * BlockCost(candidate, 3, 0, context));
                     if (score < bestSub)
                     {
                         bestSub = score;
@@ -590,13 +614,14 @@ internal sealed class Vp8Encoder
             return subModeBits;
         }
 
-        // Back to the best whole-block mode: predict and reconstruct it again.
+        // Back to the best whole-block mode, as it was kept.
         mb.YMode = bestMode;
-        PredictBlock(_y, x0, y0, 16, bestMode, mx == 0, my == 0);
-        WholeLuma(x0, y0, levels, leftNonZero, aboveNonZero, out uint nonZeroBits);
-        levels[..(16 * 16)].CopyTo(Levels(mb).Slice(0, 16 * 16));
-        levels.Slice(16 * 16, 16).CopyTo(Levels(mb).Slice(24 * 16, 16));
-        mb.NonZero = nonZeroBits;
+        RestoreBlock(_y, x0, y0, 16, bestPixels);
+        bestLeft.CopyTo(leftNonZero);
+        bestAbove.CopyTo(aboveNonZero);
+        bestLevels[..(16 * 16)].CopyTo(Levels(mb).Slice(0, 16 * 16));
+        bestLevels.Slice(16 * 16, 16).CopyTo(Levels(mb).Slice(24 * 16, 16));
+        mb.NonZero = bestWholeNonZero;
         byte implied = bestMode switch { VPred => BVePred, HPred => BHePred, TmPred => BTmPred, _ => BDcPred };
         aboveModes.Fill(implied);
         leftModes.Fill(implied);
@@ -605,7 +630,7 @@ internal sealed class Vp8Encoder
 
     // One whole-block luma candidate, predicted in the plane: transform, quantise, reconstruct in place, and score.
     // levels gets the 16 Y blocks then the Y2 block; the contexts are updated as the tokens would leave them.
-    private long WholeLuma(int x0, int y0, Span<short> levels, Span<byte> left, Span<byte> above, out uint nonZeroBits)
+    private long WholeLuma(int x0, int y0, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits)
     {
         // The sixteen blocks' predictions are all in the plane already, so the blocks are transformed four at a time:
         // each row of four blocks in the lanes. Only the token costs depend on order, and they are counted after.
@@ -670,6 +695,11 @@ internal sealed class Vp8Encoder
             Span<short> block = levels.Slice(i * 16, 16);
             int context = left[i >> 2] + above[i & 3];
             bits += BlockCost(block, 0, 1, context);
+            if (distortion + (_lambda * bits) >= limit)
+            {
+                return long.MaxValue;
+            }
+
             bool nonZero = HasLevels(block, 1);
             left[i >> 2] = above[i & 3] = (byte)(nonZero ? 1 : 0);
             if (nonZero)
@@ -913,8 +943,15 @@ internal sealed class Vp8Encoder
         }
 
         SortFirst(rank, _wholeCandidates);
+        // The best candidate kept as it was coded, as for luma.
         long best = long.MaxValue;
         int bestMode = DcPred;
+        Span<byte> bestU = stackalloc byte[8 * 8];
+        Span<byte> bestV = stackalloc byte[8 * 8];
+        Span<short> bestLevels = stackalloc short[8 * 16];
+        Span<byte> bestLeft = stackalloc byte[9];
+        Span<byte> bestAbove = stackalloc byte[9];
+        uint bestNonZero = 0;
         for (int k = 0; k < _wholeCandidates; k++)
         {
             int mode = (int)(rank[k] & 0xF);
@@ -922,23 +959,31 @@ internal sealed class Vp8Encoder
             PredictBlock(_v, cx, cy, 8, mode, mx == 0, my == 0);
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
-            long score = WholeChroma(cx, cy, levels, contextLeft, contextAbove, out _) + (_modeLambda * ChromaModeCosts[mode]);
-            if (score < best)
+            long modeScore = _modeLambda * ChromaModeCosts[mode];
+            long score = WholeChroma(cx, cy, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero);
+            if (score != long.MaxValue && score + modeScore < best)
             {
-                best = score;
+                best = score + modeScore;
                 bestMode = mode;
+                SaveBlock(_u, cx, cy, 8, bestU);
+                SaveBlock(_v, cx, cy, 8, bestV);
+                levels.CopyTo(bestLevels);
+                contextLeft.CopyTo(bestLeft);
+                contextAbove.CopyTo(bestAbove);
+                bestNonZero = nonZero;
             }
         }
 
         mb.UvMode = bestMode;
-        PredictBlock(_u, cx, cy, 8, bestMode, mx == 0, my == 0);
-        PredictBlock(_v, cx, cy, 8, bestMode, mx == 0, my == 0);
-        WholeChroma(cx, cy, levels, leftNonZero, aboveNonZero, out uint nonZeroBits);
-        levels.CopyTo(Levels(mb).Slice(16 * 16, 8 * 16));
-        mb.NonZero |= nonZeroBits << 16;
+        RestoreBlock(_u, cx, cy, 8, bestU);
+        RestoreBlock(_v, cx, cy, 8, bestV);
+        bestLeft.CopyTo(leftNonZero);
+        bestAbove.CopyTo(aboveNonZero);
+        bestLevels.CopyTo(Levels(mb).Slice(16 * 16, 8 * 16));
+        mb.NonZero |= bestNonZero << 16;
     }
 
-    private long WholeChroma(int cx, int cy, Span<short> levels, Span<byte> left, Span<byte> above, out uint nonZeroBits)
+    private long WholeChroma(int cx, int cy, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits)
     {
         // The four U blocks in the lanes, then the four V blocks; token costs after, in block order.
         Span<Vector128<int>> e = stackalloc Vector128<int>[16];
@@ -974,6 +1019,11 @@ internal sealed class Vp8Encoder
             int y = (i >> 1) & 1;
             Span<short> block = levels.Slice(i * 16, 16);
             bits += BlockCost(block, 2, 0, left[slot + y] + above[slot + x]);
+            if (distortion + (_lambda * bits) >= limit)
+            {
+                return long.MaxValue;
+            }
+
             bool nonZero = HasLevels(block, 0);
             left[slot + y] = above[slot + x] = (byte)(nonZero ? 1 : 0);
             if (nonZero)
@@ -997,6 +1047,23 @@ internal sealed class Vp8Encoder
         for (int r = 0; r < size; r++)
         {
             plane.Row(y0 + r).Slice(x0, size).CopyTo(into.Slice(r * size, size));
+        }
+    }
+
+    // A size x size block of a plane to a buffer, row by row, and back.
+    private static void SaveBlock(Plane plane, int x0, int y0, int size, Span<byte> into)
+    {
+        for (int r = 0; r < size; r++)
+        {
+            plane.Row(y0 + r).Slice(x0, size).CopyTo(into.Slice(r * size, size));
+        }
+    }
+
+    private static void RestoreBlock(Plane plane, int x0, int y0, int size, ReadOnlySpan<byte> from)
+    {
+        for (int r = 0; r < size; r++)
+        {
+            from.Slice(r * size, size).CopyTo(plane.Row(y0 + r).Slice(x0, size));
         }
     }
 
