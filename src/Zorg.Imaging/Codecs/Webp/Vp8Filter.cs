@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 namespace Zorg.Imaging.Codecs.Webp;
 
@@ -64,6 +65,21 @@ internal static class Vp8Filter
         }
 
         // Vertical edge: transpose eight rows of eight pixels.
+        if (Sse2.IsSupported)
+        {
+            Transpose(Rows(data, start - 4, along, 0), Rows(data, start - 4, along, 2), Rows(data, start - 4, along, 4), Rows(data, start - 4, along, 6), out var c0, out var c1, out var c2, out var c3);
+            Span<Vector128<short>> vectors = MemoryMarshal.Cast<short, Vector128<short>>(lanes);
+            vectors[0] = Vector128.WidenLower(c0).AsInt16();
+            vectors[1] = Vector128.WidenUpper(c0).AsInt16();
+            vectors[2] = Vector128.WidenLower(c1).AsInt16();
+            vectors[3] = Vector128.WidenUpper(c1).AsInt16();
+            vectors[4] = Vector128.WidenLower(c2).AsInt16();
+            vectors[5] = Vector128.WidenUpper(c2).AsInt16();
+            vectors[6] = Vector128.WidenLower(c3).AsInt16();
+            vectors[7] = Vector128.WidenUpper(c3).AsInt16();
+            return;
+        }
+
         for (int i = 0; i < 8; i++)
         {
             ReadOnlySpan<byte> row = data.AsSpan(start + (i * along) - 4, 8);
@@ -89,6 +105,30 @@ internal static class Vp8Filter
             return;
         }
 
+        if (Sse2.IsSupported)
+        {
+            // Back to rows with the same transpose; only the pixels the filter may change are written.
+            ReadOnlySpan<Vector128<short>> vectors = MemoryMarshal.Cast<short, Vector128<short>>(lanes);
+            Transpose(
+                Sse2.PackUnsignedSaturate(vectors[0], vectors[1]),
+                Sse2.PackUnsignedSaturate(vectors[2], vectors[3]),
+                Sse2.PackUnsignedSaturate(vectors[4], vectors[5]),
+                Sse2.PackUnsignedSaturate(vectors[6], vectors[7]),
+                out var r0,
+                out var r1,
+                out var r2,
+                out var r3);
+            WriteRow(data, start - 4, reach, r0.AsUInt64().ToScalar());
+            WriteRow(data, start - 4 + along, reach, r0.AsUInt64().GetElement(1));
+            WriteRow(data, start - 4 + (2 * along), reach, r1.AsUInt64().ToScalar());
+            WriteRow(data, start - 4 + (3 * along), reach, r1.AsUInt64().GetElement(1));
+            WriteRow(data, start - 4 + (4 * along), reach, r2.AsUInt64().ToScalar());
+            WriteRow(data, start - 4 + (5 * along), reach, r2.AsUInt64().GetElement(1));
+            WriteRow(data, start - 4 + (6 * along), reach, r3.AsUInt64().ToScalar());
+            WriteRow(data, start - 4 + (7 * along), reach, r3.AsUInt64().GetElement(1));
+            return;
+        }
+
         for (int i = 0; i < 8; i++)
         {
             Span<byte> row = data.AsSpan(start + (i * along) - 4, 8);
@@ -96,6 +136,41 @@ internal static class Vp8Filter
             {
                 row[k] = (byte)lanes[(k * 8) + i];
             }
+        }
+    }
+
+    // An 8 x 8 byte transpose. Each input holds two rows of eight bytes (rows 2c and 2c + 1 in input c); each output
+    // holds two columns the same way.
+    private static void Transpose(Vector128<byte> p0, Vector128<byte> p1, Vector128<byte> p2, Vector128<byte> p3, out Vector128<byte> c0, out Vector128<byte> c1, out Vector128<byte> c2, out Vector128<byte> c3)
+    {
+        Vector128<short> a0 = Sse2.UnpackLow(p0, Sse2.ShiftRightLogical128BitLane(p0, 8)).AsInt16();
+        Vector128<short> a1 = Sse2.UnpackLow(p1, Sse2.ShiftRightLogical128BitLane(p1, 8)).AsInt16();
+        Vector128<short> a2 = Sse2.UnpackLow(p2, Sse2.ShiftRightLogical128BitLane(p2, 8)).AsInt16();
+        Vector128<short> a3 = Sse2.UnpackLow(p3, Sse2.ShiftRightLogical128BitLane(p3, 8)).AsInt16();
+        Vector128<int> b0 = Sse2.UnpackLow(a0, a1).AsInt32(), b1 = Sse2.UnpackHigh(a0, a1).AsInt32();
+        Vector128<int> b2 = Sse2.UnpackLow(a2, a3).AsInt32(), b3 = Sse2.UnpackHigh(a2, a3).AsInt32();
+        c0 = Sse2.UnpackLow(b0, b2).AsByte();
+        c1 = Sse2.UnpackHigh(b0, b2).AsByte();
+        c2 = Sse2.UnpackLow(b1, b3).AsByte();
+        c3 = Sse2.UnpackHigh(b1, b3).AsByte();
+    }
+
+    // Rows first and first + 1 of an 8 x 8 block at start, step apart, as one vector.
+    private static Vector128<byte> Rows(byte[] data, int start, int step, int first) => Vector128.Create(
+        MemoryMarshal.Read<ulong>(data.AsSpan(start + (first * step), 8)),
+        MemoryMarshal.Read<ulong>(data.AsSpan(start + ((first + 1) * step), 8))).AsByte();
+
+    // The pixels a filter may change in one row of eight around a vertical edge: p2 .. q2 for reach 3, else p1 .. q1.
+    private static void WriteRow(byte[] data, int at, int reach, ulong row)
+    {
+        if (reach == 3)
+        {
+            MemoryMarshal.Write(data.AsSpan(at + 1, 4), (uint)(row >> 8));
+            MemoryMarshal.Write(data.AsSpan(at + 5, 2), (ushort)(row >> 40));
+        }
+        else
+        {
+            MemoryMarshal.Write(data.AsSpan(at + 2, 4), (uint)(row >> 16));
         }
     }
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The lossy WebP loop filter transposes the pixels around a vertical edge with vector unpacks instead of one byte at a time. Decoding a 24-megapixel lossy WebP takes 580 ms instead of 620 on one core, and encoding an 800 x 534 photo, where the loop filter level search filters most of the picture, takes 42 ms instead of 46. Decoded pixels and encoded files are unchanged.
 - Lossy WebP encodes about 18% faster on one core, with the same output: token costs are one table lookup per coefficient, small vector helpers are inlined, only the few best-ranked modes are sorted, and a picture whose modes overflow the first partition stops before writing its tokens. An 1800 x 1200 photo at quality 80 takes 215 ms instead of 264, and a 24-megapixel panorama 4.2 s instead of 5.7.
 - Lossy WebP encodes faster on many cores, with the same output: the counts that fit the token probabilities are taken while rows are coded in parallel instead of in a second pass afterwards, and RGB is converted to YUV in parallel. On 16 cores an 1800 x 1200 photo takes 73 ms instead of 90, and a 24-megapixel panorama 1.57 s instead of 1.86.
 - Lossy WebP chooses its loop filter strength for each picture: a few levels are tried through the decoder's filter on sample rows, and the one that leaves the decoded picture closest to the source is kept. The file size doesn't change. At quality 80, an 800 x 534 photo of sea and cliffs is 0.45 dB closer to the source, and 0.75 dB at quality 50. Effort 0 keeps the fixed level.
