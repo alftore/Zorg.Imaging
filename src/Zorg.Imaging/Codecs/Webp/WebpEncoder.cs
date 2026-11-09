@@ -152,42 +152,50 @@ internal static class WebpEncoder
         byte[] y = new byte[strideY * mbHigh * 16];
         byte[] u = new byte[strideUv * mbHigh * 8];
         byte[] v = new byte[strideUv * mbHigh * 8];
-        for (int row = 0; row < mbHigh * 16; row++)
-        {
-            int sy = Math.Min(row, height - 1);
-            for (int col = 0; col < strideY; col++)
-            {
-                uint p = argb[(sy * width) + Math.Min(col, width - 1)];
-                int r = (int)((p >> 16) & 0xFF);
-                int g = (int)((p >> 8) & 0xFF);
-                int b = (int)(p & 0xFF);
-                y[(row * strideY) + col] = (byte)(((16839 * r) + (33059 * g) + (6420 * b) + (16 << 16) + (1 << 15)) >> 16);
-            }
-        }
 
-        for (int row = 0; row < mbHigh * 8; row++)
+        // In bands of macroblock rows on all cores: each output row reads only its own source rows.
+        int bands = Parallelism.Bands((long)strideY * mbHigh * 16, mbHigh);
+        Parallelism.For(bands, band =>
         {
-            for (int col = 0; col < strideUv; col++)
+            int first = mbHigh * band / bands;
+            int last = mbHigh * (band + 1) / bands;
+            for (int row = first * 16; row < last * 16; row++)
             {
-                int r = 0;
-                int g = 0;
-                int b = 0;
-                for (int dy = 0; dy < 2; dy++)
+                int sy = Math.Min(row, height - 1);
+                for (int col = 0; col < strideY; col++)
                 {
-                    int sy = Math.Min((row * 2) + dy, height - 1);
-                    for (int dx = 0; dx < 2; dx++)
-                    {
-                        uint p = argb[(sy * width) + Math.Min((col * 2) + dx, width - 1)];
-                        r += (int)((p >> 16) & 0xFF);
-                        g += (int)((p >> 8) & 0xFF);
-                        b += (int)(p & 0xFF);
-                    }
+                    uint p = argb[(sy * width) + Math.Min(col, width - 1)];
+                    int r = (int)((p >> 16) & 0xFF);
+                    int g = (int)((p >> 8) & 0xFF);
+                    int b = (int)(p & 0xFF);
+                    y[(row * strideY) + col] = (byte)(((16839 * r) + (33059 * g) + (6420 * b) + (16 << 16) + (1 << 15)) >> 16);
                 }
-
-                u[(row * strideUv) + col] = (byte)Math.Clamp(((-9719 * r) - (19081 * g) + (28800 * b) + (128 << 18) + (1 << 17)) >> 18, 0, 255);
-                v[(row * strideUv) + col] = (byte)Math.Clamp(((28800 * r) - (24116 * g) - (4684 * b) + (128 << 18) + (1 << 17)) >> 18, 0, 255);
             }
-        }
+
+            for (int row = first * 8; row < last * 8; row++)
+            {
+                for (int col = 0; col < strideUv; col++)
+                {
+                    int r = 0;
+                    int g = 0;
+                    int b = 0;
+                    for (int dy = 0; dy < 2; dy++)
+                    {
+                        int sy = Math.Min((row * 2) + dy, height - 1);
+                        for (int dx = 0; dx < 2; dx++)
+                        {
+                            uint p = argb[(sy * width) + Math.Min((col * 2) + dx, width - 1)];
+                            r += (int)((p >> 16) & 0xFF);
+                            g += (int)((p >> 8) & 0xFF);
+                            b += (int)(p & 0xFF);
+                        }
+                    }
+
+                    u[(row * strideUv) + col] = (byte)Math.Clamp(((-9719 * r) - (19081 * g) + (28800 * b) + (128 << 18) + (1 << 17)) >> 18, 0, 255);
+                    v[(row * strideUv) + col] = (byte)Math.Clamp(((28800 * r) - (24116 * g) - (4684 * b) + (128 << 18) + (1 << 17)) >> 18, 0, 255);
+                }
+            }
+        });
 
         return (y, u, v);
     }

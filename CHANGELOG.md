@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Lossy WebP encodes faster on many cores, with the same output: the counts that fit the token probabilities are taken while rows are coded in parallel instead of in a second pass afterwards, and RGB is converted to YUV in parallel. On 16 cores an 1800 x 1200 photo takes 73 ms instead of 90, and a 24-megapixel panorama 1.57 s instead of 1.86.
 - Lossy WebP chooses its loop filter strength for each picture: a few levels are tried through the decoder's filter on sample rows, and the one that leaves the decoded picture closest to the source is kept. The file size doesn't change. At quality 80, an 800 x 534 photo of sea and cliffs is 0.45 dB closer to the source, and 0.75 dB at quality 50. Effort 0 keeps the fixed level.
 
 - Added control over how GIF turns soft alpha into its one-bit transparency, for stills and animations: `GifEncoderOptions.AlphaThreshold` (the alpha from which a pixel is kept, 128 by default, as before), `AlphaDithering` (0 to 1: a soft edge or shadow becomes a pattern of opaque pixels, as dense as its alpha, instead of a hard cut) and `Matte` (a colour to blend kept soft pixels over, for a known page background). The defaults are unchanged.

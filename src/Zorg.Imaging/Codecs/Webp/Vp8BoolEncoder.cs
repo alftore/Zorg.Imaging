@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 
 namespace Zorg.Imaging.Codecs.Webp;
 
@@ -30,16 +31,27 @@ internal sealed class Vp8BoolEncoder(int capacity)
             _range = split;
         }
 
-        while (_range < 128)
+        // Doubled until it is at least 128, in as few steps as there are byte boundaries to cross: a carry out of the
+        // bits shifted past the top ripples into the bytes written, and each finished byte is written.
+        int shift = BitOperations.LeadingZeroCount(_range) - 24;
+        if (shift <= 0)
         {
-            _range <<= 1;
-            if ((_bottom & (1u << 31)) != 0)
+            return;
+        }
+
+        _range <<= shift;
+        while (shift > 0)
+        {
+            int step = Math.Min(shift, _bitCount);
+            if ((_bottom >> (32 - step)) != 0)
             {
                 Carry();
             }
 
-            _bottom <<= 1;
-            if (--_bitCount == 0)
+            _bottom <<= step;
+            shift -= step;
+            _bitCount -= step;
+            if (_bitCount == 0)
             {
                 Put((byte)(_bottom >> 24));
                 _bottom &= (1u << 24) - 1;

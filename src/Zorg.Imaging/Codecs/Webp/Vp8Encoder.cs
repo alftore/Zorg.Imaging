@@ -223,17 +223,23 @@ internal sealed class Vp8Encoder
     {
         _progress = new int[_mbHigh];
         _rowModeBits = new long[_mbHigh];
+        _tokenAbove = new byte[_mbWide * 9];
         int next = -1;
         int helpers = Processing.Parallelism.Bands((long)_mbWide * _mbHigh * 256, _mbHigh);
+        var zeros = new int[helpers][];
+        var ones = new int[helpers][];
         ExceptionDispatchInfo? failure = null;
-        Processing.Parallelism.For(helpers, _ =>
+        Processing.Parallelism.For(helpers, helper =>
         {
             try
             {
+                zeros[helper] = new int[_probabilities.Length];
+                ones[helper] = new int[_probabilities.Length];
+                var counter = new CountSink(zeros[helper], ones[helper]);
                 int row;
                 while (!_failed && (row = Interlocked.Increment(ref next)) < _mbHigh)
                 {
-                    EncodeRow(row);
+                    EncodeRow(row, ref counter);
                 }
             }
 #pragma warning disable CA1031 // Any failure is passed to the caller as it was thrown, after the other threads stop.
@@ -246,10 +252,31 @@ internal sealed class Vp8Encoder
         });
 
         failure?.Throw();
+
+        // Each helper's counts of the bools each token probability codes, summed (in any order, as they are integers).
+        _zeros = new int[_probabilities.Length];
+        _ones = new int[_probabilities.Length];
+        for (int h = 0; h < helpers; h++)
+        {
+            for (int i = 0; i < _probabilities.Length; i++)
+            {
+                _zeros[i] += zeros[h][i];
+                _ones[i] += ones[h][i];
+            }
+        }
     }
 
-    private void EncodeRow(int my)
+    // The tokens' contexts above each macroblock column, as WalkTokens keeps them, for counting as rows are coded.
+    private byte[] _tokenAbove = [];
+
+    // How often each token probability codes a 0 and a 1, counted as rows are coded: what fitting the probabilities needs.
+    private int[] _zeros = [];
+    private int[] _ones = [];
+
+    private void EncodeRow(int my, ref CountSink counter)
     {
+        Span<byte> tokenLeft = stackalloc byte[9];
+        tokenLeft.Clear();
         Span<byte> leftNonZero = stackalloc byte[9];
         Span<byte> leftModes = stackalloc byte[4];
         leftNonZero.Clear();
@@ -282,6 +309,9 @@ internal sealed class Vp8Encoder
             ChooseChroma(ref mb, mx, my, leftNonZero, aboveNonZero);
             spent += SkipBits + ChromaModeCosts[mb.UvMode];
             mb.Skip = mb.NonZero == 0;
+
+            // The macroblock's tokens counted now, as the frame will code them: the row above has passed this column.
+            MacroblockTokens(ref counter, mb, tokenLeft, _tokenAbove.AsSpan(mx * 9, 9));
 
             // The above-right pixels of the next row's last macroblock repeat this row's last pixel, as the decoder
             // does: set before the next row can read them.
@@ -1460,10 +1490,8 @@ internal sealed class Vp8Encoder
     {
         // The token probabilities: count what the frame codes with the defaults, then update each one whose saving pays
         // for the update (section 13.4).
-        int[] zeros = new int[_probabilities.Length];
-        int[] ones = new int[_probabilities.Length];
-        var counter = new CountSink(zeros, ones);
-        WalkTokens(ref counter);
+        int[] zeros = _zeros;
+        int[] ones = _ones;
         bool[] update = new bool[_probabilities.Length];
         ReadOnlySpan<byte> updateProbabilities = Vp8Tables.CoefficientUpdateProbabilities;
         for (int i = 0; i < _probabilities.Length; i++)
@@ -1595,48 +1623,53 @@ internal sealed class Vp8Encoder
             left.Clear();
             for (int mx = 0; mx < _mbWide; mx++)
             {
-                Macroblock mb = _macroblocks[(my * _mbWide) + mx];
-                Span<byte> top = above.AsSpan(mx * 9, 9);
-                if (mb.Skip)
-                {
-                    left[..8].Clear();
-                    top[..8].Clear();
-                    if (mb.YMode != BPred)
-                    {
-                        left[8] = 0;
-                        top[8] = 0;
-                    }
-
-                    continue;
-                }
-
-                int firstY = 0;
-                if (mb.YMode != BPred)
-                {
-                    ReadOnlySpan<short> y2 = Levels(mb).Slice(24 * 16, 16);
-                    Tokens(ref sink, y2, 1, 0, left[8] + top[8]);
-                    left[8] = top[8] = (byte)(HasLevels(y2, 0) ? 1 : 0);
-                    firstY = 1;
-                }
-
-                int yType = firstY == 1 ? 0 : 3;
-                for (int i = 0; i < 16; i++)
-                {
-                    ReadOnlySpan<short> block = Levels(mb).Slice(i * 16, 16);
-                    Tokens(ref sink, block, yType, firstY, left[i >> 2] + top[i & 3]);
-                    left[i >> 2] = top[i & 3] = (byte)(HasLevels(block, firstY) ? 1 : 0);
-                }
-
-                for (int i = 16; i < 24; i++)
-                {
-                    int slot = i < 20 ? 4 : 6;
-                    int x = (i - 16) & 1;
-                    int y = ((i - 16) >> 1) & 1;
-                    ReadOnlySpan<short> block = Levels(mb).Slice(i * 16, 16);
-                    Tokens(ref sink, block, 2, 0, left[slot + y] + top[slot + x]);
-                    left[slot + y] = top[slot + x] = (byte)(HasLevels(block, 0) ? 1 : 0);
-                }
+                MacroblockTokens(ref sink, _macroblocks[(my * _mbWide) + mx], left, above.AsSpan(mx * 9, 9));
             }
+        }
+    }
+
+    // One macroblock's tokens, with the contexts to its left and above, which it updates.
+    private void MacroblockTokens<TSink>(ref TSink sink, in Macroblock mb, Span<byte> left, Span<byte> top)
+        where TSink : struct, ISink
+    {
+        if (mb.Skip)
+        {
+            left[..8].Clear();
+            top[..8].Clear();
+            if (mb.YMode != BPred)
+            {
+                left[8] = 0;
+                top[8] = 0;
+            }
+
+            return;
+        }
+
+        int firstY = 0;
+        if (mb.YMode != BPred)
+        {
+            ReadOnlySpan<short> y2 = Levels(mb).Slice(24 * 16, 16);
+            Tokens(ref sink, y2, 1, 0, left[8] + top[8]);
+            left[8] = top[8] = (byte)(HasLevels(y2, 0) ? 1 : 0);
+            firstY = 1;
+        }
+
+        int yType = firstY == 1 ? 0 : 3;
+        for (int i = 0; i < 16; i++)
+        {
+            ReadOnlySpan<short> block = Levels(mb).Slice(i * 16, 16);
+            Tokens(ref sink, block, yType, firstY, left[i >> 2] + top[i & 3]);
+            left[i >> 2] = top[i & 3] = (byte)(HasLevels(block, firstY) ? 1 : 0);
+        }
+
+        for (int i = 16; i < 24; i++)
+        {
+            int slot = i < 20 ? 4 : 6;
+            int x = (i - 16) & 1;
+            int y = ((i - 16) >> 1) & 1;
+            ReadOnlySpan<short> block = Levels(mb).Slice(i * 16, 16);
+            Tokens(ref sink, block, 2, 0, left[slot + y] + top[slot + x]);
+            left[slot + y] = top[slot + x] = (byte)(HasLevels(block, 0) ? 1 : 0);
         }
     }
 
