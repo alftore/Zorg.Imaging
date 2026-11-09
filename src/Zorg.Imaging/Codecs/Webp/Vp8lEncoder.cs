@@ -1486,6 +1486,16 @@ internal static class Vp8lEncoder
         int cacheBits = histogram.CacheBits;
         uint[] cache = new uint[cacheBits == 0 ? 1 : 1 << cacheBits];
 
+        // The symbol and extra bits of copies of 1 to 16, priced once; added in the same order as for the longest.
+        Span<float> shortSymbol = stackalloc float[17];
+        Span<float> shortExtra = stackalloc float[17];
+        for (int k = 1; k <= 16; k++)
+        {
+            (int lengthPrefix, int lengthBits, _) = Prefix(k);
+            shortSymbol[k] = greenCost[256 + lengthPrefix];
+            shortExtra[k] = lengthBits;
+        }
+
         float[] cost = new float[n + 1];
         int[] step = new int[n + 1];
         Array.Fill(cost, float.MaxValue);
@@ -1521,19 +1531,25 @@ internal static class Vp8lEncoder
             float copy = cost[i] + distanceCost[distancePrefix] + distanceBits;
 
             // Every length up to 16, and the longest; longer ones are reached from the pixels inside the copy.
-            for (int k = 1; ; k = k < 16 ? k + 1 : longest)
+            int shortest = Math.Min(longest, 16);
+            for (int k = 1; k <= shortest; k++)
             {
-                (int lengthPrefix, int lengthBits, _) = Prefix(k);
-                float total = copy + greenCost[256 + lengthPrefix] + lengthBits;
+                float total = copy + shortSymbol[k] + shortExtra[k];
                 if (total < cost[i + k])
                 {
                     cost[i + k] = total;
                     step[i + k] = -k;
                 }
+            }
 
-                if (k >= longest)
+            if (longest > 16)
+            {
+                (int lengthPrefix, int lengthBits, _) = Prefix(longest);
+                float total = copy + greenCost[256 + lengthPrefix] + lengthBits;
+                if (total < cost[i + longest])
                 {
-                    break;
+                    cost[i + longest] = total;
+                    step[i + longest] = -longest;
                 }
             }
         }
@@ -1578,10 +1594,11 @@ internal static class Vp8lEncoder
 
     /// <summary>
     /// Finds the longest earlier match for a pixel: the pixel to the left and the rows above first, then hash chains over
-    /// runs of three pixels, nearest first (pairs make a photo's chains long, as its residuals are mostly near zero, for
-    /// no smaller file). The chains are built up front, each pixel linking only to earlier ones, so <see cref="Find"/>
-    /// may run on many pixels at once. <see cref="Extend"/> tries the distances a parse has used, which follow the parse
-    /// and so run in order.
+    /// runs of four pixels, nearest first. Shorter runs make chains long where residuals repeat (a photo's are mostly near
+    /// zero, a smooth alpha ramp's more so), so the same number of steps reached less far back: runs of three made the
+    /// test corpora 0.3% larger, a graphic 3%, and took 15% longer on photos. The chains are built up front, each pixel
+    /// linking only to earlier ones, so <see cref="Find"/> may run on many pixels at once. <see cref="Extend"/> tries the
+    /// distances a parse has used, which follow the parse and so run in order.
     /// </summary>
     private sealed class MatchFinder
     {
@@ -1605,19 +1622,19 @@ internal static class Vp8lEncoder
             _used = new int[p.Length];
 
             // About one bucket per pixel, 2^10 to 2^22 of them: collisions make chains longer and the walk a run of
-            // cache misses. The last two pixels start no run and link to nothing.
+            // cache misses. The last three pixels start no run and link to nothing.
             int hashBits = Math.Clamp(BitOperations.Log2((uint)Math.Max(p.Length, 1)) + 1, 10, 22);
             int shift = 32 - hashBits;
             int[] head = new int[1 << hashBits];
             Array.Fill(head, -1);
-            for (int i = 0; i + 2 < p.Length; i++)
+            for (int i = 0; i + 3 < p.Length; i++)
             {
-                int key = Hash(p[i], p[i + 1], p[i + 2], shift);
+                int key = Hash(p[i], p[i + 1], p[i + 2], p[i + 3], shift);
                 _chain[i] = head[key];
                 head[key] = i;
             }
 
-            for (int i = Math.Max(p.Length - 2, 0); i < p.Length; i++)
+            for (int i = Math.Max(p.Length - 3, 0); i < p.Length; i++)
             {
                 _chain[i] = -1;
             }
@@ -1715,7 +1732,7 @@ internal static class Vp8lEncoder
         }
     }
 
-    private static int Hash(uint a, uint b, uint c, int shift) => (int)(((a * 0x9E3779B1u) + (b * 0x85EBCA77u) + (c * 0xC2B2AE3Du)) >> shift);
+    private static int Hash(uint a, uint b, uint c, uint d, int shift) => (int)(((a * 0x9E3779B1u) + (b * 0x85EBCA77u) + (c * 0xC2B2AE3Du) + (d * 0x27D4EB2Fu)) >> shift);
 
     private static int Match(uint[] p, int at, int from, int most)
     {

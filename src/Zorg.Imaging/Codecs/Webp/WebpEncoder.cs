@@ -76,7 +76,7 @@ internal static class WebpEncoder
 
             if (alpha && band == bands - 1)
             {
-                alphaChunk = AlphaChunk(argb, width, height, options.Effort);
+                alphaChunk = AlphaChunk(argb, width, height, AlphaEffort(options.Effort));
             }
         });
 
@@ -255,6 +255,11 @@ internal static class WebpEncoder
 
         return (y, u, v);
     }
+
+    // The lossless effort for a lossy picture's alpha: two below the picture's, at least 1, as libwebp also codes alpha
+    // below the picture. At the default 4, an 800 x 600 cut-out's alpha takes a quarter less time for 11% more bytes, a
+    // third fewer than cwebp's; effort 0 would leave the alpha nearly uncompressed.
+    internal static int AlphaEffort(int effort) => Math.Max(effort - 2, 1);
 
     // An ALPH chunk's payload: a header byte (no preprocessing, no filter, lossless compression) and the alpha as the
     // green channel of a VP8L image stream without its 5-byte header.
