@@ -271,7 +271,7 @@ internal static class WebpEncoder
             alpha[i] = 0xFF000000u | ((argb[i] >> 24) << 8);
         }
 
-        byte[] stream = Vp8lEncoder.Encode(alpha, width, height, alpha: false, effort);
+        byte[] stream = Vp8lEncoder.Encode(alpha, width, height, alpha: false, effort, chooseOne: true);
         byte[] chunk = new byte[stream.Length - 4];
         chunk[0] = 1;
         stream.AsSpan(5).CopyTo(chunk.AsSpan(1));

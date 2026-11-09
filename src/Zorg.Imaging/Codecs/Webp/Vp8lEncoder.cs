@@ -43,7 +43,14 @@ internal static class Vp8lEncoder
     /// An image of 17 to 256 colours is also coded with the predictor, above effort 0, and the smaller kept: a colour
     /// table suits graphics, but smooth grey or few-colour gradients predict better.
     /// </remarks>
-    public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort)
+    public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort) => Encode(argb, width, height, alpha, effort, chooseOne: false);
+
+    /// <summary>
+    /// As the other overload; with <paramref name="chooseOne"/>, an image of 17 to 256 colours is coded only the way
+    /// <see cref="IndexedLooksSmaller"/> expects to be smaller, not both ways: for a lossy picture's alpha, where the
+    /// second coding took as long as the picture.
+    /// </summary>
+    public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort, bool chooseOne)
     {
         // The header is 40 bits, so the rest starts on a byte and can be coded separately.
         byte[] header = new byte[5];
@@ -61,6 +68,14 @@ internal static class Vp8lEncoder
         {
             ReadOnlySpan<byte> only = palette is null ? Predicted(argb, width, height, effort) : Indexed(argb, width, height, palette, effort);
             return [.. header, .. only];
+        }
+
+        if (chooseOne)
+        {
+            ReadOnlySpan<byte> one = IndexedLooksSmaller(argb, width, height, palette.Length, AnalysisTileBits(effort))
+                ? Indexed(argb, width, height, palette, effort)
+                : Predicted(argb, width, height, effort);
+            return [.. header, .. one];
         }
 
         // Both codings, side by side when there are cores for them; the smaller is kept, the predicted one on a tie.
@@ -112,8 +127,10 @@ internal static class Vp8lEncoder
         var bits = new Vp8lBitWriter((argb.Length / 2) + 1024);
         uint[] pixels = (uint[])argb.Clone();
         bool greenOnly = GreenOnly(pixels);
-        int tileBits = effort <= 1 ? 5 : 3;
-        (bool predict, bool subtractGreen) = ChooseTransforms(pixels, width, height, tileBits);
+        // Tiles of 8 x 8 from effort 2 made photos and icons 1 to 3% smaller than 16 x 16, but alpha masks (coded green
+        // only) 2% larger.
+        int tileBits = effort <= 1 ? 5 : greenOnly ? 4 : 3;
+        (bool predict, bool subtractGreen) = ChooseTransforms(pixels, width, height, AnalysisTileBits(effort));
         if (!greenOnly && subtractGreen)
         {
             bits.Write(1, 1);
@@ -148,6 +165,57 @@ internal static class Vp8lEncoder
     // Whether subtracting green makes the image cheaper, judged as libwebp's analysis does: the entropy of each pixel's
     // difference from its left neighbour, channel by channel, with and without green taken from red and blue. Photos,
     // whose channels move together, gain; flat graphics often lose.
+    // The tile size the analysis prices the predictor's modes at: 16 x 16 above effort 1, though the predictor then uses
+    // 8 x 8. Its price of a mode a tile, log2 of the choices, ignores that the mode image is itself compressed; at the
+    // tiles actually used it overstated the predictor four times and chose against it on alpha masks (up to 30% larger).
+    private static int AnalysisTileBits(int effort) => effort <= 1 ? 5 : 4;
+
+    // Whether a colour table and indexes look smaller than the best of the other codings, by the entropy analysis of
+    // ChooseTransforms: the indexes as the entropy of a hash of the pixels that don't repeat a neighbour (one symbol
+    // for each colour, near enough), plus 8 bits for each table entry; the others as the pixels themselves or their
+    // differences from the left. On the alpha of 36 cut-outs and icons, this picked within 0.5% of always coding both
+    // ways and keeping the smaller, in about half the time.
+    internal static bool IndexedLooksSmaller(uint[] p, int width, int height, int colours, int tileBits)
+    {
+        int[] hashes = new int[256];
+        int[] counts = new int[8 * 256];
+        uint previous = 0;
+        for (int i = 0; i < p.Length; i++)
+        {
+            uint pixel = p[i];
+            int x = i % width;
+            if ((x > 0 && pixel == p[i - 1]) || (i >= width && pixel == p[i - width]))
+            {
+                previous = pixel;
+                continue;
+            }
+
+            uint d = Subtract(pixel, previous);
+            previous = pixel;
+            hashes[(int)((0x1E35A7BDu * pixel) >> 24)]++;
+            counts[(int)(pixel >> 24)]++;
+            counts[256 + (int)((pixel >> 16) & 0xFF)]++;
+            counts[512 + (int)((pixel >> 8) & 0xFF)]++;
+            counts[768 + (int)(pixel & 0xFF)]++;
+            counts[1024 + (int)(d >> 24)]++;
+            counts[1280 + (int)((d >> 16) & 0xFF)]++;
+            counts[1536 + (int)((d >> 8) & 0xFF)]++;
+            counts[1792 + (int)(d & 0xFF)]++;
+        }
+
+        for (int row = 4; row < 8; row++)
+        {
+            counts[row * 256]++;
+        }
+
+        double Row(int row) => Entropy(counts.AsSpan(row * 256, 256).ToArray());
+        double tiles = (double)DivideUp(width, tileBits) * DivideUp(height, tileBits);
+        double indexed = Entropy(hashes) + (colours * 8);
+        double direct = Row(0) + Row(1) + Row(2) + Row(3);
+        double predicted = Row(4) + Row(5) + Row(6) + Row(7) + (tiles * Math.Log2(14));
+        return indexed <= Math.Min(direct, predicted);
+    }
+
     // Which transforms to use, from the entropy each choice would leave (libwebp chooses the same way; this is our own
     // account of it): per channel, the entropy of the pixels themselves and of their differences from the pixel to the
     // left, each as they are and with green subtracted, over the pixels that don't simply repeat their left or upper
