@@ -24,7 +24,8 @@ Check("detect png", ImageFormats.Detect([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1
 Check("detect jpeg", ImageFormats.Detect([0xFF, 0xD8, 0xFF, 0xE0]) == ImageFormat.Jpeg);
 Check("detect gif", ImageFormats.Detect("GIF89a"u8) == ImageFormat.Gif);
 Check("detect webp", ImageFormats.Detect("RIFF\0\0\0\0WEBP"u8) == ImageFormat.Webp);
-Check("detect tiff unsupported", ImageFormats.Detect("II*\0"u8) is { IsSupported: false } tiff && tiff == ImageFormat.Tiff);
+Check("detect tiff", ImageFormats.Detect("II*\0"u8) is { IsSupported: true } tiff && tiff == ImageFormat.Tiff);
+Check("detect psd unsupported", ImageFormats.Detect("8BPS"u8) is { IsSupported: false } psd && psd == ImageFormat.Psd);
 Check("detect text is null", ImageFormats.Detect("hello, world"u8) is null);
 
 // Format check, level 2: a 3x2 PNG header, from memory and from a stream that can't seek.
