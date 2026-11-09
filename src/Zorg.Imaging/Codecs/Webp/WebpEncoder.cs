@@ -52,6 +52,11 @@ internal static class WebpEncoder
     /// </summary>
     internal static (byte[] Data, byte[] Alpha) EncodePicture(uint[] argb, int width, int height, bool alpha, WebpEncoderOptions options)
     {
+        if (alpha && !options.Exact)
+        {
+            HideTransparent(argb, width, height, options.Lossless);
+        }
+
         if (options.Lossless)
         {
             return (Vp8lEncoder.Encode(argb, width, height, alpha, options.Effort), []);
@@ -76,6 +81,57 @@ internal static class WebpEncoder
         });
 
         return (vp8, alphaChunk);
+    }
+
+    /// <summary>
+    /// Replaces the colour of fully transparent pixels, in place, with what codes smallest; visible pixels and every
+    /// alpha value stay as they are. Lossless: transparent black, so transparent areas become runs of one value.
+    /// Lossy, in 8 x 8 blocks: a fully transparent block takes one flat colour, the same along a run of such blocks; a
+    /// block with anything visible is left alone, as a new edge inside it would ring into what shows.
+    /// </summary>
+    internal static void HideTransparent(uint[] argb, int width, int height, bool lossless)
+    {
+        if (lossless)
+        {
+            for (int i = 0; i < argb.Length; i++)
+            {
+                if (argb[i] < 0x01000000u)
+                {
+                    argb[i] = 0;
+                }
+            }
+
+            return;
+        }
+
+        for (int by = 0; by < height; by += 8)
+        {
+            int rows = Math.Min(8, height - by);
+            uint? flat = null;
+            for (int bx = 0; bx < width; bx += 8)
+            {
+                int columns = Math.Min(8, width - bx);
+                bool shown = false;
+                for (int y = 0; y < rows && !shown; y++)
+                {
+                    shown = argb.AsSpan(((by + y) * width) + bx, columns).ContainsAnyInRange(0x01000000u, uint.MaxValue);
+                }
+
+                if (shown)
+                {
+                    flat = null;
+                    continue;
+                }
+
+                // A run of transparent blocks keeps the colour its first block had at its first pixel.
+                flat ??= argb[(by * width) + bx] & 0xFFFFFFu;
+                uint colour = flat.Value;
+                for (int y = 0; y < rows; y++)
+                {
+                    argb.AsSpan(((by + y) * width) + bx, columns).Fill(colour);
+                }
+            }
+        }
     }
 
     /// <summary>

@@ -69,7 +69,7 @@ public class WebpEncoderOracleTests
         string cwebp = Oracle.Require("cwebp");
         using Oracle.TempFolder folder = Oracle.CreateFolder();
         using Image picture = Picture(kind, width, height);
-        byte[] ours = WebpEncoderTests.Save(picture, new WebpEncoderOptions { Lossless = true, Effort = effort });
+        byte[] ours = WebpEncoderTests.Save(picture, new WebpEncoderOptions { Lossless = true, Effort = effort, Exact = true });
         await File.WriteAllBytesAsync(folder.File("ours.webp"), ours, TestContext.Current.CancellationToken);
 
         (int read, _, string readErrors) = await Oracle.RunAsync(dwebp, "-quiet", "-pam", folder.File("ours.webp"), "-o", folder.File("ours.pam"));

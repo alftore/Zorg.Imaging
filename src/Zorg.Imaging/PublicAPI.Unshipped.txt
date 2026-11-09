@@ -332,6 +332,8 @@ Zorg.Imaging.ImagePipeline.SaveAsWebpAsync(System.IO.Stream! stream, Zorg.Imagin
 Zorg.Imaging.WebpEncoderOptions
 Zorg.Imaging.WebpEncoderOptions.Effort.get -> int
 Zorg.Imaging.WebpEncoderOptions.Effort.init -> void
+Zorg.Imaging.WebpEncoderOptions.Exact.get -> bool
+Zorg.Imaging.WebpEncoderOptions.Exact.init -> void
 Zorg.Imaging.WebpEncoderOptions.Lossless.get -> bool
 Zorg.Imaging.WebpEncoderOptions.Lossless.init -> void
 Zorg.Imaging.WebpEncoderOptions.MaxDegreeOfParallelism.get -> int

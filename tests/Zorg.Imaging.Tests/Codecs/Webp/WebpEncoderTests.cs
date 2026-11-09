@@ -22,6 +22,22 @@ public class WebpEncoderTests
     }
 
     /// <summary>The image's pixels as RGBA, 8 bits a sample, as a lossless file should give them back.</summary>
+    // The image as RGBA, with fully transparent pixels as transparent black: what a lossless file decodes to unless
+    // WebpEncoderOptions.Exact keeps the colour under them.
+    internal static byte[] Visible(Image image)
+    {
+        byte[] rgba = Rgba(image);
+        for (int i = 0; i < rgba.Length; i += 4)
+        {
+            if (rgba[i + 3] == 0)
+            {
+                rgba.AsSpan(i, 4).Clear();
+            }
+        }
+
+        return rgba;
+    }
+
     internal static byte[] Rgba(Image image)
     {
         (uint[] argb, _) = Zorg.Imaging.Processing.Argb.FromImage(image);
@@ -67,7 +83,7 @@ public class WebpEncoderTests
         byte[] webp = Save(image, options);
         using Image decoded = Image.Decode(webp, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
         Assert.Equal((image.Width, image.Height), (decoded.Width, decoded.Height));
-        Assert.Equal(Rgba(image), decoded.GetPixelBytes().ToArray());
+        Assert.Equal(options?.Exact == true ? Rgba(image) : Visible(image), decoded.GetPixelBytes().ToArray());
     }
 
     [Theory]
@@ -239,7 +255,7 @@ public class WebpEncoderTests
         Assert.Equal(0x30, webp[20]);
         using Image p3 = Image.Decode(webp);
         Assert.Equal(IccProfileWriter.For(ColorSpace.DisplayP3, "WebP").ToArray(), p3.ColorSpace.IccProfile.ToArray());
-        Assert.Equal(Rgba(photo), Image.Decode(webp, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 }).GetPixelBytes().ToArray());
+        Assert.Equal(Visible(photo), Image.Decode(webp, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 }).GetPixelBytes().ToArray());
 
         // A profile of odd length is padded, and the image's own profile is written back byte for byte.
         byte[] own = PngColourTests.FakeProfile(70_001, seed: 2);
@@ -290,7 +306,70 @@ public class WebpEncoderTests
         byte[] many = Save(photo, new WebpEncoderOptions { Lossless = true, Effort = effort, MaxDegreeOfParallelism = 8 });
         Assert.Equal(one, many);
         using Image decoded = Image.Decode(many, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
-        Assert.Equal(Rgba(photo), decoded.GetPixelBytes().ToArray());
+        Assert.Equal(Visible(photo), decoded.GetPixelBytes().ToArray());
+    }
+
+    [Fact]
+    public void Exact_keeps_the_colour_under_transparent_pixels()
+    {
+        using Image photo = JpegEncoderTests.Photo(120, 80, PixelFormat.Rgba32, seed: 21);
+        AssertRoundTrips(photo, new WebpEncoderOptions { Lossless = true, Exact = true });
+    }
+
+    [Fact]
+    public void Transparent_areas_cost_little_unless_their_colour_is_kept()
+    {
+        // A photo with its outer half fully transparent: by default the colour there is dropped, which nothing shows.
+        using Image photo = JpegEncoderTests.Photo(320, 240, PixelFormat.Rgba32, seed: 22);
+        for (int y = 0; y < photo.Height; y++)
+        {
+            Span<Rgba32> row = photo.GetRow<Rgba32>(y);
+            for (int x = 0; x < row.Length; x++)
+            {
+                row[x].A = (byte)(Math.Abs(x - 160) + Math.Abs(y - 120) < 120 ? 255 : 0);
+            }
+        }
+
+        byte[] lossless = Save(photo, new WebpEncoderOptions { Lossless = true });
+        byte[] losslessExact = Save(photo, new WebpEncoderOptions { Lossless = true, Exact = true });
+        Assert.True(lossless.Length < losslessExact.Length * 0.8, $"{lossless.Length} of {losslessExact.Length} bytes");
+        AssertRoundTrips(photo, new WebpEncoderOptions { Lossless = true });
+
+        // Lossy: smaller, and what shows is at least as close to the source as with the hidden colour kept in a file
+        // as large.
+        byte[] lossy = Save(photo, new WebpEncoderOptions { Quality = 80 });
+        byte[] lossyExact = Save(photo, new WebpEncoderOptions { Quality = 80, Exact = true });
+        Assert.True(lossy.Length < lossyExact.Length * 0.9, $"{lossy.Length} of {lossyExact.Length} bytes");
+        int quality = 80;
+        while (quality > 5 && Save(photo, new WebpEncoderOptions { Quality = quality - 5, Exact = true }).Length >= lossy.Length)
+        {
+            quality -= 5;
+        }
+
+        byte[] asLarge = Save(photo, new WebpEncoderOptions { Quality = quality, Exact = true });
+        using Image decoded = Image.Decode(lossy, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        using Image decodedExact = Image.Decode(asLarge, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        double psnr = VisiblePsnr(photo, decoded);
+        double psnrExact = VisiblePsnr(photo, decodedExact);
+        Assert.True(asLarge.Length >= lossy.Length && psnr >= psnrExact, $"{lossy.Length} bytes at {psnr:F2} dB against {asLarge.Length} at {psnrExact:F2} dB");
+    }
+
+    // PSNR of the colour of pixels with any alpha, as they show over black (premultiplied).
+    private static double VisiblePsnr(Image source, Image decoded)
+    {
+        byte[] a = Rgba(source);
+        byte[] b = decoded.GetPixelBytes().ToArray();
+        double error = 0;
+        for (int i = 0; i < a.Length; i += 4)
+        {
+            for (int c = 0; c < 3; c++)
+            {
+                double d = (a[i + c] * a[i + 3] / 255.0) - (b[i + c] * b[i + 3] / 255.0);
+                error += d * d;
+            }
+        }
+
+        return 10 * Math.Log10(255.0 * 255.0 * a.Length * 3 / 4 / Math.Max(error, 1e-9));
     }
 
     [Fact]

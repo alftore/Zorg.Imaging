@@ -24,11 +24,21 @@ public sealed class WebpEncoderOptions
     public static WebpEncoderOptions Default { get; } = new();
 
     /// <summary>
-    /// Whether to keep every pixel exactly (VP8L), rather than the smaller lossy coding (VP8) that suits photos. Lossless
-    /// suits logos, screenshots, line art and anything that will be edited again. Defaults to <see langword="false"/>.
+    /// Whether to keep every visible pixel exactly (VP8L), rather than the smaller lossy coding (VP8) that suits photos.
+    /// Lossless suits logos, screenshots, line art and anything that will be edited again. The colour of fully
+    /// transparent pixels is kept too only with <see cref="Exact"/>. Defaults to <see langword="false"/>.
     /// </summary>
     /// <example><code>var exact = new WebpEncoderOptions { Lossless = true };</code></example>
     public bool Lossless { get; init; }
+
+    /// <summary>
+    /// Whether to keep the colour of fully transparent pixels. By default (<see langword="false"/>) it is replaced with
+    /// whatever codes smallest, as cwebp does without <c>-exact</c>: no visible pixel changes, and a picture with
+    /// transparent areas can be much smaller (a cut-out 14% transparent: 12% smaller lossless, 9% lossy). Set it when
+    /// the colour under transparency matters, for instance to remove the alpha later and show what was hidden.
+    /// </summary>
+    /// <example><code>var keepHidden = new WebpEncoderOptions { Lossless = true, Exact = true };</code></example>
+    public bool Exact { get; init; }
 
     /// <summary>
     /// The lossy quality, 1 to 100: higher keeps more detail in larger files. 75 to 85 suits photos on the web. The scale is
