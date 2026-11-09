@@ -115,8 +115,9 @@ public sealed class PngEncoderOptions
     }
 
     /// <summary>
-    /// With <see cref="MaxColors"/>, how much Floyd–Steinberg dithering to use, 0 (none) to 1 (full, the default).
-    /// Dithering hides banding in gradients and photos; flat graphics compress smaller without it.
+    /// With <see cref="MaxColors"/>, how much Floyd–Steinberg dithering to use, 0 (none) to 1 (the default). Dithering
+    /// hides banding in gradients and photos; flat graphics compress smaller without it. At 1 each pixel passes on 60% of
+    /// its colour error, which hides banding about as well as passing on all of it, without the grain.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value isn't 0 to 1.</exception>
     /// <example><code>var flat = new PngEncoderOptions { MaxColors = 64, Dithering = 0 };</code></example>
