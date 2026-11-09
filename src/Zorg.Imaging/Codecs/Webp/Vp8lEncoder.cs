@@ -10,9 +10,9 @@ namespace Zorg.Imaging.Codecs.Webp;
 /// <remarks>
 /// <para>
 /// Images of up to 256 colours become a colour table and indexes (section 4.4), packed several to a pixel when the
-/// table is small; above effort 0 they are also coded as below and the smaller kept. Other images get subtract-green
-/// (4.3) where it helps, the predictor (4.1), each tile's mode chosen for the fewest bits by the statistics of the
-/// residuals chosen so far, and from effort 1 the cross-colour transform (4.2).
+/// table is small; above effort 0, those of more than 16 colours are also coded as below and the smaller kept. Other
+/// images get subtract-green (4.3) where it helps, the predictor (4.1), each tile's mode chosen for the fewest bits by
+/// the statistics of the residuals chosen so far, and from effort 1 the cross-colour transform (4.2).
 /// </para>
 /// <para>
 /// The pixels are then coded with backward references (5.2.2) and a colour cache (5.2.3) whose size is chosen by the
@@ -40,7 +40,7 @@ internal static class Vp8lEncoder
 
     /// <summary>Encodes ARGB pixels (alpha in the top byte) as a VP8L stream, header included.</summary>
     /// <remarks>
-    /// An image of 256 colours or fewer is also coded with the predictor, above effort 0, and the smaller kept: a colour
+    /// An image of 17 to 256 colours is also coded with the predictor, above effort 0, and the smaller kept: a colour
     /// table suits graphics, but smooth grey or few-colour gradients predict better.
     /// </remarks>
     public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort)
@@ -53,8 +53,11 @@ internal static class Vp8lEncoder
             header[i] = (byte)(fields >> (8 * i));
         }
 
+        // With 16 colours or fewer the indexes pack two to eight a pixel, and the predicted coding, several times slower, was
+        // at best a few percent smaller (a hard mask's alpha: 7 ms indexed against 49, 1% larger; the test corpora 0.2%
+        // larger in all), so only the indexed coding is tried.
         uint[]? palette = Palette(argb);
-        if (palette is null || effort == 0)
+        if (palette is null || effort == 0 || palette.Length <= 16)
         {
             ReadOnlySpan<byte> only = palette is null ? Predicted(argb, width, height, effort) : Indexed(argb, width, height, palette, effort);
             return [.. header, .. only];
