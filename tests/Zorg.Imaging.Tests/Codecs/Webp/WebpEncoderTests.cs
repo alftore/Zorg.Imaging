@@ -496,6 +496,124 @@ public class WebpEncoderTests
         }
     }
 
+    [Fact]
+    public void Macroblock_activity_is_the_sum_of_differences_from_the_block_sums()
+    {
+        // Random pixels, then the extremes (0 beside 255) where each 16-bit lane of the vector sum comes closest to full.
+        const int Stride = 48;
+        var random = new Random(5);
+        foreach (int pattern in new[] { 0, 1, 2 })
+        {
+            byte[] y = new byte[Stride * 32];
+            for (int i = 0; i < y.Length; i++)
+            {
+                y[i] = pattern switch { 0 => (byte)random.Next(256), 1 => (byte)((i % 3 == 0) ? 255 : 0), _ => (byte)((i / Stride) % 4 == 0 && i % 4 == 0 ? 255 : 0) };
+            }
+
+            for (int at = 0; at <= 16 * Stride; at += (16 * Stride) + 1)
+            {
+                int expected = 0;
+                for (int b = 0; b < 16; b++)
+                {
+                    int block = at + ((b >> 2) * 4 * Stride) + ((b & 3) * 4);
+                    int sum = 0;
+                    for (int r = 0; r < 4; r++)
+                    {
+                        for (int c = 0; c < 4; c++)
+                        {
+                            sum += y[block + (r * Stride) + c];
+                        }
+                    }
+
+                    for (int r = 0; r < 4; r++)
+                    {
+                        for (int c = 0; c < 4; c++)
+                        {
+                            expected += Math.Abs((16 * y[block + (r * Stride) + c]) - sum);
+                        }
+                    }
+                }
+
+                Assert.Equal(expected, Vp8Encoder.Activity(y, at, Stride));
+            }
+        }
+    }
+
+    [Fact]
+    public void Mode_decisions_keep_texture_that_squared_error_alone_would_smooth()
+    {
+        // A photo with fine grain: weighing how much of each block's texture is lost, as well as its squared error,
+        // keeps more of the grain (higher luma SSIM) for about the same size, and no less PSNR.
+        const int Width = 256;
+        const int Height = 192;
+        using Image photo = JpegEncoderTests.Photo(Width, Height, PixelFormat.Rgba32, seed: 3);
+        var random = new Random(4);
+        for (int row = 0; row < Height; row++)
+        {
+            Span<Rgba32> pixels = photo.GetRow<Rgba32>(row);
+            for (int x = 0; x < Width; x++)
+            {
+                int grain = random.Next(-12, 13);
+                Rgba32 p = pixels[x];
+                pixels[x] = new Rgba32((byte)Math.Clamp(p.R + grain, 0, 255), (byte)Math.Clamp(p.G + grain, 0, 255), (byte)Math.Clamp(p.B + grain, 0, 255), 255);
+            }
+        }
+
+        (uint[] argb, _) = Zorg.Imaging.Processing.Argb.FromImage(photo);
+        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, 4, 60);
+        int quantiser = Vp8Encoder.QuantiserFor(60);
+        byte[] with = Vp8Encoder.Encode(y, u, v, Width, Height, quantiser, 4, 1 << 19, -1);
+        byte[] without = Vp8Encoder.Encode(y, u, v, Width, Height, quantiser, 4, 1 << 19, -1, texture: false);
+        using Image decodedWith = Image.Decode(Riff(with), AsRgba);
+        using Image decodedWithout = Image.Decode(Riff(without), AsRgba);
+        double ssimWith = LumaSsim(photo, decodedWith);
+        double ssimWithout = LumaSsim(photo, decodedWithout);
+        double psnrWith = PngLossyTests.Psnr(photo, decodedWith);
+        double psnrWithout = PngLossyTests.Psnr(photo, decodedWithout);
+        string numbers = $"{with.Length} bytes, SSIM {ssimWith:F5}, {psnrWith:F2} dB with; {without.Length} bytes, SSIM {ssimWithout:F5}, {psnrWithout:F2} dB without";
+        Assert.True(ssimWith > ssimWithout && psnrWith > psnrWithout - 0.05 && with.Length < without.Length * 1.02, numbers);
+    }
+
+    // Mean SSIM of BT.601 luma in 8 x 8 windows every 4 pixels.
+    internal static double LumaSsim(Image a, Image b)
+    {
+        byte[] pa = Rgba(a);
+        byte[] pb = Rgba(b);
+        int w = a.Width;
+        double Luma(byte[] p, int i) => (0.299 * p[i * 4]) + (0.587 * p[(i * 4) + 1]) + (0.114 * p[(i * 4) + 2]);
+        double total = 0;
+        int windows = 0;
+        for (int y = 0; y + 8 <= a.Height; y += 4)
+        {
+            for (int x = 0; x + 8 <= w; x += 4)
+            {
+                double ma = 0, mb = 0, va = 0, vb = 0, cov = 0;
+                for (int j = 0; j < 64; j++)
+                {
+                    int i = ((y + (j >> 3)) * w) + x + (j & 7);
+                    ma += Luma(pa, i);
+                    mb += Luma(pb, i);
+                }
+
+                ma /= 64;
+                mb /= 64;
+                for (int j = 0; j < 64; j++)
+                {
+                    int i = ((y + (j >> 3)) * w) + x + (j & 7);
+                    double da = Luma(pa, i) - ma, db = Luma(pb, i) - mb;
+                    va += da * da;
+                    vb += db * db;
+                    cov += da * db;
+                }
+
+                total += ((2 * ma * mb) + 6.5025) * ((2 * cov / 63) + 58.5225) / (((ma * ma) + (mb * mb) + 6.5025) * ((va / 63) + (vb / 63) + 58.5225));
+                windows++;
+            }
+        }
+
+        return total / windows;
+    }
+
     [Theory]
     [InlineData(4, "VP8L")]
     [InlineData(6, "VP8L")]

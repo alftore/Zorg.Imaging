@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Lossy WebP's mode choices weigh how much of each block's texture they keep, not only their squared error: at equal file size 0.04 to 0.1 dB higher PSNR and 0.03 to 0.09% higher luma SSIM in every image category, for 1 to 3% more time. Files are up to 1% larger at the same quality.
 - Lossy WebP decides whether to try lossless for a flat graphic from a quarter of its rows first, so screenshots that stay lossy skip the full trial: 10 to 23% less time on one core and 24 to 28% on 16, with the same files.
 - PNG's default filter choice also tries no filter, which flat graphics often compress best with: game and web screenshots and cut-outs 1.5 to 2% smaller, others unchanged, about 3% more time.
 
