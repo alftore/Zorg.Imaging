@@ -1,8 +1,10 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Zorg.Imaging.Formats;
 using Zorg.Imaging.Processing;
 
@@ -265,6 +267,7 @@ internal sealed class Vp8Decoder
             }
         }
 
+        PrepareTokenProbabilities();
         _skipEnabled = h.ReadFlag();
         if (_skipEnabled)
         {
@@ -288,6 +291,7 @@ internal sealed class Vp8Decoder
     private static short Ac(int index) => (short)Vp8Tables.AcQuantiser[Math.Clamp(index, 0, 127)];
 
     private Macroblock[] _macroblocks = [];
+    private byte[] _tokenProbabilities = [];
 
     private struct Macroblock
     {
@@ -469,78 +473,113 @@ internal sealed class Vp8Decoder
         return nonZero;
     }
 
-    // One block's tokens (section 13.2, with the reference decoder's tree walk). Returns where the block ended.
+    // One block's tokens (section 13.2, with the reference decoder's tree walk). Returns where the block ended. The
+    // boolean decoder's state lives in locals for the whole block, and the probabilities are looked up by position
+    // (PrepareTokenProbabilities) rather than band.
     private int ReadBlock(Vp8BoolDecoder bits, int type, int context, int first, Span<short> block, short dc, short ac)
     {
-        ReadOnlySpan<byte> probabilities = _coefficientProbabilities.AsSpan(type * 8 * 3 * 11, 8 * 3 * 11);
+        (ulong value, int count, uint range) = bits.State;
+        ref byte probabilities = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_tokenProbabilities), type * 16 * 3 * 11);
+        ref short output = ref MemoryMarshal.GetReference(block);
+        ref byte zigZag = ref MemoryMarshal.GetReference(ZigZag);
         int c = first;
-        ReadOnlySpan<byte> p = probabilities.Slice(((Bands[c] * 3) + context) * 11, 11);
-        if (!bits.ReadBool(p[0]))
+        ref byte p = ref Unsafe.Add(ref probabilities, ((c * 3) + context) * 11);
+        if (!bits.Read(ref value, ref count, ref range, p))
         {
+            bits.Store(value, count, range);
             return c;
         }
 
         while (true)
         {
-            if (!bits.ReadBool(p[1]))
+            if (!bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, 1)))
             {
                 // DCT_0: the next token can't be end-of-block, so its first branch is skipped.
                 if (++c == 16)
                 {
-                    return 16;
+                    break;
                 }
 
-                p = probabilities.Slice(Bands[c] * 3 * 11, 11);
+                p = ref Unsafe.Add(ref probabilities, c * 3 * 11);
                 continue;
             }
 
-            int value;
+            int v;
             int next;
-            if (!bits.ReadBool(p[2]))
+            if (!bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, 2)))
             {
-                value = 1;
+                v = 1;
                 next = 1;
             }
             else
             {
                 next = 2;
-                if (!bits.ReadBool(p[3]))
-                {
-                    value = !bits.ReadBool(p[4]) ? 2 : 3 + (bits.ReadBool(p[5]) ? 1 : 0);
-                }
-                else if (!bits.ReadBool(p[6]))
-                {
-                    value = !bits.ReadBool(p[7])
-                        ? 5 + (bits.ReadBool(159) ? 1 : 0)
-                        : 7 + (bits.ReadBool(165) ? 2 : 0) + (bits.ReadBool(145) ? 1 : 0);
-                }
-                else
-                {
-                    bool high = bits.ReadBool(p[8]);
-                    bool odd = bits.ReadBool(p[high ? 10 : 9]);
-                    ReadOnlySpan<byte> extra = high ? (odd ? Cat6 : Cat5) : (odd ? Cat4 : Cat3);
-                    int baseValue = high ? (odd ? 67 : 35) : (odd ? 19 : 11);
-                    int v = 0;
-                    foreach (byte probability in extra)
-                    {
-                        v = (v << 1) | (bits.ReadBool(probability) ? 1 : 0);
-                    }
-
-                    value = baseValue + v;
-                }
+                v = ReadLargeValue(bits, ref value, ref count, ref range, ref p);
             }
 
-            int signed = bits.ReadFlag() ? -value : value;
-            block[ZigZag[c]] = (short)(signed * (c > 0 ? ac : dc));
+            int signed = bits.Read(ref value, ref count, ref range, 128) ? -v : v;
+            Unsafe.Add(ref output, Unsafe.Add(ref zigZag, c)) = (short)(signed * (c > 0 ? ac : dc));
             if (++c == 16)
             {
-                return 16;
+                break;
             }
 
-            p = probabilities.Slice(((Bands[c] * 3) + next) * 11, 11);
-            if (!bits.ReadBool(p[0]))
+            p = ref Unsafe.Add(ref probabilities, ((c * 3) + next) * 11);
+            if (!bits.Read(ref value, ref count, ref range, p))
             {
-                return c;
+                break;
+            }
+        }
+
+        bits.Store(value, count, range);
+        return c;
+    }
+
+    // A token above one (DCT tokens 2 to 4 and the categories), its value without the sign.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int ReadLargeValue(Vp8BoolDecoder bits, ref ulong value, ref int count, ref uint range, ref byte p)
+    {
+        if (!bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, 3)))
+        {
+            return !bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, 4))
+                ? 2
+                : 3 + (bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, 5)) ? 1 : 0);
+        }
+
+        if (!bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, 6)))
+        {
+            if (!bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, 7)))
+            {
+                return 5 + (bits.Read(ref value, ref count, ref range, 159) ? 1 : 0);
+            }
+
+            int v = 7 + (bits.Read(ref value, ref count, ref range, 165) ? 2 : 0);
+            return v + (bits.Read(ref value, ref count, ref range, 145) ? 1 : 0);
+        }
+
+        bool high = bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, 8));
+        bool odd = bits.Read(ref value, ref count, ref range, Unsafe.Add(ref p, high ? 10 : 9));
+        ReadOnlySpan<byte> extra = high ? (odd ? Cat6 : Cat5) : (odd ? Cat4 : Cat3);
+        int baseValue = high ? (odd ? 67 : 35) : (odd ? 19 : 11);
+        int e = 0;
+        foreach (byte probability in extra)
+        {
+            e = (e << 1) | (bits.Read(ref value, ref count, ref range, probability) ? 1 : 0);
+        }
+
+        return baseValue + e;
+    }
+
+    // The token probabilities by coefficient position rather than band: [type][position 0..15][context][11].
+    private void PrepareTokenProbabilities()
+    {
+        _tokenProbabilities = new byte[4 * 16 * 3 * 11];
+        for (int type = 0; type < 4; type++)
+        {
+            for (int c = 0; c < 16; c++)
+            {
+                _coefficientProbabilities.AsSpan(((type * 8) + Bands[c]) * 3 * 11, 3 * 11)
+                    .CopyTo(_tokenProbabilities.AsSpan(((type * 16) + c) * 3 * 11, 3 * 11));
             }
         }
     }
@@ -985,7 +1024,11 @@ internal sealed class Vp8Decoder
     }
 
     // Section 14.4: the inverse DCT, added to the prediction and clamped (section 14.5).
-    internal static void AddResidual(Plane plane, int x0, int y0, ReadOnlySpan<short> input, bool any)
+    internal static void AddResidual(Plane plane, int x0, int y0, ReadOnlySpan<short> input, bool any) =>
+        AddResidual(plane, x0, y0, input, any, useVectors: true);
+
+    /// <summary><see cref="AddResidual(Plane, int, int, ReadOnlySpan{short}, bool)"/>, optionally without vectors: the reference the vector path is tested against.</summary>
+    internal static void AddResidual(Plane plane, int x0, int y0, ReadOnlySpan<short> input, bool any, bool useVectors)
     {
         if (!any)
         {
@@ -1001,6 +1044,13 @@ internal sealed class Vp8Decoder
             && (MemoryMarshal.Cast<short, ulong>(input[..16])[0] & ~0xFFFFUL) == 0)
         {
             int dc = (input[0] + 4) >> 3;
+            if (useVectors && Sse2.IsSupported)
+            {
+                // dc is within -4096 .. 4096, so the saturating 16-bit add then the clamp to 0..255 is the scalar clamp.
+                AddToBlock(data, at, stride, Vector128.Create((short)dc), Vector128.Create((short)dc));
+                return;
+            }
+
             for (int r = 0; r < 4; r++, at += stride)
             {
                 data[at] = Clamp(data[at] + dc);
@@ -1009,6 +1059,12 @@ internal sealed class Vp8Decoder
                 data[at + 3] = Clamp(data[at + 3] + dc);
             }
 
+            return;
+        }
+
+        if (useVectors && Sse41.IsSupported)
+        {
+            AddResidualVector(data, at, stride, input);
             return;
         }
 
@@ -1046,6 +1102,80 @@ internal sealed class Vp8Decoder
             data[at + 2] = Clamp(data[at + 2] + ((b1 - c1 + 4) >> 3));
             data[at + 3] = Clamp(data[at + 3] + ((a1 - d1 + 4) >> 3));
         }
+    }
+
+    // The same transform in 32-bit lanes, so every step (wrap-around included) is the scalar one: the first pass down
+    // the columns with a column in each lane, a transpose, the second pass with a row in each lane, a transpose back.
+    private static void AddResidualVector(byte[] data, int at, int stride, ReadOnlySpan<short> input)
+    {
+        ref short source = ref MemoryMarshal.GetReference(input);
+        Vector128<short> low = Vector128.LoadUnsafe(ref source);
+        Vector128<short> high = Vector128.LoadUnsafe(ref source, 8);
+        Vector128<int> i0 = Sse41.ConvertToVector128Int32(low);
+        Vector128<int> i4 = Sse41.ConvertToVector128Int32(Sse2.ShiftRightLogical128BitLane(low, 8).AsInt16());
+        Vector128<int> i8 = Sse41.ConvertToVector128Int32(high);
+        Vector128<int> i12 = Sse41.ConvertToVector128Int32(Sse2.ShiftRightLogical128BitLane(high, 8).AsInt16());
+        Pass(i0, i4, i8, i12, out Vector128<int> r0, out Vector128<int> r1, out Vector128<int> r2, out Vector128<int> r3);
+        Transpose(ref r0, ref r1, ref r2, ref r3);
+        Pass(r0, r1, r2, r3, out Vector128<int> c0, out Vector128<int> c1, out Vector128<int> c2, out Vector128<int> c3);
+        Vector128<int> four = Vector128.Create(4);
+        c0 = Vector128.ShiftRightArithmetic(c0 + four, 3);
+        c1 = Vector128.ShiftRightArithmetic(c1 + four, 3);
+        c2 = Vector128.ShiftRightArithmetic(c2 + four, 3);
+        c3 = Vector128.ShiftRightArithmetic(c3 + four, 3);
+        Transpose(ref c0, ref c1, ref c2, ref c3);
+
+        // The residual of each row, saturated to 16 bits (it is clamped to 0..255 after the add anyway).
+        AddToBlock(data, at, stride, Sse2.PackSignedSaturate(c0, c1), Sse2.PackSignedSaturate(c2, c3));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static void Pass(Vector128<int> x0, Vector128<int> x1, Vector128<int> x2, Vector128<int> x3, out Vector128<int> y0, out Vector128<int> y1, out Vector128<int> y2, out Vector128<int> y3)
+        {
+            Vector128<int> cos = Vector128.Create(20091);
+            Vector128<int> sin = Vector128.Create(35468);
+            Vector128<int> a1 = x0 + x2;
+            Vector128<int> b1 = x0 - x2;
+            Vector128<int> c1 = Vector128.ShiftRightArithmetic(x1 * sin, 16) - (x3 + Vector128.ShiftRightArithmetic(x3 * cos, 16));
+            Vector128<int> d1 = x1 + Vector128.ShiftRightArithmetic(x1 * cos, 16) + Vector128.ShiftRightArithmetic(x3 * sin, 16);
+            y0 = a1 + d1;
+            y1 = b1 + c1;
+            y2 = b1 - c1;
+            y3 = a1 - d1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static void Transpose(ref Vector128<int> x0, ref Vector128<int> x1, ref Vector128<int> x2, ref Vector128<int> x3)
+        {
+            Vector128<int> t0 = Sse2.UnpackLow(x0, x1), t1 = Sse2.UnpackHigh(x0, x1);
+            Vector128<int> t2 = Sse2.UnpackLow(x2, x3), t3 = Sse2.UnpackHigh(x2, x3);
+            x0 = Sse2.UnpackLow(t0.AsInt64(), t2.AsInt64()).AsInt32();
+            x1 = Sse2.UnpackHigh(t0.AsInt64(), t2.AsInt64()).AsInt32();
+            x2 = Sse2.UnpackLow(t1.AsInt64(), t3.AsInt64()).AsInt32();
+            x3 = Sse2.UnpackHigh(t1.AsInt64(), t3.AsInt64()).AsInt32();
+        }
+    }
+
+    // Adds a 4 x 4 residual, rows 0 and 1 in `top` and rows 2 and 3 in `bottom`, to the pixels at `at`, clamped.
+    private static void AddToBlock(byte[] data, int at, int stride, Vector128<short> top, Vector128<short> bottom)
+    {
+        if ((uint)at > (uint)data.Length || (uint)(at + (3 * stride) + 4) > (uint)data.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(at));
+        }
+
+        ref byte pixels = ref MemoryMarshal.GetArrayDataReference(data);
+        Vector128<byte> p01 = Vector128.Create(
+            Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref pixels, at)),
+            Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref pixels, at + stride)),
+            Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref pixels, at + (2 * stride))),
+            Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref pixels, at + (3 * stride)))).AsByte();
+        Vector128<short> sum01 = Sse2.AddSaturate(Sse2.UnpackLow(p01, Vector128<byte>.Zero).AsInt16(), top);
+        Vector128<short> sum23 = Sse2.AddSaturate(Sse2.UnpackHigh(p01, Vector128<byte>.Zero).AsInt16(), bottom);
+        Vector128<uint> result = Sse2.PackUnsignedSaturate(sum01, sum23).AsUInt32();
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref pixels, at), result.ToScalar());
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref pixels, at + stride), result.GetElement(1));
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref pixels, at + (2 * stride)), result.GetElement(2));
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref pixels, at + (3 * stride)), result.GetElement(3));
     }
 
     internal static void InverseWht(ReadOnlySpan<short> input, Span<short> output)

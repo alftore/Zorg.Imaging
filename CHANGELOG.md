@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Lossy WebP decodes about 22% faster on one core (12-megapixel photo, 283 to 220 ms) with the same pixels: the boolean decoder works on locals for a whole block, and the inverse transform, the loop filter's loads and stores and the chroma upsampling run as vectors.
 - Lossy WebP decides whether to try lossless for a flat graphic from a quarter of its rows first, so screenshots that stay lossy skip the full trial: 10 to 23% less time on one core and 24 to 28% on 16, with the same files.
 - PNG's default filter choice also tries no filter, which flat graphics often compress best with: game and web screenshots and cut-outs 1.5 to 2% smaller, others unchanged, about 3% more time.
 
