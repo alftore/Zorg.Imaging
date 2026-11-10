@@ -41,26 +41,28 @@ and cjpeg variants of 14 CID22 photos and odd-sized crops, the WebP corpus, the 
 textures, cut-outs; at most 4 megapixels) and the CID22 validation photos, on one core. Made by a corpus runner kept
 outside the repository; the reference tools ran in the Linux gate image. Size and time are ours over theirs (geometric
 mean); PSNR and SSIM are ours less theirs, over white. Their time is the whole process, start-up and reading the input
-included, ours the encode alone, so ratios on small images flatter us.
+included; ours is the better of two encodes. Numbers after the round of four parallel improvements (preview.6):
 
 | Format, against | Size | Time | ΔPSNR | ΔSSIM | Notes |
 |---|---:|---:|---:|---:|---|
-| Lossy WebP q80, cwebp `-q 80` | 0.970 | 1.03 | +1.35 | -0.0007 | +0.78 dB at cwebp's file size |
-| JPEG q80, cjpeg `-quality 80` | 0.913 | 0.31 | +0.00 | +0.0000 | |
-| Lossless WebP, cwebp `-lossless` | 1.006 | 0.75 | lossless | | icons and cut-outs 3 to 4% larger |
-| PNG, oxipng `-o 2` | 1.096 | 0.06 | lossless | | oxipng searches far longer; `Optimize` closes most of it |
-| PNG, libvips `pngsave` | 0.817 | 0.14 | lossless | | |
-| PNG 256 colours, pngquant 256 | 1.014 | 0.51 | +0.75 | -0.0029 | photos' SSIM 0.007 to 0.011 behind |
-| GIF, libvips `gifsave` | 0.987 | 0.30 | +1.21 | -0.0029 | |
+| Lossy WebP q80, cwebp `-q 80` | 0.974 | 0.98 | +1.07 | -0.0001 | +0.84 dB at cwebp's file size |
+| JPEG q80, cjpeg `-quality 80` | 0.913 | 0.28 | +0.00 | +0.0000 | |
+| Lossless WebP, cwebp `-lossless` | 1.004 | 0.61 | lossless | | icons 1.6% and cut-outs 3.3 to 3.5% larger |
+| PNG, oxipng `-o 2` | 1.092 | 0.06 | lossless | | oxipng searches far longer; `Optimize` closes most of it |
+| PNG, libvips `pngsave` | 0.813 | 0.14 | lossless | | |
+| PNG 256 colours, pngquant 256 | 1.013 | 0.46 | +0.84 | -0.0028 | photos' SSIM 0.005 to 0.011 behind (dithering) |
+| GIF, libvips `gifsave` | 0.985 | 0.26 | +1.27 | -0.0027 | |
 
-Lossy WebP by category, PSNR at cwebp's file size less cwebp's: web screenshots +2.7 dB and game screenshots +0.7
-(flat graphics come out lossless where that is smaller), photos -0.03 to +0.2, 64-pixel icons +1.1, 512-pixel icons
-+0.5, cut-outs +0.35, plant cut-outs -0.22 (their alpha is 4% larger than cwebp's). Times run from 0.25 (64-pixel
-icons) to 1.67 (plant cut-outs) of cwebp's.
+Lossy WebP by category, PSNR at cwebp's file size less cwebp's: web screenshots +2.8 dB and game screenshots +0.7
+(flat graphics come out lossless where that is smaller), photos +0.02 to +0.25, icons +0.5 to +1.1, cut-outs +0.4,
+photo textures -0.07, plant cut-outs -0.16 (their alpha is 3.5% larger than cwebp's). Times run from 0.21 (64-pixel
+icons) to 1.6 (web screenshots) of cwebp's.
 
 Tried for lossy WebP and left out: trellis quantisation (+0.1 dB PSNR but 0.1 to 0.17% lower luma SSIM, as it zeroes fine
-texture, for 20 to 35% more time) and the alpha chunk's prediction filters (alpha 17 to 31% larger than with the
-lossless coder's own predictor).
+texture, for 20 to 35% more time), the alpha chunk's prediction filters (alpha 17 to 31% larger than with the lossless
+coder's own predictor), alpha-weighted distortion (-0.3 to -0.6 dB), per-segment loop filter levels (at most
++0.01 dB) and a larger luma rounding bias (more SSIM, less PSNR, quality scale moved 2 to 3%). For the palette
+quantiser: an error-feedback re-cut and smoothness weighting (both worse than more k-means rounds).
 
 ## 2026-11-09: lossy PNG
 
