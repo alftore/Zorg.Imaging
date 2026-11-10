@@ -2,21 +2,25 @@
 
 ## Unreleased
 
-- WebP and GIF decoding write 8-bit RGB, RGBA and BGRA output four pixels at a time with byte shuffles: that step down from 6.6% to 2.7% of a 12-megapixel lossy WebP decode.
-- Baseline JPEG decoding clears each band's coefficients block by block right after the inverse DCT, while they are in cache, instead of all at once before the band, and takes luma rows straight from the plane rather than copying them: the same pixels, copying and clearing down from 5.5% to 2.7% of a 12-megapixel decode (best run unchanged; the median one-core run 102 to 70 ms).
-- Lossy WebP decodes about 24% faster on one core (12-megapixel photo, 279 to 211 ms; 156 to 134 ms on 16 cores) with the same pixels: the boolean decoder works on locals for a whole block, and the inverse transform, the loop filter's loads and stores and the chroma upsampling run as vectors.
-- Lossy WebP's mode choices weigh how much of each block's texture they keep, not only their squared error: at equal file size 0.04 to 0.1 dB higher PSNR and 0.03 to 0.09% higher luma SSIM in every image category, for up to 4% more time (2 to 3% on photos at quality 80, 4% at 50). Files are up to 1% larger at the same quality.
-- Lossy WebP decides whether to try lossless for a flat graphic from a quarter of its rows first, so screenshots that stay lossy skip the full trial: 10 to 23% less time on one core and 24 to 28% on 16, with the same files.
-- PNG's default filter choice also tries no filter, which flat graphics often compress best with: game and web screenshots and cut-outs 1.5 to 2% smaller, others unchanged, about 3% more time.
+Lossy WebP:
+
+- Mode choices weigh how much of each block's texture they keep, not only squared error: at equal file size 0.04 to 0.1 dB higher PSNR and 0.03 to 0.09% higher luma SSIM in every category, for up to 4% more time. Files are up to 1% larger at the same quality.
+- Whether a flat graphic is worth trying lossless is decided from a quarter of its rows first: screenshots that stay lossy encode 10 to 28% faster, with the same files.
+- Decoding is 24% faster on one core (a 12-megapixel photo: 279 to 211 ms; 156 to 134 ms on 16 cores), with the same pixels.
+
 Lossless WebP:
 
-- Faster on small images: on one core at the default effort, 256 x 256 textures encode 45% faster (0.1% larger, from coarser code tiles below effort 5) and 64 x 64 icons 22 to 36% faster. Photos are 9% faster; large cut-outs about as fast as before.
-- The copy search passes over runs of one colour instead of stepping through them, so it reaches further back: icons and cut-outs 0.3 to 1% smaller, the most at effort 6.
-- Tiles are grouped under shared codes by a closer estimate of each code's header: icons, textures and cut-outs 0.2 to 0.6% smaller.
+- Faster on small images: 256 x 256 textures encode 45% faster and 64 x 64 icons 22 to 36% faster on one core; photos 9%. Large cut-outs are as before.
+- The copy search passes over runs of one colour, and code headers are priced more closely when tiles are grouped: icons, textures and cut-outs 0.2 to 1% smaller.
+
 GIF and lossy PNG:
 
-- Colours are 0.1 to 0.16 dB closer to the source on photos and screenshots, with SSIM a little higher and files up to 0.6% smaller, from 12 rounds of k-means instead of 4.
-- Faster despite that: on one core, lossy PNG at 256 colours and GIF encode 20 to 25% faster on web screenshots and cut-outs, 30 to 43% faster on icons, and up to 10% slower on photos. The colour search cache is made as needed instead of 8 MB up front, colours are compared eight at a time, and runs of one colour are counted and mapped at once.
+- Colours are 0.1 to 0.16 dB closer to the source on photos and screenshots, from 12 rounds of k-means instead of 4, and encoding is 20 to 43% faster on screenshots, cut-outs and icons (up to 10% slower on photos): the colour search cache is built as needed instead of 8 MB up front, and colours are compared eight at a time.
+
+PNG and JPEG:
+
+- PNG's default filter choice also tries no filter: game and web screenshots and cut-outs 1.5 to 2% smaller, others unchanged.
+- JPEG decoding clears coefficients as it goes and reads luma rows in place: the same pixels, with steadier one-core times (median 102 to 70 ms on a 12-megapixel photo). WebP and GIF decoding write 8-bit output four pixels at a time.
 
 ## 0.1.0-preview.5
 
