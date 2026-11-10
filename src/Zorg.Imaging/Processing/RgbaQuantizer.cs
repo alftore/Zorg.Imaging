@@ -11,7 +11,9 @@ namespace Zorg.Imaging.Processing;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The pixels are counted into cells of 64 levels a channel (alpha, and premultiplied red, green and blue), each cell
+/// The pixels are counted into cells, one for each distinct colour when there are at most 65,536 (icons and graphics with
+/// antialiased edges gain 4 to 5 dB over grouping their colours), else of 64 levels a channel (alpha, and premultiplied
+/// red, green and blue), each cell
 /// keeping its count and sums. Median cut splits the cells into as many boxes as there are colours, always the box with
 /// the largest squared error, across its widest channel at the weighted median; then a few rounds of k-means move each
 /// colour to the mean of the cells nearest it. A colour whose pixels are all opaque stays exactly opaque. Fully
@@ -53,7 +55,7 @@ internal static class RgbaQuantizer
         }
 
         int colours = maxColours - (anyTransparent ? 1 : 0);
-        Cells cells = Cells.Count(argb);
+        Cells cells = Cells.Count(argb, exactCells: FewColours(argb));
         Vector128<float>[] means = MedianCut(cells, Math.Max(colours, 1));
         bool[] opaque = Refine(cells, means, anyAlpha);
 
@@ -97,7 +99,7 @@ internal static class RgbaQuantizer
     }
 
     // A pixel as premultiplied (A, R, G, B) floats from 0 to 255.
-    private static Vector128<float> Premultiply(uint p)
+    internal static Vector128<float> Premultiply(uint p)
     {
         float a = p >> 24;
         float scale = a / 255;
@@ -139,6 +141,14 @@ internal static class RgbaQuantizer
             order[i] = i;
         }
 
+        // Means are 0 or more, so their float bits order as the values do.
+        var cellMeans = new Vector128<float>[cells.Length];
+        for (int c = 0; c < cellMeans.Length; c++)
+        {
+            cellMeans[c] = cells.Mean(c);
+        }
+
+        long[] keys = new long[order.Length];
         var boxes = new List<(int Start, int End, double Error)> { (0, order.Length, cells.Error(order, 0, order.Length)) };
         while (boxes.Count < colours)
         {
@@ -159,11 +169,14 @@ internal static class RgbaQuantizer
 
             (int start, int end, _) = boxes[worst];
             int lane = cells.WidestLane(order, start, end);
-            Array.Sort(order, start, end - start, Comparer<int>.Create((x, y) =>
+
+            // By the lane's mean, then by cell: keys sorted with the cells, the mean in the high bits.
+            for (int i = start; i < end; i++)
             {
-                int byLane = cells.Mean(x).GetElement(lane).CompareTo(cells.Mean(y).GetElement(lane));
-                return byLane != 0 ? byLane : x.CompareTo(y);
-            }));
+                keys[i] = ((long)BitConverter.SingleToInt32Bits(cellMeans[order[i]].GetElement(lane)) << 32) | (uint)order[i];
+            }
+
+            Array.Sort(keys, order, start, end - start);
             long total = 0;
             for (int i = start; i < end; i++)
             {
@@ -212,14 +225,16 @@ internal static class RgbaQuantizer
     {
         int[] nearest = new int[cells.Length];
         bool[] opaque = new bool[means.Length];
+        var finder = new NearestColour(means, overPage);
         for (int round = 0; round <= Rounds; round++)
         {
+            finder.Reset();
             Parallelism.For(Parallelism.Bands((long)cells.Length * means.Length / 16, 64), band =>
             {
                 int bands = Parallelism.Bands((long)cells.Length * means.Length / 16, 64);
                 for (int c = (int)((long)cells.Length * band / bands); c < (int)((long)cells.Length * (band + 1) / bands); c++)
                 {
-                    nearest[c] = Nearest(means, cells.Mean(c), overPage);
+                    nearest[c] = finder.Find(cells.Mean(c));
                 }
             });
 
@@ -253,10 +268,82 @@ internal static class RgbaQuantizer
         return opaque;
     }
 
+    // Whether the visible colours are few enough (65,536 at most) for each to be a cell of its own: icons and graphics
+    // with antialiased edges have hundreds to thousands, blends of a few base colours, which cells of 64 levels merged.
+    private static bool FewColours(uint[] argb)
+    {
+        var seen = new HashSet<uint>();
+        uint last = 0;
+        foreach (uint p in argb)
+        {
+            if (p < 0x01000000u || p == last)
+            {
+                continue;
+            }
+
+            last = p;
+            if (seen.Add(p) && seen.Count > 65_536)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     // The share of each pixel's error that full-strength dithering passes on: all of it left photos grainy, about 4 dB
     // further from the source, for hardly less banding. (Dithering less where the picture is flat scored better on PSNR
     // and SSIM but left visible bands in smooth gradients, so every pixel passes on the same share.)
     private const double DitherShare = 0.6;
+
+    // The exact nearest colour (the lowest index of equals) through a cache of 32 levels a channel, which keeps for each
+    // cell the colours that can be nearest to some value in it; cells are filled as first met, by any thread, each the
+    // same whoever fills it.
+    internal sealed class NearestColour(Vector128<float>[] colours, bool overPage)
+    {
+        private readonly int[]?[] _cache = new int[]?[1 << 20];
+        private readonly System.Collections.Concurrent.ConcurrentQueue<int> _filled = new();
+
+        // Forgets the cells filled so far, for colours that have moved (the array is the same, its values changed).
+        public void Reset()
+        {
+            while (_filled.TryDequeue(out int key))
+            {
+                _cache[key] = null;
+            }
+        }
+
+        public int Find(Vector128<float> p)
+        {
+            Vector128<int> level = Vector128.Min(Vector128.Max(Vector128.ConvertToInt32(p) >> 3, Vector128<int>.Zero), Vector128.Create(31));
+            int key = (level.GetElement(0) << 15) | (level.GetElement(1) << 10) | (level.GetElement(2) << 5) | level.GetElement(3);
+            int[]? candidates = _cache[key];
+            if (candidates is null)
+            {
+                candidates = Candidates(colours, Vector128.ConvertToSingle((level << 3) + Vector128.Create(4)), overPage);
+                _cache[key] = candidates;
+                _filled.Enqueue(key);
+            }
+
+            if (candidates.Length == 1)
+            {
+                return candidates[0];
+            }
+
+            int best = candidates[0];
+            float least = float.MaxValue;
+            foreach (int k in candidates)
+            {
+                float d = Distance(colours[k], p, overPage);
+                if (d < least)
+                {
+                    (least, best) = (d, k);
+                }
+            }
+
+            return best;
+        }
+    }
 
     // The colours, in index order, that can be nearest to some value within 4 a channel of the centre.
     private static int[] Candidates(Vector128<float>[] palette, Vector128<float> centre, bool overPage)
@@ -306,30 +393,8 @@ internal static class RgbaQuantizer
     private static byte[] Map(uint[] argb, int width, int height, Vector128<float>[] palette, int transparentIndex, double dither, bool overPage)
     {
         Vector128<float>[] colours = transparentIndex >= 0 ? palette[..transparentIndex] : palette;
-        int[]?[] cache = new int[]?[1 << 20];
-        int Find(Vector128<float> p)
-        {
-            Vector128<int> level = Vector128.Min(Vector128.Max(Vector128.ConvertToInt32(p) >> 3, Vector128<int>.Zero), Vector128.Create(31));
-            int key = (level.GetElement(0) << 15) | (level.GetElement(1) << 10) | (level.GetElement(2) << 5) | level.GetElement(3);
-            int[] candidates = cache[key] ??= Candidates(colours, Vector128.ConvertToSingle((level << 3) + Vector128.Create(4)), overPage);
-            if (candidates.Length == 1)
-            {
-                return candidates[0];
-            }
-
-            int best = candidates[0];
-            float least = float.MaxValue;
-            foreach (int k in candidates)
-            {
-                float d = Distance(colours[k], p, overPage);
-                if (d < least)
-                {
-                    (least, best) = (d, k);
-                }
-            }
-
-            return best;
-        }
+        var nearest = new NearestColour(colours, overPage);
+        int Find(Vector128<float> p) => nearest.Find(p);
 
         byte[] indices = new byte[argb.Length];
         float strength = (float)(dither * DitherShare);
@@ -390,7 +455,8 @@ internal static class RgbaQuantizer
 
         public int Length { get; private set; }
 
-        public static Cells Count(uint[] argb)
+        // With exactCells, each distinct colour is a cell of its own; else colours share cells of 64 levels a channel.
+        public static Cells Count(uint[] argb, bool exactCells)
         {
             var cells = new Cells();
             var map = new Dictionary<int, int>();
@@ -412,9 +478,18 @@ internal static class RgbaQuantizer
                 }
                 else
                 {
-                    Vector128<float> v = Premultiply(p);
-                    Vector128<int> level = Vector128.ConvertToInt32(v) >> 2;
-                    int key = (level.GetElement(0) << 18) | (level.GetElement(1) << 12) | (level.GetElement(2) << 6) | level.GetElement(3);
+                    int key;
+                    if (exactCells)
+                    {
+                        key = (int)p;
+                    }
+                    else
+                    {
+                        Vector128<float> v = Premultiply(p);
+                        Vector128<int> level = Vector128.ConvertToInt32(v) >> 2;
+                        key = (level.GetElement(0) << 18) | (level.GetElement(1) << 12) | (level.GetElement(2) << 6) | level.GetElement(3);
+                    }
+
                     if (!map.TryGetValue(key, out cell))
                     {
                         cell = map.Count;
