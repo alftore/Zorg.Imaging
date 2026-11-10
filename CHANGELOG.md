@@ -13,6 +13,10 @@ Lossless WebP:
 - Faster on small images: on one core at the default effort, 256 x 256 textures encode 45% faster (0.1% larger, from coarser code tiles below effort 5) and 64 x 64 icons 22 to 36% faster. Photos are 9% faster; large cut-outs about as fast as before.
 - The copy search passes over runs of one colour instead of stepping through them, so it reaches further back: icons and cut-outs 0.3 to 1% smaller, the most at effort 6.
 - Tiles are grouped under shared codes by a closer estimate of each code's header: icons, textures and cut-outs 0.2 to 0.6% smaller.
+GIF and lossy PNG:
+
+- Colours are 0.1 to 0.16 dB closer to the source on photos and screenshots, with SSIM a little higher and files up to 0.6% smaller, from 12 rounds of k-means instead of 4.
+- Faster despite that: on one core, lossy PNG at 256 colours and GIF encode 20 to 25% faster on web screenshots and cut-outs, 30 to 43% faster on icons, and up to 10% slower on photos. The colour search cache is made as needed instead of 8 MB up front, colours are compared eight at a time, and runs of one colour are counted and mapped at once.
 
 ## 0.1.0-preview.5
 
