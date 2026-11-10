@@ -38,8 +38,16 @@ internal static class RgbaQuantizer
         bool anyTransparent = false;
         bool anyAlpha = false;
         var exact = new HashSet<uint>();
-        foreach (uint p in argb)
+        uint previous = 0;
+        for (int i = 0; i < argb.Length; i++)
         {
+            uint p = argb[i];
+            if (i > 0 && p == previous)
+            {
+                continue;
+            }
+
+            previous = p;
             uint key = p < 0x01000000u ? 0u : p;
             anyTransparent |= key == 0;
             anyAlpha |= p < 0xFF000000u;
@@ -92,7 +100,7 @@ internal static class RgbaQuantizer
         byte[] indices = new byte[argb.Length];
         for (int i = 0; i < argb.Length; i++)
         {
-            indices[i] = lookup[argb[i] < 0x01000000u ? 0u : argb[i]];
+            indices[i] = i > 0 && argb[i] == argb[i - 1] ? indices[i - 1] : lookup[argb[i] < 0x01000000u ? 0u : argb[i]];
         }
 
         return new Result(palette, indices);
@@ -101,9 +109,11 @@ internal static class RgbaQuantizer
     // A pixel as premultiplied (A, R, G, B) floats from 0 to 255.
     internal static Vector128<float> Premultiply(uint p)
     {
+        // (A, R, G, B) as floats, then R, G and B times A / 255.
+        Vector128<byte> lanes = Vector128.Create((byte)3, 255, 255, 255, 2, 255, 255, 255, 1, 255, 255, 255, 0, 255, 255, 255);
+        Vector128<float> v = Vector128.ConvertToSingle(Vector128.Shuffle(Vector128.CreateScalar(p).AsByte(), lanes).AsInt32());
         float a = p >> 24;
-        float scale = a / 255;
-        return Vector128.Create(a, ((p >> 16) & 0xFF) * scale, ((p >> 8) & 0xFF) * scale, (p & 0xFF) * scale);
+        return v * Vector128.Create(1, a / 255, a / 255, a / 255);
     }
 
     private static uint Straight(Vector128<float> mean, bool opaque)
@@ -497,6 +507,8 @@ internal static class RgbaQuantizer
         byte[] indices = new byte[argb.Length];
         float strength = (float)(dither * DitherShare);
         var current = new Vector128<float>[width + 2];
+        Vector128<float> lastWanted = Vector128.Create(-1f);
+        int lastIndex = 0;
         var next = new Vector128<float>[width + 2];
         for (int y = 0; y < height; y++)
         {
@@ -523,7 +535,9 @@ internal static class RgbaQuantizer
                     wanted = Vector128.Min(wanted, Vector128.Create(255f, a, a, a));
                 }
 
-                int index = Find(wanted);
+                // A flat area in a palette colour carries no error, so the same colour comes again and again.
+                int index = Vector128.EqualsAll(wanted, lastWanted) ? lastIndex : Find(wanted);
+                (lastWanted, lastIndex) = (wanted, index);
                 indices[i] = (byte)index;
                 if (strength > 0)
                 {
@@ -562,8 +576,17 @@ internal static class RgbaQuantizer
             var opaque = new List<bool>();
             uint last = 0;
             int lastCell = -1;
-            foreach (uint p in argb)
+            for (int i = 0; i < argb.Length;)
             {
+                // A run of the same colour is added at once.
+                uint p = argb[i];
+                int run = 1;
+                while (i + run < argb.Length && argb[i + run] == p)
+                {
+                    run++;
+                }
+
+                i += run;
                 if (p < 0x01000000u)
                 {
                     continue;
@@ -604,14 +627,14 @@ internal static class RgbaQuantizer
                 }
 
                 Vector128<float> c = Premultiply(p);
-                weight[cell]++;
+                weight[cell] += run;
                 opaque[cell] &= p >= 0xFF000000u;
                 int at = cell * 5;
-                cells._sums[at] += c.GetElement(0);
-                cells._sums[at + 1] += c.GetElement(1);
-                cells._sums[at + 2] += c.GetElement(2);
-                cells._sums[at + 3] += c.GetElement(3);
-                cells._sums[at + 4] += Vector128.Sum(c * c);
+                cells._sums[at] += run * (double)c.GetElement(0);
+                cells._sums[at + 1] += run * (double)c.GetElement(1);
+                cells._sums[at + 2] += run * (double)c.GetElement(2);
+                cells._sums[at + 3] += run * (double)c.GetElement(3);
+                cells._sums[at + 4] += run * (double)Vector128.Sum(c * c);
             }
 
             cells.Weight = [.. weight];
