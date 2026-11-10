@@ -8,6 +8,33 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-10: decoding on one core
+
+The 12-megapixel photo, `photo-lossy.webp` (cwebp `-q 80`) and `photo.jpg`, decoded to RGB by a small harness, best of
+20 runs after 15 warm-up runs, before and after run back to back while other sessions loaded the machine. The native
+tools were timed in the gate image (busybox time, 10 ms resolution). Decoded pixels are unchanged: 1879 decodes (cwebp
+and cjpeg variants of 14 CID22 photos and odd-sized crops, the WebP corpus, the test fixtures, JPEG at 1/2, 1/4 and
+1/8) hash the same before and after.
+
+| | Before, one core | After, one core | Before, 16 cores | After, 16 cores | Native, one core |
+|---|---:|---:|---:|---:|---:|
+| WebP lossy decode | 283 ms | 220 ms | 159 ms | 145 ms | dwebp 160 ms (`-mt` 110 ms) |
+| JPEG decode, baseline | 70 ms | 70 ms | 35 ms | 35 ms | djpeg 30 to 40 ms |
+
+- **WebP lossy:** the boolean decoder's state stays in locals for a whole block, with the token probabilities looked
+  up by position (parsing 125 to 120 ms; a branchless bit update was slower, 129 ms); the 4 x 4 inverse transform in
+  32-bit lanes (reconstruction 67 to 50 ms); the loop filter loads and stores rows straight into registers (46 to
+  27 ms); the chroma upsampler on eight pairs at a time (colour conversion 28 to 12 ms); ARGB to RGB by byte shuffles.
+  Parsing the tokens is now more than half of the one-core time: about 25 million boolean decodes, each a dependent
+  multiply, compare and shift, at about 4.5 ns.
+- **JPEG baseline:** by profile, the float inverse DCT is 35% of the one-core time, Huffman decoding 23%, chroma
+  upsampling and colour conversion 13%. Coefficients are now cleared block by block after the transform, while in
+  cache, and luma rows are read in place rather than copied (copying and clearing 5.5% to 2.7% of the profile; wall
+  time within the machine's noise). A wider Huffman lookup (10 or 11 bits) made no difference.
+- **Not landed: a 16-bit integer inverse DCT** (pmaddwd, both passes as matrix products, empty rows skipped):
+  70 to 64.5 ms on one core and 35 to 30.5 ms on 16, but 1.9% of output bytes change by 1 to 3 levels. For scale,
+  today's float transform differs from djpeg in 9.35% of bytes over 140 cjpeg files, the integer prototype in 9.98%.
+
 ## 2026-11-10: against the C tools on a test corpus
 
 168 open-licensed images, at most 12 from each category of the QOI benchmark suite (icons, screenshots, photos,
@@ -166,7 +193,8 @@ scan per component keep the whole-frame path; both give the same pixels.
 | 1600 px web size | 274 ms | 206 ms | 63 ms | 60 ms | 34.7 MB | 0.7 MB |
 
 libvips makes the thumbnail in 29 ms on one core and 32 ms on all of them, so on 16 cores we are level. The rest of
-the one-core gap is Huffman decoding of every coefficient, which libjpeg-turbo does about twice as fast.
+the one-core gap at full size is mostly the float inverse DCT and the colour output, not Huffman decoding (see
+2026-11-10: decoding on one core).
 
 ## 2026-11-08: the pipeline end to end
 
@@ -392,8 +420,8 @@ What changed in this round:
 - **WebP lossy decode on several cores** (about 1.8x): parsing, reconstruction, filtering and colour conversion run as
   a row pipeline across threads; one core is unchanged.
 
-Left: lossy WebP and baseline JPEG on one core (about 1.9x the native tools: token decoding, reconstruction, and
-Huffman decoding), progressive JPEG's refinement scans, the scalar reduced inverse DCT used by shrink-on-load, and
+Left: lossy WebP and baseline JPEG on one core (about 1.9x the native tools: token decoding and reconstruction for
+WebP; for JPEG, the inverse DCT and colour output more than Huffman decoding), progressive JPEG's refinement scans, the scalar reduced inverse DCT used by shrink-on-load, and
 zlib's share of PNG encoding (which libpng pays too).
 
 ## 2026-11-08, after the first performance pass (D13)
