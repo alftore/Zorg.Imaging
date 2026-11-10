@@ -12,6 +12,8 @@ Lossless WebP:
 
 - Faster on small images: 256 x 256 textures encode 45% faster and 64 x 64 icons 22 to 36% faster on one core; photos 9%. Large cut-outs are as before.
 - The copy search passes over runs of one colour, and code headers are priced more closely when tiles are grouped: icons, textures and cut-outs 0.2 to 1% smaller.
+- Smaller files: icons and cut-outs 2.7 to 4.3%, game screenshots 1.5%, photos 0.2%, and the alpha of lossy cut-outs 3 to 3.7%: against cwebp, 512-pixel icons and cut-outs are now 1.6 and 2.4% smaller, small icons and plant cut-outs within 0.6%. Tiles of opaque and soft alpha get their own codes, the colour cache is kept only where it beats the groups alone, and copies are priced from a better first parse; encoding takes 5 to 12% longer (64-pixel icons 25%, 0.5 ms).
+- Images of 17 to 256 colours that clearly suit a colour table are coded only that way up to effort 4: up to twice as fast (a 129-colour 1784 x 1862 cut-out 646 to 366 ms, game textures 42% faster), and at most 0.2% larger.
 
 GIF and lossy PNG:
 
