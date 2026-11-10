@@ -298,10 +298,11 @@ internal static class RgbaQuantizer
 
     // The exact nearest colour (the lowest index of equals) through a cache of 32 levels a channel, which keeps for each
     // cell the colours that can be nearest to some value in it; cells are filled as first met, by any thread, each the
-    // same whoever fills it.
+    // same whoever fills it. The cells are held in a block per alpha level, made when first needed: an opaque picture
+    // uses one block of 32,768 cells instead of all 32 (zeroing the whole cache was a fifth of a small icon's encode).
     internal sealed class NearestColour(Vector128<float>[] colours, bool overPage)
     {
-        private readonly int[]?[] _cache = new int[]?[1 << 20];
+        private readonly int[]?[]?[] _cache = new int[]?[]?[32];
         private readonly System.Collections.Concurrent.ConcurrentQueue<int> _filled = new();
 
         // Forgets the cells filled so far, for colours that have moved (the array is the same, its values changed).
@@ -309,20 +310,22 @@ internal static class RgbaQuantizer
         {
             while (_filled.TryDequeue(out int key))
             {
-                _cache[key] = null;
+                _cache[key >> 15]![key & 0x7FFF] = null;
             }
         }
 
         public int Find(Vector128<float> p)
         {
             Vector128<int> level = Vector128.Min(Vector128.Max(Vector128.ConvertToInt32(p) >> 3, Vector128<int>.Zero), Vector128.Create(31));
-            int key = (level.GetElement(0) << 15) | (level.GetElement(1) << 10) | (level.GetElement(2) << 5) | level.GetElement(3);
-            int[]? candidates = _cache[key];
+            int alpha = level.GetElement(0);
+            int key = (level.GetElement(1) << 10) | (level.GetElement(2) << 5) | level.GetElement(3);
+            int[]?[] block = _cache[alpha] ?? Block(alpha);
+            int[]? candidates = block[key];
             if (candidates is null)
             {
                 candidates = Candidates(colours, Vector128.ConvertToSingle((level << 3) + Vector128.Create(4)), overPage);
-                _cache[key] = candidates;
-                _filled.Enqueue(key);
+                block[key] = candidates;
+                _filled.Enqueue((alpha << 15) | key);
             }
 
             if (candidates.Length == 1)
@@ -342,6 +345,13 @@ internal static class RgbaQuantizer
             }
 
             return best;
+        }
+
+        // The block for an alpha level; threads that make one at the same time all use the first stored.
+        private int[]?[] Block(int alpha)
+        {
+            int[]?[] block = new int[]?[1 << 15];
+            return System.Threading.Interlocked.CompareExchange(ref _cache[alpha], block, null) ?? block;
         }
     }
 

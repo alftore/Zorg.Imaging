@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+GIF and lossy PNG:
+
+- The colour search cache is made a block at a time, as colours need it, instead of 8 MB up front: lossy PNG at 256 colours encodes 20 to 25% faster on icons and photos, with the same output.
+
 ## 0.1.0-preview.5
 
 Mostly WebP. Against cwebp at quality 80 on 167 test images, lossy files are 0.78 dB closer to the source at the same size and encode in about the same time on one core; lossless files are within 1% of cwebp's size (see `docs/performance.md`). Lossy WebP, GIF and lossy PNG output differs from preview.4.
