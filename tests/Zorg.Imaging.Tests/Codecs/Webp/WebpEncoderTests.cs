@@ -449,6 +449,54 @@ public class WebpEncoderTests
     }
 
     [Fact]
+    public void Smooth_and_busy_areas_get_their_own_quantisers_from_effort_one()
+    {
+        // The left half a gentle gradient, the right half noise: from effort 1 the frame has segments, the smooth one
+        // with a finer quantiser than the frame's, and the busy one with a coarser.
+        const int Width = 256;
+        const int Height = 128;
+        uint[] argb = new uint[Width * Height];
+        var random = new Random(9);
+        for (int y = 0; y < Height; y++)
+        {
+            for (int x = 0; x < Width; x++)
+            {
+                uint g = x < Width / 2 ? (uint)(60 + (x / 2) + (y / 4)) : (uint)random.Next(256);
+                argb[(y * Width) + x] = 0xFF000000u | (g << 16) | (g << 8) | g;
+            }
+        }
+
+        (byte[] yp, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, 4);
+        int quantiser = Vp8Encoder.QuantiserFor(75);
+        foreach (int effort in new[] { 0, 1, 4 })
+        {
+            byte[] frame = Vp8Encoder.Encode(yp, u, v, Width, Height, quantiser, effort);
+            int first = (frame[0] | (frame[1] << 8) | (frame[2] << 16)) >> 5;
+            var header = new Vp8BoolDecoder(frame, 10, first);
+            header.ReadFlag();
+            header.ReadFlag();
+            bool segmented = header.ReadFlag();
+            Assert.Equal(effort > 0, segmented);
+            if (segmented)
+            {
+                Assert.True(header.ReadFlag());
+                Assert.True(header.ReadFlag());
+                Assert.False(header.ReadFlag());
+                int[] deltas = new int[4];
+                for (int i = 0; i < 4; i++)
+                {
+                    deltas[i] = header.ReadOptionalSigned(7);
+                }
+
+                Assert.True(System.Linq.Enumerable.Min(deltas) < 0 && System.Linq.Enumerable.Max(deltas) > 0, string.Join(", ", deltas));
+            }
+
+            using Image decoded = Image.Decode(Riff(frame), AsRgba);
+            Assert.Equal((Width, Height), (decoded.Width, decoded.Height));
+        }
+    }
+
+    [Fact]
     public void Coloured_lines_keep_their_colour_from_effort_two()
     {
         // Yellow strokes a pixel wide on brown, as old game screens and coloured text have: averaged over 2 x 2 blocks,

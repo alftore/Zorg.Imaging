@@ -53,20 +53,10 @@ internal sealed class Vp8Encoder
     private readonly byte[] _aboveNonZero;
     private readonly byte[] _aboveModes;
     private readonly int _quantiser;
-    private readonly int _y1Dc;
-    private readonly int _y1Ac;
-    private readonly int _y2Dc;
-    private readonly int _y2Ac;
-    private readonly int _uvDc;
-    private readonly int _uvAc;
-    private readonly long _lambda;
-    private readonly long _lambdaSubblock;
 
-    // Lambda for mode bits alone, raised above lambda (by ModePrice) for a picture whose modes would not otherwise fit
-    // the first partition: every mode decision then weighs its mode bits higher, and cheaper modes win where they cost
-    // least in distortion.
-    private long _modeLambda;
-    private long _modeLambdaSubblock;
+    // The quantisers macroblocks are coded with: one, or four with each macroblock's in the map (see Segmentation).
+    private readonly Segment[] _segments;
+    private readonly Segmentation? _segmentation;
     private readonly int _wholeCandidates;
     private readonly int _subblockCandidates;
     private readonly int _effort;
@@ -78,7 +68,7 @@ internal sealed class Vp8Encoder
     private int[] _progress = [];
     private volatile bool _failed;
 
-    private Vp8Encoder(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort)
+    private Vp8Encoder(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, Segmentation? segmentation = null)
     {
         // How many modes, ranked by prediction error alone, get the full test of transform, tokens and reconstruction.
         _effort = effort;
@@ -103,20 +93,11 @@ internal sealed class Vp8Encoder
         _aboveNonZero = new byte[_mbWide * 9];
         _aboveModes = new byte[_mbWide * 4];
 
-        // The decoder's factors for the quantiser (section 14.1), with no per-component deltas.
         _quantiser = quantiser;
-        _y1Dc = Dc(quantiser);
-        _y1Ac = Ac(quantiser);
-        _y2Dc = Dc(quantiser) * 2;
-        _y2Ac = Math.Max(Ac(quantiser) * 155 / 100, 8);
-        _uvDc = Math.Min(Dc(quantiser), 132);
-        _uvAc = Ac(quantiser);
-
-        // Distortion is in squared pixel steps and bits in 1/256 of a bit, so lambda carries 1/256 too.
-        _lambda = Math.Max((long)_y1Ac * _y1Ac * 3 / 16, 1);
-        _lambdaSubblock = Math.Max((long)_y1Ac * _y1Ac * 3 / 16, 1);
-        _modeLambda = _lambda;
-        _modeLambdaSubblock = _lambdaSubblock;
+        _segmentation = segmentation;
+        _segments = segmentation is null
+            ? [new Segment(quantiser)]
+            : [.. segmentation.Deltas.Select(delta => new Segment(Math.Clamp(quantiser + delta, 0, 127)))];
     }
 
     // The price of a mode bit against a token bit, in sixteenths: 16 is the same price.
@@ -124,8 +105,11 @@ internal sealed class Vp8Encoder
     {
         init
         {
-            _modeLambda = _lambda * value / 16;
-            _modeLambdaSubblock = _lambdaSubblock * value / 16;
+            foreach (Segment segment in _segments)
+            {
+                segment.ModeLambda = segment.Lambda * value / 16;
+                segment.ModeLambdaSubblock = segment.LambdaSubblock * value / 16;
+            }
         }
     }
 
@@ -164,7 +148,8 @@ internal sealed class Vp8Encoder
         // fits; a row that runs ahead of its share codes whole-block luma until it is back within it. Without subblock
         // modes at all as a last resort.
         int price = ChooseModePrice(y, u, v, width, height, quantiser, effort, partitionLimit);
-        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
+        Segmentation? segmentation = Segmentation.For(y, width, height, effort);
+        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
         encoder.EncodeRows();
         byte[]? frame = encoder.Write();
         if (frame is not null)
@@ -181,7 +166,7 @@ internal sealed class Vp8Encoder
 
         foreach (bool subblocks in new[] { effort > 0, false })
         {
-            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
+            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
             encoder.EncodeRows();
             frame = encoder.Write();
             if (frame is not null)
@@ -431,8 +416,10 @@ internal sealed class Vp8Encoder
             Span<byte> aboveNonZero = _aboveNonZero.AsSpan(mx * 9, 9);
             Span<byte> aboveModes = _aboveModes.AsSpan(mx * 4, 4);
             bool subblocks = _subblocks && (_rowModeBudget is null || spent <= _rowModeBudget[my] * mx / _mbWide);
-            spent += ChooseLuma(ref mb, mx, my, subblocks, edge, leftNonZero, aboveNonZero, leftModes, aboveModes);
-            ChooseChroma(ref mb, mx, my, leftNonZero, aboveNonZero);
+            mb.Segment = _segmentation is null ? 0 : _segmentation.Map[mb.Index];
+            Segment q = _segments[mb.Segment];
+            spent += ChooseLuma(ref mb, q, mx, my, subblocks, edge, leftNonZero, aboveNonZero, leftModes, aboveModes);
+            ChooseChroma(ref mb, q, mx, my, leftNonZero, aboveNonZero);
             spent += SkipBits + ChromaModeCosts[mb.UvMode];
             mb.Skip = mb.NonZero == 0;
 
@@ -455,7 +442,7 @@ internal sealed class Vp8Encoder
 
     // Whole-block luma modes against subblock modes, when allowed. The plane holds the chosen reconstruction afterwards.
     // Returns the bits the luma modes take, in 1/256 of a bit.
-    private int ChooseLuma(ref Macroblock mb, int mx, int my, bool subblocks, int[] edge, Span<byte> leftNonZero, Span<byte> aboveNonZero, Span<byte> leftModes, Span<byte> aboveModes)
+    private int ChooseLuma(ref Macroblock mb, Segment q, int mx, int my, bool subblocks, int[] edge, Span<byte> leftNonZero, Span<byte> aboveNonZero, Span<byte> leftModes, Span<byte> aboveModes)
     {
         int x0 = mx * 16;
         int y0 = my * 16;
@@ -468,7 +455,7 @@ internal sealed class Vp8Encoder
         for (int mode = DcPred; mode <= TmPred; mode++)
         {
             PredictBlock(_y, x0, y0, 16, mode, mx == 0, my == 0);
-            rank[mode] = Rank(PredictionError(_sourceY, (y0 * _strideY) + x0, _strideY, _y, x0, y0, 16) + (_modeLambda * ModeCost(mode)), mode);
+            rank[mode] = Rank(PredictionError(_sourceY, (y0 * _strideY) + x0, _strideY, _y, x0, y0, 16) + (q.ModeLambda * ModeCost(mode)), mode);
         }
 
         SortFirst(rank, _wholeCandidates);
@@ -486,8 +473,8 @@ internal sealed class Vp8Encoder
             PredictBlock(_y, x0, y0, 16, mode, mx == 0, my == 0);
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
-            long modeScore = _modeLambda * ModeCost(mode);
-            long score = WholeLuma(x0, y0, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero);
+            long modeScore = q.ModeLambda * ModeCost(mode);
+            long score = WholeLuma(q, x0, y0, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero);
             if (score != long.MaxValue && score + modeScore < best)
             {
                 best = score + modeScore;
@@ -516,7 +503,7 @@ internal sealed class Vp8Encoder
         Span<short> trialLevels = stackalloc short[4 * 16];
         Span<byte> trialReconstructions = stackalloc byte[4 * 16];
         Span<long> trialDistortions = stackalloc long[4];
-        long subTotal = subblocks ? _modeLambda * ModeCost(BPred) : long.MaxValue;
+        long subTotal = subblocks ? q.ModeLambda * ModeCost(BPred) : long.MaxValue;
         int subModeBits = ModeCost(BPred);
         for (int i = 0; i < 16 && subTotal < best; i++)
         {
@@ -544,7 +531,7 @@ internal sealed class Vp8Encoder
             for (int mode = BDcPred; mode <= BHuPred; mode++)
             {
                 long error = (long)SquaredError(source, Vector128.Create<byte>(predictions.Slice(mode * 16, 16))) << 8;
-                subRank[mode] = Rank(error + (_modeLambdaSubblock * modeCosts[mode]), mode);
+                subRank[mode] = Rank(error + (q.ModeLambdaSubblock * modeCosts[mode]), mode);
             }
 
             SortFirst(subRank, _subblockCandidates);
@@ -559,19 +546,19 @@ internal sealed class Vp8Encoder
                     predictions.Slice(mode * 16, 16).CopyTo(trialPredictions.Slice(k * 16, 16));
                 }
 
-                TrialFour(original, trialPredictions, _y1Dc, _y1Ac, trialLevels, trialReconstructions, trialDistortions);
+                TrialFour(original, trialPredictions, q.Y1Dc, q.Y1Ac, trialLevels, trialReconstructions, trialDistortions);
                 for (int k = 0; k < count; k++)
                 {
                     int mode = (int)(subRank[group + k] & 0xF);
                     ReadOnlySpan<short> candidate = trialLevels.Slice(k * 16, 16);
                     // Token bits only add to the score, so a candidate already past the best without them can't win.
-                    long floor = trialDistortions[k] + (_modeLambdaSubblock * modeCosts[mode]);
+                    long floor = trialDistortions[k] + (q.ModeLambdaSubblock * modeCosts[mode]);
                     if (floor >= bestSub)
                     {
                         continue;
                     }
 
-                    long score = floor + (_lambdaSubblock * BlockCost(candidate, 3, 0, context));
+                    long score = floor + (q.LambdaSubblock * BlockCost(candidate, 3, 0, context));
                     if (score < bestSub)
                     {
                         bestSub = score;
@@ -630,7 +617,7 @@ internal sealed class Vp8Encoder
 
     // One whole-block luma candidate, predicted in the plane: transform, quantise, reconstruct in place, and score.
     // levels gets the 16 Y blocks then the Y2 block; the contexts are updated as the tokens would leave them.
-    private long WholeLuma(int x0, int y0, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits)
+    private long WholeLuma(Segment q, int x0, int y0, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits)
     {
         // The sixteen blocks' predictions are all in the plane already, so the blocks are transformed four at a time:
         // each row of four blocks in the lanes. Only the token costs depend on order, and they are counted after.
@@ -660,7 +647,7 @@ internal sealed class Vp8Encoder
         ForwardWht(dcs, y2);
         Span<short> y2Levels = levels.Slice(16 * 16, 16);
         Span<short> y2Dequantised = stackalloc short[16];
-        Quantise(y2, 0, _y2Dc, _y2Ac, y2Levels, y2Dequantised);
+        Quantise(y2, 0, q.Y2Dc, q.Y2Ac, y2Levels, y2Dequantised);
         int bits = BlockCost(y2Levels, 1, 0, left[8] + above[8]);
         bool y2NonZero = HasLevels(y2Levels, 0);
         left[8] = above[8] = (byte)(y2NonZero ? 1 : 0);
@@ -683,7 +670,7 @@ internal sealed class Vp8Encoder
                 ys[l] = y0 + (g * 4);
             }
 
-            QuantiseLanes(coefficients.Slice(g * 16, 16), 1, _y1Dc, _y1Ac, blockLevels, dequantised);
+            QuantiseLanes(coefficients.Slice(g * 16, 16), 1, q.Y1Dc, q.Y1Ac, blockLevels, dequantised);
             LevelsToBlocks(blockLevels, levels.Slice(g * 64, 64));
             dequantised[0] = Vector128.Create(reconstructedDcs[g * 4], reconstructedDcs[(g * 4) + 1], reconstructedDcs[(g * 4) + 2], reconstructedDcs[(g * 4) + 3]);
             InverseDctLanes(dequantised, residual);
@@ -695,7 +682,7 @@ internal sealed class Vp8Encoder
             Span<short> block = levels.Slice(i * 16, 16);
             int context = left[i >> 2] + above[i & 3];
             bits += BlockCost(block, 0, 1, context);
-            if (distortion + (_lambda * bits) >= limit)
+            if (distortion + (q.Lambda * bits) >= limit)
             {
                 return long.MaxValue;
             }
@@ -708,7 +695,7 @@ internal sealed class Vp8Encoder
             }
         }
 
-        return distortion + (_lambda * bits);
+        return distortion + (q.Lambda * bits);
     }
 
     // One 4 x 4 block predicted in the plane: transform, quantise, reconstruct in place; its distortion and token bits.
@@ -925,7 +912,7 @@ internal sealed class Vp8Encoder
     // A value as the scalar code's (short) cast leaves it: the low 16 bits, sign-extended.
     private static Vector128<int> Short(Vector128<int> value) => Vector128.ShiftRightArithmetic(Vector128.ShiftLeft(value, 16), 16);
 
-    private void ChooseChroma(ref Macroblock mb, int mx, int my, Span<byte> leftNonZero, Span<byte> aboveNonZero)
+    private void ChooseChroma(ref Macroblock mb, Segment q, int mx, int my, Span<byte> leftNonZero, Span<byte> aboveNonZero)
     {
         int cx = mx * 8;
         int cy = my * 8;
@@ -939,7 +926,7 @@ internal sealed class Vp8Encoder
             PredictBlock(_v, cx, cy, 8, mode, mx == 0, my == 0);
             long error = PredictionError(_sourceU, (cy * _strideUv) + cx, _strideUv, _u, cx, cy, 8)
                 + PredictionError(_sourceV, (cy * _strideUv) + cx, _strideUv, _v, cx, cy, 8);
-            rank[mode] = Rank(error + (_modeLambda * ChromaModeCosts[mode]), mode);
+            rank[mode] = Rank(error + (q.ModeLambda * ChromaModeCosts[mode]), mode);
         }
 
         SortFirst(rank, _wholeCandidates);
@@ -959,8 +946,8 @@ internal sealed class Vp8Encoder
             PredictBlock(_v, cx, cy, 8, mode, mx == 0, my == 0);
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
-            long modeScore = _modeLambda * ChromaModeCosts[mode];
-            long score = WholeChroma(cx, cy, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero);
+            long modeScore = q.ModeLambda * ChromaModeCosts[mode];
+            long score = WholeChroma(q, cx, cy, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero);
             if (score != long.MaxValue && score + modeScore < best)
             {
                 best = score + modeScore;
@@ -983,7 +970,7 @@ internal sealed class Vp8Encoder
         mb.NonZero |= bestNonZero << 16;
     }
 
-    private long WholeChroma(int cx, int cy, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits)
+    private long WholeChroma(Segment q, int cx, int cy, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits)
     {
         // The four U blocks in the lanes, then the four V blocks; token costs after, in block order.
         Span<Vector128<int>> e = stackalloc Vector128<int>[16];
@@ -1005,7 +992,7 @@ internal sealed class Vp8Encoder
             byte[] source = g == 0 ? _sourceU : _sourceV;
             ResidualLanes(source, _strideUv, plane, xs, ys, e);
             ForwardDctLanes(e);
-            QuantiseLanes(e, 0, _uvDc, _uvAc, blockLevels, dequantised);
+            QuantiseLanes(e, 0, q.UvDc, q.UvAc, blockLevels, dequantised);
             LevelsToBlocks(blockLevels, levels.Slice(g * 64, 64));
             InverseDctLanes(dequantised, e);
             distortion += ReconstructLanes(source, _strideUv, plane, xs, ys, e);
@@ -1019,7 +1006,7 @@ internal sealed class Vp8Encoder
             int y = (i >> 1) & 1;
             Span<short> block = levels.Slice(i * 16, 16);
             bits += BlockCost(block, 2, 0, left[slot + y] + above[slot + x]);
-            if (distortion + (_lambda * bits) >= limit)
+            if (distortion + (q.Lambda * bits) >= limit)
             {
                 return long.MaxValue;
             }
@@ -1032,7 +1019,7 @@ internal sealed class Vp8Encoder
             }
         }
 
-        return distortion + (_lambda * bits);
+        return distortion + (q.Lambda * bits);
     }
 
     // The whole-block luma and chroma mode costs, fixed for key frames like the subblock ones.
@@ -1712,7 +1699,39 @@ internal sealed class Vp8Encoder
         var header = new Vp8BoolEncoder(1024 + (_macroblocks.Length * 4));
         header.WriteFlag(false);    // colour space
         header.WriteFlag(false);    // clamping type
-        header.WriteFlag(false);    // segmentation
+        Span<byte> segmentProbabilities = stackalloc byte[3];
+        if (_segmentation is null)
+        {
+            header.WriteFlag(false);    // segmentation
+        }
+        else
+        {
+            // Quantisers as deltas from the frame's, no filter deltas, and the map's tree probabilities fitted to it.
+            Segmentation.Probabilities(_macroblocks, segmentProbabilities);
+            header.WriteFlag(true);
+            header.WriteFlag(true);     // update the map
+            header.WriteFlag(true);     // update the data
+            header.WriteFlag(false);    // deltas, not absolute values
+            foreach (int delta in _segmentation.Deltas)
+            {
+                header.WriteOptionalSigned(Math.Clamp(_quantiser + delta, 0, 127) - _quantiser, 7);
+            }
+
+            for (int i = 0; i < 4; i++)
+            {
+                header.WriteOptionalSigned(0, 6);
+            }
+
+            foreach (byte probability in segmentProbabilities)
+            {
+                header.WriteFlag(probability != 255);
+                if (probability != 255)
+                {
+                    header.WriteLiteral(probability, 8);
+                }
+            }
+        }
+
         header.WriteFlag(false);    // normal loop filter
         header.WriteLiteral(ChooseFilterLevel(), 6);
         header.WriteLiteral(0, 3);  // sharpness
@@ -1746,6 +1765,13 @@ internal sealed class Vp8Encoder
             for (int mx = 0; mx < _mbWide; mx++)
             {
                 Macroblock mb = _macroblocks[(my * _mbWide) + mx];
+                if (_segmentation is not null)
+                {
+                    bool high = mb.Segment >= 2;
+                    header.WriteBool(segmentProbabilities[0], high);
+                    header.WriteBool(segmentProbabilities[high ? 2 : 1], (mb.Segment & 1) != 0);
+                }
+
                 header.WriteBool(skipProbability, mb.Skip);
                 WriteTree(ref modes, YModeTree, YModeProbabilities, mb.YMode, 0);
                 Span<byte> above = aboveModes.AsSpan(mx * 4, 4);
@@ -1864,7 +1890,7 @@ internal sealed class Vp8Encoder
     }
 
     // A loop filter level for the quantiser: stronger as the steps grow, as blocking grows with them.
-    private int FilterLevel() => Math.Clamp((_y1Ac * 3 / 8) + 2, 0, 63);
+    private int FilterLevel() => Math.Clamp((Ac(_quantiser) * 3 / 8) + 2, 0, 63);
 
     // The loop filter level that brings the decoded picture closest to the source. The filter runs after the frame is
     // rebuilt, and intra prediction reads unfiltered pixels, so the level changes only what the decoder shows, not the
@@ -2007,10 +2033,205 @@ internal sealed class Vp8Encoder
 
     private struct Macroblock
     {
+        public int Segment;
         public int YMode;
         public int UvMode;
         public int Index;
         public uint NonZero;
         public bool Skip;
+    }
+
+    // One quantiser's factors (section 14.1, with no per-component deltas) and the lambdas that weigh bits against
+    // distortion at it.
+    private sealed class Segment
+    {
+        public Segment(int quantiser)
+        {
+            Y1Dc = Dc(quantiser);
+            Y1Ac = Ac(quantiser);
+            Y2Dc = Dc(quantiser) * 2;
+            Y2Ac = Math.Max(Ac(quantiser) * 155 / 100, 8);
+            UvDc = Math.Min(Dc(quantiser), 132);
+            UvAc = Ac(quantiser);
+
+            // Distortion is in squared pixel steps and bits in 1/256 of a bit, so lambda carries 1/256 too.
+            Lambda = Math.Max((long)Y1Ac * Y1Ac * 3 / 16, 1);
+            LambdaSubblock = Lambda;
+            ModeLambda = Lambda;
+            ModeLambdaSubblock = LambdaSubblock;
+        }
+
+        public int Y1Dc { get; }
+
+        public int Y1Ac { get; }
+
+        public int Y2Dc { get; }
+
+        public int Y2Ac { get; }
+
+        public int UvDc { get; }
+
+        public int UvAc { get; }
+
+        public long Lambda { get; }
+
+        public long LambdaSubblock { get; }
+
+        // Lambda for mode bits alone, raised above lambda (by ModePrice) for a picture whose modes would not otherwise
+        // fit the first partition: every mode decision then weighs its mode bits higher, and cheaper modes win where
+        // they cost least in distortion.
+        public long ModeLambda { get; set; }
+
+        public long ModeLambdaSubblock { get; set; }
+    }
+
+    /// <summary>
+    /// Four segments of macroblocks by how busy their luma is, each with its own quantiser: busy texture hides coding
+    /// error that smooth areas show, so busy macroblocks are coded coarser and smooth ones finer for the same file size.
+    /// A macroblock's activity is the log of the mean absolute difference of its pixels from their 4 x 4 block's mean;
+    /// the four segments are a one-dimensional k-means of it, and each segment's quantiser moves from the frame's by
+    /// <see cref="Strength"/> steps for each doubling of activity from the picture's mean. Our own design; libwebp's
+    /// segments and spatial noise shaping do a similar job.
+    /// </summary>
+    private sealed class Segmentation
+    {
+        private Segmentation(byte[] map, int[] deltas)
+        {
+            Map = map;
+            Deltas = deltas;
+        }
+
+        // Quantiser steps for each doubling of activity. Against one quantiser, at equal file size: luma SSIM 0.10 to
+        // 0.16% higher on photos and RGB SSIM up to 0.3% on icons, for 0.3 dB less PSNR on photos; smooth backgrounds lose
+        // their blotches. 2 gained half as much; 8 no more SSIM for twice the PSNR.
+        private const double Strength = 4;
+
+        /// <summary>Each macroblock's segment, 0 the smoothest to 3 the busiest.</summary>
+        public byte[] Map { get; }
+
+        /// <summary>Each segment's quantiser less the frame's.</summary>
+        public int[] Deltas { get; }
+
+        /// <summary>The segments for a picture, or <see langword="null"/> where one quantiser serves: at effort 0, and for
+        /// pictures whose macroblocks are all about as busy.</summary>
+        public static Segmentation? For(byte[] y, int width, int height, int effort)
+        {
+            int mbWide = (width + 15) / 16;
+            int mbHigh = (height + 15) / 16;
+            int count = mbWide * mbHigh;
+            if (effort == 0 || count < 16)
+            {
+                return null;
+            }
+
+            int stride = mbWide * 16;
+            double[] activity = new double[count];
+            int bands = Processing.Parallelism.Bands((long)count * 256, mbHigh);
+            Processing.Parallelism.For(bands, band =>
+            {
+                for (int my = mbHigh * band / bands; my < mbHigh * (band + 1) / bands; my++)
+                {
+                    for (int mx = 0; mx < mbWide; mx++)
+                    {
+                        int total = 0;
+                        for (int b = 0; b < 16; b++)
+                        {
+                            int at = (((my * 16) + ((b >> 2) * 4)) * stride) + (mx * 16) + ((b & 3) * 4);
+                            int sum = 0;
+                            for (int r = 0; r < 4; r++)
+                            {
+                                for (int c = 0; c < 4; c++)
+                                {
+                                    sum += y[at + (r * stride) + c];
+                                }
+                            }
+
+                            for (int r = 0; r < 4; r++)
+                            {
+                                for (int c = 0; c < 4; c++)
+                                {
+                                    total += Math.Abs((16 * y[at + (r * stride) + c]) - sum);
+                                }
+                            }
+                        }
+
+                        activity[(my * mbWide) + mx] = Math.Log2(1 + (total / (16.0 * 256)));
+                    }
+                }
+            });
+
+            // Centres from the quantiles, then a few rounds of k-means.
+            double[] sorted = [.. activity];
+            Array.Sort(sorted);
+            double[] centres = [sorted[count / 8], sorted[count * 3 / 8], sorted[count * 5 / 8], sorted[count * 7 / 8]];
+            byte[] map = new byte[count];
+            for (int round = 0; round < 8; round++)
+            {
+                double[] sums = new double[4];
+                int[] members = new int[4];
+                for (int i = 0; i < count; i++)
+                {
+                    int best = Nearest(centres, activity[i]);
+                    map[i] = (byte)best;
+                    sums[best] += activity[i];
+                    members[best]++;
+                }
+
+                for (int k = 0; k < 4; k++)
+                {
+                    if (members[k] > 0)
+                    {
+                        centres[k] = sums[k] / members[k];
+                    }
+                }
+
+                Array.Sort(centres);
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                map[i] = (byte)Nearest(centres, activity[i]);
+            }
+
+            double mean = activity.Average();
+            int[] deltas = new int[4];
+            for (int k = 0; k < 4; k++)
+            {
+                deltas[k] = (int)Math.Round(Strength * (centres[k] - mean));
+            }
+
+            return deltas.All(d => d == deltas[0]) ? null : new Segmentation(map, deltas);
+        }
+
+        /// <summary>The map's tree probabilities (section 9.3): of the first bit being 0 (segment 0 or 1), then of 0
+        /// within 0 and 1, and of 2 within 2 and 3.</summary>
+        public static void Probabilities(ReadOnlySpan<Macroblock> macroblocks, Span<byte> probabilities)
+        {
+            int[] counts = new int[4];
+            foreach (Macroblock mb in macroblocks)
+            {
+                counts[mb.Segment]++;
+            }
+
+            probabilities[0] = Share(counts[0] + counts[1], counts[2] + counts[3]);
+            probabilities[1] = Share(counts[0], counts[1]);
+            probabilities[2] = Share(counts[2], counts[3]);
+
+            static byte Share(int zeros, int ones) => zeros + ones == 0 ? (byte)255 : (byte)Math.Clamp(((zeros * 255) + ((zeros + ones) / 2)) / (zeros + ones), 1, 255);
+        }
+
+        private static int Nearest(double[] centres, double value)
+        {
+            int best = 0;
+            for (int k = 1; k < 4; k++)
+            {
+                if (Math.Abs(value - centres[k]) < Math.Abs(value - centres[best]))
+                {
+                    best = k;
+                }
+            }
+
+            return best;
+        }
     }
 }
