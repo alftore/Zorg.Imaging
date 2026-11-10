@@ -91,4 +91,79 @@ public class Vp8lEncoderTests
             }
         }
     }
+
+    // Runs of one colour of every length from 1 to 40, some at the very start and end, with and without other colours
+    // among them: the hash chains skip through runs, and every copy that skipping finds must still be exact.
+    [Theory]
+    [InlineData(5, false)]
+    [InlineData(23, true)]
+    public void Runs_of_one_colour_round_trip_at_every_effort(int seed, bool noisy)
+    {
+        var random = new Random(seed);
+        int width = 50 + random.Next(80);
+        int height = 20 + random.Next(30);
+        Rgba32[] colours = [new(0, 0, 0, 0), new(255, 255, 255, 255), new(200, 40, 40, 255), new(200, 40, 40, 128)];
+        using var image = new Image(width, height, PixelFormat.Rgba32);
+        int left = 0;
+        Rgba32 colour = colours[0];
+        for (int y = 0; y < height; y++)
+        {
+            Span<Rgba32> row = image.GetRow<Rgba32>(y);
+            for (int x = 0; x < width; x++)
+            {
+                if (left == 0)
+                {
+                    left = 1 + random.Next(40);
+                    colour = noisy && random.Next(3) == 0
+                        ? new Rgba32((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256), 255)
+                        : colours[random.Next(colours.Length)];
+                }
+
+                row[x] = colour;
+                left--;
+            }
+        }
+
+        for (int effort = 0; effort <= 6; effort++)
+        {
+            using var stream = new System.IO.MemoryStream();
+            image.SaveAsWebp(stream, new WebpEncoderOptions { Lossless = true, Effort = effort });
+            using Image decoded = Image.Decode(stream.ToArray());
+            Assert.True(image.GetPixelBytes().SequenceEqual(decoded.GetPixelBytes()), $"effort {effort}");
+        }
+    }
+
+    // Fifteen runs of ten black pixels, each ended by a different pixel; the first is followed by three pixels that
+    // follow the last run too. Walked a pixel at a time, 64 steps reach only nine runs back; with each run a few steps,
+    // the walk reaches the first and its copy of the whole run and the three after.
+    [Fact]
+    public void The_match_finder_reaches_past_runs_of_one_colour()
+    {
+        const uint Black = 0xFF000000u;
+        var pixels = new System.Collections.Generic.List<uint>();
+        void Run(params uint[] after)
+        {
+            for (int k = 0; k < 10; k++)
+            {
+                pixels.Add(Black);
+            }
+
+            pixels.AddRange(after);
+        }
+
+        uint[] tail = [0xFF123456u, 0xFF654321u, 0xFFABCDEFu];
+        Run(tail);
+        for (uint k = 1; k <= 14; k++)
+        {
+            Run(0xFF000100u + k);
+        }
+
+        int query = pixels.Count;
+        Run(tail);
+        pixels.AddRange([0xFF777777u, 0xFF888888u, 0xFF999999u, 0xFFAAAAAAu]);
+
+        var finder = new Vp8lEncoder.MatchFinder([.. pixels], pixels.Count, effort: 4);
+        (int length, int distance) = finder.Find(query);
+        Assert.Equal((13, query), (length, distance));
+    }
 }

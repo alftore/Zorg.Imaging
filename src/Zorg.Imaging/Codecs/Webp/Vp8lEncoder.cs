@@ -1086,8 +1086,9 @@ internal static class Vp8lEncoder
         }
     }
 
-    // The entropy image's tile size: none below effort 3 or for small pictures; else tiles of 2^bits, as few as keeps
-    // about 2,000 tiles (more at higher effort), at least 8 x 8.
+    // The entropy image's tile size: none at effort 0 or for small pictures; else tiles of 2^bits, as few as keeps about
+    // 2,000 tiles (more at higher effort), at least 16 x 16 below effort 5 and 8 x 8 from it. Against 8 x 8, 16 x 16 made
+    // 256 x 256 textures encode about 20% faster and 0.3% larger, and 64 x 64 icons 0.6% smaller.
     private static int EntropyBits(int width, int height, int effort)
     {
         long pixels = (long)width * height;
@@ -1097,7 +1098,7 @@ internal static class Vp8lEncoder
         }
 
         long target = effort >= 5 ? 4096 : 2048;
-        int bits = 3;
+        int bits = effort >= 5 ? 3 : 4;
         while (bits < 9 && (long)DivideUp(width, bits) * DivideUp(height, bits) > target)
         {
             bits++;
@@ -1522,38 +1523,31 @@ internal static class Vp8lEncoder
         /// <summary>Lists the symbols used, once the counts are final: a tile's are few, and then only they are added and priced.</summary>
         public void Freeze()
         {
-            // A vector at a time, as most of a tile's counts are 0.
+            // A vector at a time, as most of a tile's counts are 0. The longest histogram has 2,112 counts.
             int[] counts = Counts;
             int width = Vector<int>.Count;
-            int whole = counts.Length - (counts.Length % width);
+            Span<int> found = stackalloc int[counts.Length];
             int used = 0;
-            for (int i = 0; i < whole; i += width)
+            int i = 0;
+            for (; i <= counts.Length - width; i += width)
             {
-                used += width + Vector.Sum(Vector.Equals(new Vector<int>(counts, i), Vector<int>.Zero));
+                if (!Vector.EqualsAll(new Vector<int>(counts, i), Vector<int>.Zero))
+                {
+                    for (int k = i; k < i + width; k++)
+                    {
+                        found[used] = k;
+                        used += counts[k] != 0 ? 1 : 0;
+                    }
+                }
             }
 
-            for (int i = whole; i < counts.Length; i++)
+            for (; i < counts.Length; i++)
             {
+                found[used] = i;
                 used += counts[i] != 0 ? 1 : 0;
             }
 
-            int[] list = new int[used];
-            used = 0;
-            for (int i = 0; i < counts.Length; i++)
-            {
-                if (i % width == 0 && i < whole && Vector.EqualsAll(new Vector<int>(counts, i), Vector<int>.Zero))
-                {
-                    i += width - 1;
-                    continue;
-                }
-
-                if (counts[i] != 0)
-                {
-                    list[used++] = i;
-                }
-            }
-
-            _used = list;
+            _used = found[..used].ToArray();
         }
 
         /// <summary>A frozen histogram's code's entropy, as <see cref="Entropy"/> gives it, and its count of symbols.</summary>
@@ -1620,14 +1614,25 @@ internal static class Vp8lEncoder
             long total = 0;
             double sum = 0;
             int used = 0;
-            for (int i = 0; i < a.Length; i++)
+            int width = Vector<int>.Count;
+            for (int block = 0; block < a.Length; block += width)
             {
-                int c = a[i] + b[i];
-                if (c > 0)
+                // Blocks where neither has a count are passed over a vector at a time.
+                int end = Math.Min(block + width, a.Length);
+                if (end - block == width && Vector.EqualsAll(new Vector<int>(a[block..]) | new Vector<int>(b[block..]), Vector<int>.Zero))
                 {
-                    total += c;
-                    sum += TimesLog2(c);
-                    used++;
+                    continue;
+                }
+
+                for (int i = block; i < end; i++)
+                {
+                    int c = a[i] + b[i];
+                    if (c > 0)
+                    {
+                        total += c;
+                        sum += TimesLog2(c);
+                        used++;
+                    }
                 }
             }
 
@@ -1841,6 +1846,21 @@ internal static class Vp8lEncoder
         int[] reached = new int[n + 17];
         Array.Fill(cost, float.MaxValue);
         cost[0] = 0;
+
+        // Constants of the vector offers, and the price of the last two distances offered: a run of copies offers the same
+        // one or two at every pixel, and working out a distance's code takes a division.
+        Vector256<float> symbolLow = Vector256.Create(shortSymbol.AsSpan(1, 8));
+        Vector256<float> symbolHigh = Vector256.Create(shortSymbol.AsSpan(9, 8));
+        Vector256<float> extraLow = Vector256.Create(shortExtra.AsSpan(1, 8));
+        Vector256<float> extraHigh = Vector256.Create(shortExtra.AsSpan(9, 8));
+        Vector256<int> lengthsLow = Vector256.Create(1, 2, 3, 4, 5, 6, 7, 8);
+        Vector256<int> lengthsHigh = Vector256.Create(9, 10, 11, 12, 13, 14, 15, 16);
+        int lastDistance = -1;
+        float lastSymbol = 0;
+        int lastBits = 0;
+        int otherDistance = -1;
+        float otherSymbol = 0;
+        int otherBits = 0;
         for (int i = 0; i < n; i++)
         {
             uint pixel = p[i];
@@ -1866,6 +1886,7 @@ internal static class Vp8lEncoder
             // or two where a far one takes up to twenty, so a shorter near copy is often the cheaper path (palette indexes
             // and alpha masks, 4 to 19% smaller).
             Offer(i, matchLength[i], matchDistance[i]);
+
             if (nearDistance[i] != matchDistance[i])
             {
                 Offer(i, nearLength[i], nearDistance[i]);
@@ -1879,8 +1900,21 @@ internal static class Vp8lEncoder
                 return;
             }
 
-            (int distancePrefix, int distanceBits, _) = Prefix(DistanceCode(distance, width));
-            float copy = cost[i] + distanceCost[distancePrefix] + distanceBits;
+            if (distance != lastDistance)
+            {
+                (lastDistance, otherDistance) = (otherDistance, lastDistance);
+                (lastSymbol, otherSymbol) = (otherSymbol, lastSymbol);
+                (lastBits, otherBits) = (otherBits, lastBits);
+                if (distance != lastDistance)
+                {
+                    (int distancePrefix, int distanceBits, _) = Prefix(DistanceCode(distance, width));
+                    lastDistance = distance;
+                    lastSymbol = distanceCost[distancePrefix];
+                    lastBits = distanceBits;
+                }
+            }
+
+            float copy = cost[i] + lastSymbol + lastBits;
 
             // Every length up to 16, and the longest; longer ones are reached from the pixels inside the copy.
             int shortest = Math.Min(longest, 16);
@@ -1891,8 +1925,8 @@ internal static class Vp8lEncoder
                 var at = Vector256.Create(distance);
                 for (int h = 0; h < 16; h += 8)
                 {
-                    var total = (copies + Vector256.Create(shortSymbol.AsSpan(1 + h, 8))) + Vector256.Create(shortExtra.AsSpan(1 + h, 8));
-                    var lengths = Vector256.Create(1 + h, 2 + h, 3 + h, 4 + h, 5 + h, 6 + h, 7 + h, 8 + h);
+                    var total = (copies + (h == 0 ? symbolLow : symbolHigh)) + (h == 0 ? extraLow : extraHigh);
+                    var lengths = h == 0 ? lengthsLow : lengthsHigh;
                     Span<float> costs = cost.AsSpan(i + 1 + h, 8);
                     Span<int> steps = step.AsSpan(i + 1 + h, 8);
                     Span<int> reaches = reached.AsSpan(i + 1 + h, 8);
@@ -1978,9 +2012,19 @@ internal static class Vp8lEncoder
     /// test corpora 0.3% larger, a graphic 3%, and took 15% longer on photos. The chains are built up front, each pixel
     /// linking only to earlier ones, so <see cref="Find"/> may run on many pixels at once. <see cref="Extend"/> tries the
     /// distances a parse has used, which follow the parse and so run in order.
+    /// <para>
+    /// Every pixel inside a run of one colour hashes alike, so a chain through flat areas or repeated residuals stepped
+    /// through runs a pixel at a time. Only one pixel of a run can start the longest match (see <see cref="Find"/>), so
+    /// a run's pixels link straight to its start and its last full-hash pixel marks the run: the walk reaches further
+    /// back for the same steps. With a run counted as <see cref="RunTries"/> steps, icons and cut-outs came out 0.3 to
+    /// 0.6% smaller in the same time (at one step a run, twice the saving for 7 to 14% more time).
+    /// </para>
     /// </summary>
-    private sealed class MatchFinder
+    internal sealed class MatchFinder
     {
+        // The steps of the walk a run of one colour counts for.
+        private const int RunTries = 4;
+
         private readonly uint[] _p;
         private readonly int _width;
         private readonly int _depth;
@@ -2006,10 +2050,20 @@ internal static class Vp8lEncoder
             int shift = 32 - hashBits;
             int[] head = new int[1 << hashBits];
             Array.Fill(head, -1);
+            // A pixel past the start of a run of one colour, with three more of it after, links to the run's start (which
+            // hashes alike); the last such pixel of the run links to -2 - start, so the walk knows the run and its end.
+            int runStart = 0;
             for (int i = 0; i + 3 < p.Length; i++)
             {
                 int key = Hash(p[i], p[i + 1], p[i + 2], p[i + 3], shift);
-                _chain[i] = head[key];
+                if (i > 0 && p[i] != p[i - 1])
+                {
+                    runStart = i;
+                }
+
+                bool inside = i > runStart && p[i + 1] == p[i] && p[i + 2] == p[i] && p[i + 3] == p[i];
+                bool last = inside && (i + 4 == p.Length || p[i + 4] != p[i]);
+                _chain[i] = last ? -2 - runStart : inside ? runStart : head[key];
                 head[key] = i;
             }
 
@@ -2096,23 +2150,57 @@ internal static class Vp8lEncoder
             if (bestLength < most)
             {
                 int candidate = _chain[i];
+                candidate = candidate < -1 ? -2 - candidate : candidate;
+                int lead = -1;
                 for (int tries = _depth; tries > 0 && candidate >= 0 && i - candidate <= MaxDistance; tries--)
                 {
-                    if (p[candidate + bestLength] == p[i + bestLength])
+                    int next = _chain[candidate];
+                    int from = candidate;
+                    int length = 0;
+                    if (next < -1)
                     {
-                        int length = Match(p, i, candidate, most);
-                        if (length > bestLength)
+                        // A run of x from start to end, reached at its last full-hash pixel (end - 4). A match from a pixel
+                        // of the run is the rest of the run or the lead of x at i, whichever is shorter, and goes on past
+                        // the run only from end - lead: so only that pixel can be longest (or, where it isn't in the run,
+                        // the start, or where it is past this pixel, this one); the nearer ones are shorter and the
+                        // further ones no longer. A run of another colour can't match at all.
+                        int start = -2 - next;
+                        uint x = p[candidate];
+                        int end = candidate + 4;
+                        next = _chain[start];
+                        if (x == p[i])
                         {
-                            bestLength = length;
-                            bestDistance = i - candidate;
-                            if (length == most)
+                            if (lead < 0)
                             {
-                                break;
+                                lead = p.AsSpan(i, most).IndexOfAnyExcept(x);
+                                lead = lead < 0 ? most : lead;
+                            }
+
+                            tries -= RunTries - 1;
+                            from = Math.Max(Math.Max(start, Math.Min(candidate, end - lead)), i - MaxDistance);
+                            length = Math.Min(end - from, lead);
+                            if (end - from == lead && lead < most && p[end] == p[i + lead] && p[from + bestLength] == p[i + bestLength])
+                            {
+                                length += Match(p, i + lead, end, most - lead);
                             }
                         }
                     }
+                    else if (p[candidate + bestLength] == p[i + bestLength])
+                    {
+                        length = Match(p, i, candidate, most);
+                    }
 
-                    candidate = _chain[candidate];
+                    if (length > bestLength)
+                    {
+                        bestLength = length;
+                        bestDistance = i - from;
+                        if (length == most)
+                        {
+                            break;
+                        }
+                    }
+
+                    candidate = next;
                 }
             }
 
@@ -2201,12 +2289,11 @@ internal static class Vp8lEncoder
         int bands = Processing.Parallelism.Bands((long)pixels.Length * (MaxCacheBits + 1), MaxCacheBits + 1);
         Processing.Parallelism.For(bands, band =>
         {
-            for (int b = (MaxCacheBits + 1) * band / bands; b < (MaxCacheBits + 1) * (band + 1) / bands; b++)
+            int low = (MaxCacheBits + 1) * band / bands;
+            int high = ((MaxCacheBits + 1) * (band + 1) / bands) - 1;
+            foreach ((int firstToken, int tokens, int firstPixel) in strips)
             {
-                foreach ((int firstToken, int tokens, int firstPixel) in strips)
-                {
-                    bits[b] += CacheBitsCost(pixels, lengths, firstToken, tokens, firstPixel, b);
-                }
+                CacheBitsCosts(pixels, lengths, firstToken, tokens, firstPixel, low, high, bits);
             }
         });
 
@@ -2222,55 +2309,74 @@ internal static class Vp8lEncoder
         return best;
     }
 
-    // The literals' bits with a cache of 2^cacheBits (none for 0), and about 4 header bits for each cache symbol.
-    private static double CacheBitsCost(uint[] pixels, int[] lengths, int firstToken, int tokens, int firstPixel, int cacheBits)
+    // The literals' bits with caches of 2^low to 2^high entries (none for 0), each with about 4 header bits for each
+    // cache symbol, added to bits[size]: one walk over the tokens, with a cache of each size.
+    private static void CacheBitsCosts(uint[] pixels, int[] lengths, int firstToken, int tokens, int firstPixel, int low, int high, double[] bits)
     {
-        uint[] cache = new uint[1 << cacheBits];
-        int[] green = new int[256 + (1 << cacheBits)];
-        int[] red = new int[256];
-        int[] blue = new int[256];
-        int[] alpha = new int[256];
-        int shift = 32 - cacheBits;
+        // Each size's cache at an offset of 2^size, and its four histograms end to end: green with the cache symbols,
+        // then red, blue and alpha.
+        uint[] caches = new uint[2 << high];
+        int[][] counts = new int[high + 1][];
+        for (int b = low; b <= high; b++)
+        {
+            counts[b] = new int[256 + (1 << b) + (3 * 256)];
+        }
+
+        int first = Math.Max(low, 1);
         int at = firstPixel;
         for (int k = firstToken; k < firstToken + tokens; k++)
         {
             if (lengths[k] != 0)
             {
-                if (cacheBits > 0)
+                for (int end = at + lengths[k]; at < end; at++)
                 {
-                    for (int end = at + lengths[k]; at < end; at++)
+                    uint pixel = pixels[at];
+                    uint hash = 0x1E35A7BDu * pixel;
+                    for (int b = first; b <= high; b++)
                     {
-                        cache[(int)((0x1E35A7BDu * pixels[at]) >> shift)] = pixels[at];
+                        caches[(1 << b) + (int)(hash >> (32 - b))] = pixel;
                     }
-                }
-                else
-                {
-                    at += lengths[k];
                 }
 
                 continue;
             }
 
-            uint pixel = pixels[at++];
-            if (cacheBits > 0)
+            uint literal = pixels[at++];
+            uint key = 0x1E35A7BDu * literal;
+            int green = (int)((literal >> 8) & 0xFF);
+            int red = (int)((literal >> 16) & 0xFF);
+            int blue = (int)(literal & 0xFF);
+            int alpha = (int)(literal >> 24);
+            for (int b = low; b <= high; b++)
             {
-                int index = (int)((0x1E35A7BDu * pixel) >> shift);
-                if (cache[index] == pixel)
+                int[] c = counts[b];
+                int colours = 256 + (1 << b);
+                if (b > 0)
                 {
-                    green[256 + index]++;
-                    continue;
+                    int index = (int)(key >> (32 - b));
+                    ref uint slot = ref caches[(1 << b) + index];
+                    if (slot == literal)
+                    {
+                        c[256 + index]++;
+                        continue;
+                    }
+
+                    slot = literal;
                 }
 
-                cache[index] = pixel;
+                c[green]++;
+                c[colours + red]++;
+                c[colours + 256 + blue]++;
+                c[colours + 512 + alpha]++;
             }
-
-            green[(pixel >> 8) & 0xFF]++;
-            red[(pixel >> 16) & 0xFF]++;
-            blue[pixel & 0xFF]++;
-            alpha[pixel >> 24]++;
         }
 
-        return Entropy(green) + Entropy(red) + Entropy(blue) + Entropy(alpha) + (cacheBits == 0 ? 0 : 4 << cacheBits);
+        for (int b = low; b <= high; b++)
+        {
+            ReadOnlySpan<int> c = counts[b];
+            int colours = 256 + (1 << b);
+            bits[b] += Entropy(c[..colours]) + Entropy(c.Slice(colours, 256)) + Entropy(c.Slice(colours + 256, 256)) + Entropy(c.Slice(colours + 512, 256)) + (b == 0 ? 0 : 4 << b);
+        }
     }
 
     // The bits a prefix code needs for these counts: their Shannon entropy, but at least a bit a symbol once two or more
