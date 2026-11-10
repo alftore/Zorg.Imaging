@@ -148,7 +148,7 @@ internal sealed class Vp8Encoder
         // fits; a row that runs ahead of its share codes whole-block luma until it is back within it. Without subblock
         // modes at all as a last resort.
         int price = ChooseModePrice(y, u, v, width, height, quantiser, effort, partitionLimit);
-        Segmentation? segmentation = Segmentation.For(y, width, height, effort);
+        Segmentation? segmentation = Segmentation.For(y, width, height, quantiser, effort);
         var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
         encoder.EncodeRows();
         byte[]? frame = encoder.Write();
@@ -284,10 +284,12 @@ internal sealed class Vp8Encoder
     }
 
     // Quality to quantiser index, between these points: fitted so a quality gives about cwebp's file size for the same
-    // quality on photos (docs/performance.md).
+    // quality on photos (docs/performance.md), refitted on 24 Kodak and CID22 photos with sharp colour conversion and
+    // segments: within 2% of cwebp's sizes from quality 1 to 90, 4% smaller at 95 and 2% at 100, where even the finest
+    // quantiser makes smaller files than cwebp's.
     private static ReadOnlySpan<byte> QualityPoints => [1, 10, 20, 30, 40, 50, 60, 70, 75, 80, 85, 90, 95, 100];
 
-    private static ReadOnlySpan<byte> QuantiserPoints => [90, 66, 55, 44, 38, 33, 30, 26, 24, 18, 13, 9, 4, 0];
+    private static ReadOnlySpan<byte> QuantiserPoints => [91, 66, 56, 45, 37, 32, 28, 24, 22, 17, 12, 7, 3, 0];
 
     /// <summary>The quantiser index (0 to 127) for a quality of 1 to 100.</summary>
     public static int QuantiserFor(int quality)
@@ -2089,8 +2091,8 @@ internal sealed class Vp8Encoder
     /// Four segments of macroblocks by how busy their luma is, each with its own quantiser: busy texture hides coding
     /// error that smooth areas show, so busy macroblocks are coded coarser and smooth ones finer for the same file size.
     /// A macroblock's activity is the log of the mean absolute difference of its pixels from their 4 x 4 block's mean;
-    /// the four segments are a one-dimensional k-means of it, and each segment's quantiser moves from the frame's by
-    /// <see cref="Strength"/> steps for each doubling of activity from the picture's mean. Our own design; libwebp's
+    /// the four segments are a one-dimensional k-means of it, and each segment's quantiser step is the frame's times 2
+    /// to the power of <see cref="Strength"/> for each doubling of activity from the picture's mean. Our own design; libwebp's
     /// segments and spatial noise shaping do a similar job.
     /// </summary>
     private sealed class Segmentation
@@ -2101,10 +2103,12 @@ internal sealed class Vp8Encoder
             Deltas = deltas;
         }
 
-        // Quantiser steps for each doubling of activity. Against one quantiser, at equal file size: luma SSIM 0.10 to
-        // 0.16% higher on photos and RGB SSIM up to 0.3% on icons, for 0.3 dB less PSNR on photos; smooth backgrounds lose
-        // their blotches. 2 gained half as much; 8 no more SSIM for twice the PSNR.
-        private const double Strength = 4;
+        // Octaves of quantiser step for each doubling of activity. As a ratio of steps rather than a number of quantiser
+        // indexes, it does as much at every quality: a fixed 4 indexes (tried first) did almost nothing below quality 40,
+        // where the steps between indexes are relatively small. Against that, at equal file size: luma SSIM 0.19 to 0.28%
+        // higher below quality 40 and 0.13 to 0.17% higher from 45 to 75, for 0.07 to 0.18 dB less PSNR; above 80 the
+        // same SSIM and 0.15 to 0.24 dB more PSNR. 0.5 gained 0.01 to 0.07% more SSIM for 0.12 to 0.26 dB.
+        private const double Strength = 0.35;
 
         /// <summary>Each macroblock's segment, 0 the smoothest to 3 the busiest.</summary>
         public byte[] Map { get; }
@@ -2114,7 +2118,7 @@ internal sealed class Vp8Encoder
 
         /// <summary>The segments for a picture, or <see langword="null"/> where one quantiser serves: at effort 0, and for
         /// pictures whose macroblocks are all about as busy.</summary>
-        public static Segmentation? For(byte[] y, int width, int height, int effort)
+        public static Segmentation? For(byte[] y, int width, int height, int quantiser, int effort)
         {
             int mbWide = (width + 15) / 16;
             int mbHigh = (height + 15) / 16;
@@ -2197,7 +2201,26 @@ internal sealed class Vp8Encoder
             int[] deltas = new int[4];
             for (int k = 0; k < 4; k++)
             {
-                deltas[k] = (int)Math.Round(Strength * (centres[k] - mean));
+                // The segment's AC step: the frame's times 2 to the power of Strength for each doubling of activity from
+                // the mean, as the index whose step is nearest.
+                double want = Ac(quantiser) * Math.Pow(2, Strength * (centres[k] - mean));
+                int index = quantiser;
+                while (index < 127 && Ac(index + 1) <= want)
+                {
+                    index++;
+                }
+
+                while (index > 0 && Ac(index) > want)
+                {
+                    index--;
+                }
+
+                if (index < 127 && Math.Abs(Ac(index + 1) - want) < Math.Abs(Ac(index) - want))
+                {
+                    index++;
+                }
+
+                deltas[k] = index - quantiser;
             }
 
             return deltas.All(d => d == deltas[0]) ? null : new Segmentation(map, deltas);

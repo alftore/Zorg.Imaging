@@ -466,7 +466,7 @@ public class WebpEncoderTests
             }
         }
 
-        (byte[] yp, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, 4);
+        (byte[] yp, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, 4, 80);
         int quantiser = Vp8Encoder.QuantiserFor(75);
         foreach (int effort in new[] { 0, 1, 4 })
         {
@@ -553,7 +553,7 @@ public class WebpEncoderTests
         int quantiser = Vp8Encoder.QuantiserFor(95);
         double Shown(int effort)
         {
-            (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, effort);
+            (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, effort, 95);
             using Image decoded = Image.Decode(Riff(Vp8Encoder.Encode(y, u, v, Width, Height, quantiser, 4)), AsRgba);
             return PngLossyTests.Psnr(source, decoded);
         }
@@ -561,6 +561,13 @@ public class WebpEncoderTests
         double plain = Shown(WebpEncoder.SharpEffort - 1);
         double sharp = Shown(WebpEncoder.SharpEffort);
         Assert.True(sharp > plain + 5, $"{sharp:F2} dB against {plain:F2} averaged");
+
+        // Below quality 50 the chroma is quantised too coarsely for the sharper chroma to pay: the plain average is used.
+        (byte[] y0, byte[] u0, byte[] v0) = WebpEncoder.PlainYuv(argb, Width, Height);
+        (byte[] y1, byte[] u1, byte[] v1) = WebpEncoder.ToYuv(argb, Width, Height, 6, WebpEncoder.SharpQuality - 1);
+        Assert.Equal(y0, y1);
+        Assert.Equal(u0, u1);
+        Assert.Equal(v0, v1);
     }
 
     [Fact]
@@ -590,7 +597,7 @@ public class WebpEncoderTests
             argb[i] = 0xFF000000u | (uint)random.Next(1 << 24);
         }
 
-        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, 4);
+        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, 4, 80);
         byte[] unlimited;
         byte[] frame;
         using (Zorg.Imaging.Processing.Parallelism.Use(cores))
@@ -617,7 +624,7 @@ public class WebpEncoderTests
         // least as close to the source as with any fixed level (bits are the same whatever the level).
         using Image photo = JpegEncoderTests.Photo(400, 304, PixelFormat.Rgba32, seed: 21);
         (uint[] argb, _) = Zorg.Imaging.Processing.Argb.FromImage(photo);
-        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, photo.Width, photo.Height, 4);
+        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, photo.Width, photo.Height, 4, 80);
         int quantiser = Vp8Encoder.QuantiserFor(quality);
         byte[] chosen = Vp8Encoder.Encode(y, u, v, photo.Width, photo.Height, quantiser, 4, 1 << 19, -1);
         using Image best = Image.Decode(Riff(chosen), AsRgba);

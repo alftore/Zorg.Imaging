@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Globalization;
@@ -63,29 +64,32 @@ internal static class WebpEncoder
             return (Vp8lEncoder.Encode(argb, width, height, alpha, options.Effort, chooseOne: false, options.NearBits), [], true);
         }
 
-        // Opaque graphics of flat colour can code smaller lossless than lossy, every pixel exact: a quick lossless coding
-        // at effort 1 is tried beside the lossy one, and kept if it is no larger. On 40 game screenshots, 7 were kept
-        // lossless and the set was 9% smaller, for 15% more time on one core; nothing else in the test corpus changed.
+        // Opaque graphics of flat colour can code smaller lossless than lossy, every pixel exact: after the lossy coding,
+        // a quick lossless one at effort 1 is tried where an estimate says it may win, and kept if it is no larger. On 40
+        // game screenshots, 7 were kept lossless and the set was 9% smaller; nothing else in the test corpus changed.
         if (!alpha && options.Effort >= LosslessTrialEffort && LosslessMayWin(argb, width))
         {
+            // On one core the trial waits for the lossy size and is skipped where the estimate rules it out; with cores
+            // to spare it runs beside the lossy coding. The same rule decides either way, so the file is the same.
             byte[] lossy = [];
             byte[] trial = [];
+            long estimate = LosslessEstimate(argb, width);
             int sides = Parallelism.Bands(argb.Length, 2);
             Parallelism.For(sides, side =>
             {
                 if (side == 0)
                 {
-                    (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height, options.Effort);
+                    (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height, options.Effort, options.Quality);
                     lossy = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
                 }
 
-                if (side == sides - 1)
+                if (side == sides - 1 && (sides > 1 || estimate <= 5L * lossy.Length))
                 {
                     trial = Vp8lEncoder.Encode(argb, width, height, alpha: false, 1);
                 }
             });
 
-            if (trial.Length > lossy.Length)
+            if (estimate > 5L * lossy.Length || trial.Length > lossy.Length)
             {
                 return (lossy, [], false);
             }
@@ -104,7 +108,7 @@ internal static class WebpEncoder
         {
             if (band == 0)
             {
-                (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height, options.Effort);
+                (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height, options.Effort, options.Quality);
                 vp8 = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
             }
 
@@ -115,6 +119,65 @@ internal static class WebpEncoder
         });
 
         return (vp8, alphaChunk, false);
+    }
+
+    /// <summary>
+    /// A rough size in bytes for a picture coded lossless: the entropy of the colours of the pixels that don't repeat the
+    /// one to their left or above, channel by channel, as they are or as differences from the left (whichever is less),
+    /// and 12 bits for each run of repeats. It misses copies from further away, so it overstates the size, by up to 4.4
+    /// times on screenshots that coded smaller lossless than lossy; those coded 6 to 24 times larger lossless were
+    /// overstated far less, and a trial is not worth its time where the estimate is over 5 times the lossy size.
+    /// </summary>
+    internal static long LosslessEstimate(uint[] argb, int width)
+    {
+        int[] counts = new int[6 * 256];
+        long runs = 0;
+        bool repeating = false;
+        for (int i = 1; i < argb.Length; i++)
+        {
+            uint p = argb[i];
+            uint left = argb[i - 1];
+            bool repeat = p == left || (i >= width && p == argb[i - width]);
+            if (repeat)
+            {
+                runs += repeating ? 0 : 1;
+                repeating = true;
+                continue;
+            }
+
+            repeating = false;
+            for (int c = 0; c < 3; c++)
+            {
+                counts[(c * 256) + (int)((p >> (8 * c)) & 0xFF)]++;
+                counts[((3 + c) * 256) + (int)(((p >> (8 * c)) - (left >> (8 * c))) & 0xFF)]++;
+            }
+        }
+
+        double direct = 0;
+        double differences = 0;
+        for (int c = 0; c < 3; c++)
+        {
+            direct += Bits(counts.AsSpan(c * 256, 256));
+            differences += Bits(counts.AsSpan((3 + c) * 256, 256));
+        }
+
+        return (long)((Math.Min(direct, differences) + (12.0 * runs)) / 8);
+
+        static double Bits(ReadOnlySpan<int> histogram)
+        {
+            double total = 0;
+            double sum = 0;
+            foreach (int count in histogram)
+            {
+                if (count > 0)
+                {
+                    total += count;
+                    sum += count * Math.Log2(count);
+                }
+            }
+
+            return total == 0 ? 0 : (total * Math.Log2(total)) - sum;
+        }
     }
 
     /// <summary>The effort from which an opaque lossy picture may be coded lossless where that is no larger.</summary>
@@ -365,15 +428,22 @@ internal static class WebpEncoder
     /// <summary>Effort from which lossy pictures take <see cref="SharpYuv"/>'s conversion.</summary>
     internal const int SharpEffort = 2;
 
+    /// <summary>
+    /// Quality from which lossy pictures take <see cref="SharpYuv"/>'s conversion. Below it the chroma is quantised so
+    /// coarsely that most of the sharper chroma is lost: at equal file size, 0.04 to 0.23 dB on photos below quality 50
+    /// (0.3 to 0.8 above 80), while luma SSIM still fell 0.03 to 0.19%, for 10 to 25% more time on one core.
+    /// </summary>
+    internal const int SharpQuality = 50;
+
     /// <summary>How many rounds <see cref="SharpYuv"/> takes: a third adds 0.05 dB for 7% more time.</summary>
     internal const int SharpRounds = 2;
 
     // RGB to Y'CbCr with BT.601's studio-range coefficients, as VP8 decoders convert back (RFC 6386 leaves the colour
-    // space to the container; WebP uses this one), the chroma at half size. From effort 2 the chroma is chosen for what
-    // a decoder will show (SharpYuv): at equal file size 0.3 to 0.6 dB on photos and 1.5 dB on game screenshots, up to
+    // space to the container; WebP uses this one), the chroma at half size. From effort 2 and quality 50 the chroma is
+    // chosen for what a decoder will show (SharpYuv): at equal file size 0.3 to 0.6 dB on photos and 1.5 dB on game screenshots, up to
     // 9 dB on coloured text, for 5 to 15% more time on all cores. Below, the plain 2 x 2 average.
-    internal static (byte[] Y, byte[] U, byte[] V) ToYuv(uint[] argb, int width, int height, int effort) =>
-        effort >= SharpEffort ? SharpYuv.Convert(argb, width, height, SharpRounds) : PlainYuv(argb, width, height);
+    internal static (byte[] Y, byte[] U, byte[] V) ToYuv(uint[] argb, int width, int height, int effort, int quality) =>
+        effort >= SharpEffort && quality >= SharpQuality ? SharpYuv.Convert(argb, width, height, SharpRounds) : PlainYuv(argb, width, height);
 
     // The plain conversion: chroma the 2 x 2 average. The planes are padded to whole macroblocks by repeating the last
     // row and column, so the padding costs few bits.
@@ -393,41 +463,62 @@ internal static class WebpEncoder
         {
             int first = mbHigh * band / bands;
             int last = mbHigh * (band + 1) / bands;
+            // A source row padded to the macroblock width by repeating its last pixel, so the loops need no clamps.
+            uint[] padded = new uint[strideY];
+            uint[] below = new uint[strideY];
+            int[] lanes = new int[Vector<int>.Count];
             for (int row = first * 16; row < last * 16; row++)
             {
-                int sy = Math.Min(row, height - 1);
-                for (int col = 0; col < strideY; col++)
+                Pad(Math.Min(row, height - 1), padded);
+                Span<byte> line = y.AsSpan(row * strideY, strideY);
+                int col = 0;
+                if (Vector.IsHardwareAccelerated)
                 {
-                    uint p = argb[(sy * width) + Math.Min(col, width - 1)];
-                    int r = (int)((p >> 16) & 0xFF);
-                    int g = (int)((p >> 8) & 0xFF);
-                    int b = (int)(p & 0xFF);
-                    y[(row * strideY) + col] = (byte)(((16839 * r) + (33059 * g) + (6420 * b) + (16 << 16) + (1 << 15)) >> 16);
+                    var mask = new Vector<uint>(0xFF);
+                    var bias = new Vector<int>((16 << 16) + (1 << 15));
+                    for (; col + Vector<int>.Count <= strideY; col += Vector<int>.Count)
+                    {
+                        var p = new Vector<uint>(padded, col);
+                        var r = Vector.AsVectorInt32(Vector.ShiftRightLogical(p, 16) & mask);
+                        var g = Vector.AsVectorInt32(Vector.ShiftRightLogical(p, 8) & mask);
+                        var b = Vector.AsVectorInt32(p & mask);
+                        Vector.ShiftRightArithmetic((r * 16839) + (g * 33059) + (b * 6420) + bias, 16).CopyTo(lanes);
+                        for (int k = 0; k < lanes.Length; k++)
+                        {
+                            line[col + k] = (byte)lanes[k];
+                        }
+                    }
+                }
+
+                for (; col < strideY; col++)
+                {
+                    uint p = padded[col];
+                    line[col] = (byte)(((16839 * (int)((p >> 16) & 0xFF)) + (33059 * (int)((p >> 8) & 0xFF)) + (6420 * (int)(p & 0xFF)) + (16 << 16) + (1 << 15)) >> 16);
                 }
             }
 
             for (int row = first * 8; row < last * 8; row++)
             {
+                Pad(Math.Min(row * 2, height - 1), padded);
+                Pad(Math.Min((row * 2) + 1, height - 1), below);
                 for (int col = 0; col < strideUv; col++)
                 {
-                    int r = 0;
-                    int g = 0;
-                    int b = 0;
-                    for (int dy = 0; dy < 2; dy++)
-                    {
-                        int sy = Math.Min((row * 2) + dy, height - 1);
-                        for (int dx = 0; dx < 2; dx++)
-                        {
-                            uint p = argb[(sy * width) + Math.Min((col * 2) + dx, width - 1)];
-                            r += (int)((p >> 16) & 0xFF);
-                            g += (int)((p >> 8) & 0xFF);
-                            b += (int)(p & 0xFF);
-                        }
-                    }
-
+                    uint p0 = padded[2 * col];
+                    uint p1 = padded[(2 * col) + 1];
+                    uint p2 = below[2 * col];
+                    uint p3 = below[(2 * col) + 1];
+                    int r = (int)(((p0 >> 16) & 0xFF) + ((p1 >> 16) & 0xFF) + ((p2 >> 16) & 0xFF) + ((p3 >> 16) & 0xFF));
+                    int g = (int)(((p0 >> 8) & 0xFF) + ((p1 >> 8) & 0xFF) + ((p2 >> 8) & 0xFF) + ((p3 >> 8) & 0xFF));
+                    int b = (int)((p0 & 0xFF) + (p1 & 0xFF) + (p2 & 0xFF) + (p3 & 0xFF));
                     u[(row * strideUv) + col] = (byte)Math.Clamp(((-9719 * r) - (19081 * g) + (28800 * b) + (128 << 18) + (1 << 17)) >> 18, 0, 255);
                     v[(row * strideUv) + col] = (byte)Math.Clamp(((28800 * r) - (24116 * g) - (4684 * b) + (128 << 18) + (1 << 17)) >> 18, 0, 255);
                 }
+            }
+
+            void Pad(int sourceRow, uint[] into)
+            {
+                argb.AsSpan(sourceRow * width, width).CopyTo(into);
+                into.AsSpan(width).Fill(argb[(sourceRow * width) + width - 1]);
             }
         });
 

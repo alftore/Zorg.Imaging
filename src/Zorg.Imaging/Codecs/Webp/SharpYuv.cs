@@ -109,7 +109,7 @@ internal static class SharpYuv
             var most = new Vector<float>(255.5f);
             for (int c = 0; c < bytes.Length; c += Vector<float>.Count)
             {
-                var value = Vector.Min(Vector.Max((new Vector<float>(luma, c) * (1 / Ky)) + new Vector<float>(16.5f), Vector<float>.Zero), most);
+                var value = Vector.MinNative(Vector.MaxNative((new Vector<float>(luma, c) * (1 / Ky)) + new Vector<float>(16.5f), Vector<float>.Zero), most);
                 Vector.ConvertToInt32(value).CopyTo(bytes, c);
             }
         }
@@ -158,8 +158,8 @@ internal static class SharpYuv
                 {
                     int i = (c * cs) + x;
                     int s = ((c - first) * cs) + x;
-                    Vector.Min(Vector.Max(new Vector<float>(u, i) + (Step * new Vector<float>(sumU, s)), low), high).CopyTo(nextU, i);
-                    Vector.Min(Vector.Max(new Vector<float>(v, i) + (Step * new Vector<float>(sumV, s)), low), high).CopyTo(nextV, i);
+                    Vector.MinNative(Vector.MaxNative(new Vector<float>(u, i) + (Step * new Vector<float>(sumU, s)), low), high).CopyTo(nextU, i);
+                    Vector.MinNative(Vector.MaxNative(new Vector<float>(v, i) + (Step * new Vector<float>(sumV, s)), low), high).CopyTo(nextV, i);
                 }
             }
         }
@@ -188,10 +188,19 @@ internal static class SharpYuv
             int source = Math.Min(row, height - 1) * width;
             uint[] even = rows.Even;
             uint[] odd = rows.Odd;
-            for (int c = 0; c < cs; c++)
+            ReadOnlySpan<uint> line = argb.AsSpan(source, width);
+            int pairs = width / 2;
+            for (int c = 0; c < pairs; c++)
             {
-                even[c] = argb[source + Math.Min(2 * c, width - 1)];
-                odd[c] = argb[source + Math.Min((2 * c) + 1, width - 1)];
+                even[c] = line[2 * c];
+                odd[c] = line[(2 * c) + 1];
+            }
+
+            uint last = line[width - 1];
+            for (int c = pairs; c < cs; c++)
+            {
+                even[c] = (2 * c) < width ? line[2 * c] : last;
+                odd[c] = last;
             }
 
             // An even pixel is 3 parts its own sample to 1 of the one on its left; an odd one, of the one on its right.
@@ -240,14 +249,12 @@ internal static class SharpYuv
                 var cg = (Kgu * pu) + (Kgv * pv);
                 var cb = Kb * pu;
                 var target = (Wr * r) + (Wg * g) + (Wb * b);
-                var l = target;
-                for (int k = 0; k < 2; k++)
-                {
-                    var shown = (Wr * Clip(l + cr)) + (Wg * Clip(l + cg)) + (Wb * Clip(l + cb));
-                    l += target - shown;
-                }
 
-                l = Vector.Min(Vector.Max(l, new Vector<float>(-Ky * 16)), new Vector<float>(Ky * 239));
+                // The luma that shows the source's brightness without clipping, then one step for any clipping.
+                var l = target - ((Wr * cr) + (Wg * cg) + (Wb * cb));
+                l += target - ((Wr * Clip(l + cr)) + (Wg * Clip(l + cg)) + (Wb * Clip(l + cb)));
+
+                l = Vector.MinNative(Vector.MaxNative(l, new Vector<float>(-Ky * 16)), new Vector<float>(Ky * 239));
                 l.CopyTo(luma, c);
                 if (!errors)
                 {
@@ -268,14 +275,14 @@ internal static class SharpYuv
                 var a22 = (mr * (Kr * Kr)) + (mg * (Kgv * Kgv)) + new Vector<float>(Ridge);
                 var b1 = (mg * Kgu * eg) + (mb * Kb * eb);
                 var b2 = (mr * Kr * er) + (mg * Kgv * eg);
-                var det = (a11 * a22) - (a12 * a12);
-                (((a22 * b1) - (a12 * b2)) / det).CopyTo(du, c + offset);
-                (((a11 * b2) - (a12 * b1)) / det).CopyTo(dv, c + offset);
+                var inverse = Vector<float>.One / ((a11 * a22) - (a12 * a12));
+                (((a22 * b1) - (a12 * b2)) * inverse).CopyTo(du, c + offset);
+                (((a11 * b2) - (a12 * b1)) * inverse).CopyTo(dv, c + offset);
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static Vector<float> Clip(Vector<float> value) => Vector.Min(Vector.Max(value, Vector<float>.Zero), new Vector<float>(255));
+        private static Vector<float> Clip(Vector<float> value) => Vector.MinNative(Vector.MaxNative(value, Vector<float>.Zero), new Vector<float>(255));
 
         // A channel clipped at a limit the source is at too has no error and no say in the chroma.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
