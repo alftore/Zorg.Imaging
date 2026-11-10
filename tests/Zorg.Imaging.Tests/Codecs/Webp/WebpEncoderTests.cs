@@ -373,6 +373,38 @@ public class WebpEncoderTests
     }
 
     [Fact]
+    public void Coloured_lines_keep_their_colour_from_effort_two()
+    {
+        // Yellow strokes a pixel wide on brown, as old game screens and coloured text have: averaged over 2 x 2 blocks,
+        // the yellow's chroma is mostly lost and the strokes come out pale. From effort 2 the chroma is chosen for what
+        // the decoder shows, letting the brown's blue clip to 0 under the yellow's chroma.
+        const int Width = 96;
+        const int Height = 64;
+        uint[] argb = new uint[Width * Height];
+        for (int y = 0; y < Height; y++)
+        {
+            for (int x = 0; x < Width; x++)
+            {
+                bool stroke = (x % 6 == 1 && y % 8 < 6) || (y % 8 == 2 && x % 6 < 4);
+                argb[(y * Width) + x] = stroke ? 0xFFFFC418u : 0xFF401000u;
+            }
+        }
+
+        using Image source = Zorg.Imaging.Processing.Argb.ToImage(argb, Width, Height, hasAlpha: false, PixelFormat.Rgba32);
+        int quantiser = Vp8Encoder.QuantiserFor(95);
+        double Shown(int effort)
+        {
+            (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, effort);
+            using Image decoded = Image.Decode(Riff(Vp8Encoder.Encode(y, u, v, Width, Height, quantiser, 4)), AsRgba);
+            return PngLossyTests.Psnr(source, decoded);
+        }
+
+        double plain = Shown(WebpEncoder.SharpEffort - 1);
+        double sharp = Shown(WebpEncoder.SharpEffort);
+        Assert.True(sharp > plain + 5, $"{sharp:F2} dB against {plain:F2} averaged");
+    }
+
+    [Fact]
     public void Lossy_with_alpha_is_the_same_on_one_core_and_on_many()
     {
         using Image photo = JpegEncoderTests.Photo(1250, 640, PixelFormat.Rgba32, seed: 12);
@@ -399,7 +431,7 @@ public class WebpEncoderTests
             argb[i] = 0xFF000000u | (uint)random.Next(1 << 24);
         }
 
-        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height);
+        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, Width, Height, 4);
         byte[] unlimited;
         byte[] frame;
         using (Zorg.Imaging.Processing.Parallelism.Use(cores))
@@ -426,7 +458,7 @@ public class WebpEncoderTests
         // least as close to the source as with any fixed level (bits are the same whatever the level).
         using Image photo = JpegEncoderTests.Photo(400, 304, PixelFormat.Rgba32, seed: 21);
         (uint[] argb, _) = Zorg.Imaging.Processing.Argb.FromImage(photo);
-        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, photo.Width, photo.Height);
+        (byte[] y, byte[] u, byte[] v) = WebpEncoder.ToYuv(argb, photo.Width, photo.Height, 4);
         int quantiser = Vp8Encoder.QuantiserFor(quality);
         byte[] chosen = Vp8Encoder.Encode(y, u, v, photo.Width, photo.Height, quantiser, 4, 1 << 19, -1);
         using Image best = Image.Decode(Riff(chosen), AsRgba);

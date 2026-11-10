@@ -60,7 +60,8 @@ public sealed class WebpEncoderOptions
     /// <summary>
     /// How hard to work, 0 (fastest) to 6, as cwebp's <c>-m</c>. Lossless: higher efforts search more for a smaller file,
     /// which decodes to the same pixels. Lossy: higher efforts try more prediction modes per block; 0 uses whole-block
-    /// modes only.
+    /// modes only. From 2, lossy colour is converted for what a decoder will show rather than averaged over 2 x 2 pixels,
+    /// as cwebp's <c>-sharp_yuv</c> does, so colour edges, coloured text and thin coloured lines keep their colour.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value isn't 0 to 6.</exception>
     /// <example><code>var fast = new WebpEncoderOptions { Lossless = true, Effort = 1 };</code></example>
