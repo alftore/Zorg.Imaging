@@ -8,6 +8,33 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-10: against the C tools on a test corpus
+
+168 open-licensed images, at most 12 from each category of the QOI benchmark suite (icons, screenshots, photos,
+textures, cut-outs; at most 4 megapixels) and the CID22 validation photos, on one core. Made by a corpus runner kept
+outside the repository; the reference tools ran in the Linux gate image. Size and time are ours over theirs (geometric
+mean); PSNR and SSIM are ours less theirs, over white. Their time is the whole process, start-up and reading the input
+included, ours the encode alone, so ratios on small images flatter us.
+
+| Format, against | Size | Time | ΔPSNR | ΔSSIM | Notes |
+|---|---:|---:|---:|---:|---|
+| Lossy WebP q80, cwebp `-q 80` | 0.970 | 1.03 | +1.35 | -0.0007 | +0.78 dB at cwebp's file size |
+| JPEG q80, cjpeg `-quality 80` | 0.913 | 0.31 | +0.00 | +0.0000 | |
+| Lossless WebP, cwebp `-lossless` | 1.006 | 0.75 | lossless | | icons and cut-outs 3 to 4% larger |
+| PNG, oxipng `-o 2` | 1.096 | 0.06 | lossless | | oxipng searches far longer; `Optimize` closes most of it |
+| PNG, libvips `pngsave` | 0.817 | 0.14 | lossless | | |
+| PNG 256 colours, pngquant 256 | 1.014 | 0.51 | +0.75 | -0.0029 | photos' SSIM 0.007 to 0.011 behind |
+| GIF, libvips `gifsave` | 0.987 | 0.30 | +1.21 | -0.0029 | |
+
+Lossy WebP by category, PSNR at cwebp's file size less cwebp's: web screenshots +2.7 dB and game screenshots +0.7
+(flat graphics come out lossless where that is smaller), photos -0.03 to +0.2, 64-pixel icons +1.1, 512-pixel icons
++0.5, cut-outs +0.35, plant cut-outs -0.22 (their alpha is 4% larger than cwebp's). Times run from 0.25 (64-pixel
+icons) to 1.67 (plant cut-outs) of cwebp's.
+
+Tried for lossy WebP and left out: trellis quantisation (+0.1 dB PSNR but 0.1 to 0.17% lower luma SSIM, as it zeroes fine
+texture, for 20 to 35% more time) and the alpha chunk's prediction filters (alpha 17 to 31% larger than with the
+lossless coder's own predictor).
+
 ## 2026-11-09: lossy PNG
 
 `PngEncoderOptions.MaxColors` reduces to a palette with full alpha (median cut over premultiplied colour cells, then

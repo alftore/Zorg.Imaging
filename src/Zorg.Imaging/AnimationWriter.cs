@@ -27,7 +27,8 @@ namespace Zorg.Imaging;
 /// to the stream as they are made.
 /// </para>
 /// <para>
-/// WebP: each frame is lossy or lossless as <see cref="WebpEncoderOptions.Lossless"/> says, with its rectangle starting
+/// WebP: each frame is lossy, lossless or near-lossless as the <see cref="WebpEncoderOptions"/> say (from effort 2, an
+/// opaque frame of flat colour asked for lossy is coded lossless where that is no larger), with its rectangle starting
 /// on even coordinates as the format needs, replacing what was there (no blending). A frame is cleared after it shows
 /// where the next makes pixels transparent or translucent, so a decoder that blends every frame anyway, as ImageMagick
 /// does, shows the same. Durations are whole milliseconds. The file is written when completed, as

@@ -56,7 +56,7 @@ One frame is held back until the next arrives, so call `Complete` or `CompleteAs
 
 | | GIF | WebP |
 |---|---|---|
-| Colours | A colour table per frame, up to `MaxColors`, dithered as `Dithering` says; transparency is on or off, from `AlphaThreshold`, `AlphaDithering` and `Matte` | Lossy or lossless as `Lossless` says, with full alpha |
+| Colours | A colour table per frame, up to `MaxColors`, dithered as `Dithering` says; transparency is on or off, from `AlphaThreshold`, `AlphaDithering` and `Matte` | Lossy, lossless or near-lossless as the options say (an opaque flat frame may be coded lossless where that is smaller), with full alpha |
 | Durations | Rounded to hundredths of a second | Whole milliseconds |
 | Unchanged pixels | Left transparent inside the rectangle, so the frame before shows through and the frame codes smaller | Coded again (frames replace what was there) |
 | Written | Frame by frame as they are coded | When completed, since the header holds the file size |
