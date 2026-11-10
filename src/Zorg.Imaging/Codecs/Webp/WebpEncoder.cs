@@ -109,7 +109,7 @@ internal static class WebpEncoder
             if (band == 0)
             {
                 (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height, options.Effort, options.Quality);
-                vp8 = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
+                vp8 = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort, alpha ? HiddenMacroblocks(argb, width, height) : null);
             }
 
             if (alpha && band == bands - 1)
@@ -180,6 +180,29 @@ internal static class WebpEncoder
         }
     }
 
+    /// <summary>Which 16 x 16 macroblocks show nothing: every pixel in them fully transparent.</summary>
+    internal static bool[] HiddenMacroblocks(uint[] argb, int width, int height)
+    {
+        int mbWide = (width + 15) / 16;
+        int mbHigh = (height + 15) / 16;
+        bool[] hidden = new bool[mbWide * mbHigh];
+        Array.Fill(hidden, true);
+        for (int y = 0; y < height; y++)
+        {
+            ReadOnlySpan<uint> row = argb.AsSpan(y * width, width);
+            for (int mx = 0; mx < mbWide; mx++)
+            {
+                int at = (y / 16 * mbWide) + mx;
+                if (hidden[at] && row.Slice(mx * 16, Math.Min(16, width - (mx * 16))).ContainsAnyInRange(0x01000000u, uint.MaxValue))
+                {
+                    hidden[at] = false;
+                }
+            }
+        }
+
+        return hidden;
+    }
+
     /// <summary>The effort from which an opaque lossy picture may be coded lossless where that is no larger.</summary>
     internal const int LosslessTrialEffort = 2;
 
@@ -220,100 +243,112 @@ internal static class WebpEncoder
     // each pixel is visited once.
     private static void Inpaint(uint[] argb, int width)
     {
-        var filled = new bool[argb.Length];
-        var queued = new bool[argb.Length];
-        var ring = new System.Collections.Generic.List<int>();
-        for (int i = 0; i < argb.Length; i++)
+        int n = argb.Length;
+
+        // 0: to fill, 1: queued for the next ring, 2: filled.
+        byte[] state = new byte[n];
+        for (int i = 0; i < n; i++)
         {
-            filled[i] = argb[i] >= 0x01000000u;
+            state[i] = argb[i] >= 0x01000000u ? (byte)2 : (byte)0;
         }
 
-        for (int i = 0; i < argb.Length; i++)
+        int[] ring = new int[n];
+        int[] next = new int[n];
+        int count = 0;
+        for (int i = 0; i < n; i++)
         {
-            if (!filled[i] && HasFilledNeighbour(i))
-            {
-                ring.Add(i);
-                queued[i] = true;
-            }
-        }
-
-        var colours = new System.Collections.Generic.List<uint>();
-        var next = new System.Collections.Generic.List<int>();
-        while (ring.Count > 0)
-        {
-            colours.Clear();
-            foreach (int i in ring)
+            if (state[i] == 0)
             {
                 int x = i % width;
-                int r = 0, g = 0, b = 0, n = 0;
-                void Add(int j)
+                if ((x > 0 && state[i - 1] == 2) || (x + 1 < width && state[i + 1] == 2) || (i >= width && state[i - width] == 2) || (i + width < n && state[i + width] == 2))
                 {
-                    if (filled[j])
-                    {
-                        uint p = argb[j];
-                        r += (int)((p >> 16) & 0xFF);
-                        g += (int)((p >> 8) & 0xFF);
-                        b += (int)(p & 0xFF);
-                        n++;
-                    }
+                    ring[count++] = i;
+                    state[i] = 1;
                 }
-
-                if (x > 0)
-                {
-                    Add(i - 1);
-                }
-
-                if (x + 1 < width)
-                {
-                    Add(i + 1);
-                }
-
-                if (i >= width)
-                {
-                    Add(i - width);
-                }
-
-                if (i + width < argb.Length)
-                {
-                    Add(i + width);
-                }
-
-                colours.Add(((uint)(r / n) << 16) | ((uint)(g / n) << 8) | (uint)(b / n));
             }
+        }
 
-            next.Clear();
-            for (int k = 0; k < ring.Count; k++)
+        uint[] colours = new uint[n];
+        // Sixteen rings reach every transparent pixel of an 8 x 8 block with anything visible (at most 14 steps away);
+        // pixels further out are in wholly transparent blocks, which HideTransparent makes flat anyway.
+        int rings = 16;
+        while (count > 0 && rings-- > 0)
+        {
+            // Each pixel of the ring takes the mean of its neighbours filled before this ring.
+            for (int k = 0; k < count; k++)
             {
                 int i = ring[k];
-                argb[i] = colours[k];
-                filled[i] = true;
+                int x = i % width;
+                int r = 0, g = 0, b = 0, m = 0;
+                if (x > 0 && state[i - 1] == 2)
+                {
+                    Add(argb[i - 1], ref r, ref g, ref b, ref m);
+                }
+
+                if (x + 1 < width && state[i + 1] == 2)
+                {
+                    Add(argb[i + 1], ref r, ref g, ref b, ref m);
+                }
+
+                if (i >= width && state[i - width] == 2)
+                {
+                    Add(argb[i - width], ref r, ref g, ref b, ref m);
+                }
+
+                if (i + width < n && state[i + width] == 2)
+                {
+                    Add(argb[i + width], ref r, ref g, ref b, ref m);
+                }
+
+                colours[k] = ((uint)(r / m) << 16) | ((uint)(g / m) << 8) | (uint)(b / m);
             }
 
-            foreach (int i in ring)
+            for (int k = 0; k < count; k++)
             {
+                argb[ring[k]] = colours[k];
+                state[ring[k]] = 2;
+            }
+
+            int queued = 0;
+            for (int k = 0; k < count; k++)
+            {
+                int i = ring[k];
                 int x = i % width;
-                Queue(x > 0 ? i - 1 : -1);
-                Queue(x + 1 < width ? i + 1 : -1);
-                Queue(i - width);
-                Queue(i + width < argb.Length ? i + width : -1);
+                if (x > 0 && state[i - 1] == 0)
+                {
+                    state[i - 1] = 1;
+                    next[queued++] = i - 1;
+                }
+
+                if (x + 1 < width && state[i + 1] == 0)
+                {
+                    state[i + 1] = 1;
+                    next[queued++] = i + 1;
+                }
+
+                if (i >= width && state[i - width] == 0)
+                {
+                    state[i - width] = 1;
+                    next[queued++] = i - width;
+                }
+
+                if (i + width < n && state[i + width] == 0)
+                {
+                    state[i + width] = 1;
+                    next[queued++] = i + width;
+                }
             }
 
             (ring, next) = (next, ring);
+            count = queued;
         }
 
-        bool HasFilledNeighbour(int i)
+        static void Add(uint p, ref int r, ref int g, ref int b, ref int m)
         {
-            int x = i % width;
-            return (x > 0 && filled[i - 1]) || (x + 1 < width && filled[i + 1]) || (i >= width && filled[i - width]) || (i + width < argb.Length && filled[i + width]);
-        }
-
-        void Queue(int j)
-        {
-            if (j >= 0 && !filled[j] && !queued[j])
-            {
-                queued[j] = true;
-                next.Add(j);
-            }
+            r += (int)((p >> 16) & 0xFF);
+            g += (int)((p >> 8) & 0xFF);
+            b += (int)(p & 0xFF);
+            m++;
         }
     }
 
@@ -352,8 +387,9 @@ internal static class WebpEncoder
                     continue;
                 }
 
-                // A run of transparent blocks keeps the colour its first block had at its first pixel.
-                flat ??= argb[(by * width) + bx] & 0xFFFFFFu;
+                // A run of transparent blocks takes the colour of the pixel to its left, which the fill reached (it is in
+                // a block with something visible); a run at the left edge, its first pixel's.
+                flat ??= argb[(by * width) + bx - (bx > 0 ? 1 : 0)] & 0xFFFFFFu;
                 uint colour = flat.Value;
                 for (int y = 0; y < rows; y++)
                 {
@@ -534,6 +570,8 @@ internal static class WebpEncoder
     // green channel of a VP8L image stream without its 5-byte header.
     private static byte[] AlphaChunk(uint[] argb, int width, int height, int effort)
     {
+        // Unfiltered: the lossless coder's own predictor beats the chunk's filters (left, above, gradient), which made
+        // the alpha of cut-outs 17 to 31% larger; trying all four saved 0.1%.
         uint[] alpha = new uint[argb.Length];
         for (int i = 0; i < argb.Length; i++)
         {

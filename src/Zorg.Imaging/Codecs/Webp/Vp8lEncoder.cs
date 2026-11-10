@@ -1735,9 +1735,10 @@ internal static class Vp8lEncoder
             shortExtra[k] = lengthBits;
         }
 
-        float[] cost = new float[n + 1];
-        int[] step = new int[n + 1];
-        int[] reached = new int[n + 1];
+        // Sixteen spare entries past the end, so the copies of 1 to 16 are offered a vector at a time.
+        float[] cost = new float[n + 17];
+        int[] step = new int[n + 17];
+        int[] reached = new int[n + 17];
         Array.Fill(cost, float.MaxValue);
         cost[0] = 0;
         for (int i = 0; i < n; i++)
@@ -1783,7 +1784,27 @@ internal static class Vp8lEncoder
 
             // Every length up to 16, and the longest; longer ones are reached from the pixels inside the copy.
             int shortest = Math.Min(longest, 16);
-            for (int k = 1; k <= shortest; k++)
+            if (Vector256.IsHardwareAccelerated)
+            {
+                var copies = Vector256.Create(copy);
+                var most = Vector256.Create(shortest);
+                var at = Vector256.Create(distance);
+                for (int h = 0; h < 16; h += 8)
+                {
+                    var total = (copies + Vector256.Create(shortSymbol.AsSpan(1 + h, 8))) + Vector256.Create(shortExtra.AsSpan(1 + h, 8));
+                    var lengths = Vector256.Create(1 + h, 2 + h, 3 + h, 4 + h, 5 + h, 6 + h, 7 + h, 8 + h);
+                    Span<float> costs = cost.AsSpan(i + 1 + h, 8);
+                    Span<int> steps = step.AsSpan(i + 1 + h, 8);
+                    Span<int> reaches = reached.AsSpan(i + 1 + h, 8);
+                    var before = Vector256.Create<float>(costs);
+                    var better = Vector256.LessThan(total, before).AsInt32() & Vector256.LessThanOrEqual(lengths, most);
+                    Vector256.ConditionalSelect(better.AsSingle(), total, before).CopyTo(costs);
+                    Vector256.ConditionalSelect(better, -lengths, Vector256.Create<int>(steps)).CopyTo(steps);
+                    Vector256.ConditionalSelect(better, at, Vector256.Create<int>(reaches)).CopyTo(reaches);
+                }
+            }
+
+            for (int k = Vector256.IsHardwareAccelerated ? 17 : 1; k <= shortest; k++)
             {
                 float total = copy + shortSymbol[k] + shortExtra[k];
                 if (total < cost[i + k])

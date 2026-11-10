@@ -132,13 +132,13 @@ internal sealed class Vp8Encoder
     /// both padded to whole macroblocks) as a VP8 frame: the payload of a <c>VP8 </c> chunk.</summary>
     /// <exception cref="NotSupportedException">The macroblock modes don't fit the 512 KB the first partition can hold,
     /// even without subblock modes: only for pictures of tens of megapixels.</exception>
-    public static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort) =>
-        Encode(y, u, v, width, height, quantiser, effort, 1 << 19, -1);
+    public static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, bool[]? hidden = null) =>
+        Encode(y, u, v, width, height, quantiser, effort, 1 << 19, -1, hidden);
 
     /// <summary>As the other overload, with the first partition held below <paramref name="partitionLimit"/> bytes
     /// (the format's 512 KB, or less to test the budget on a small picture), and the loop filter at
     /// <paramref name="filterLevel"/>, or chosen when it is -1.</summary>
-    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit, int filterLevel)
+    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit, int filterLevel, bool[]? hidden = null)
     {
         // Subblock modes take most of the first partition, which holds at most 512 KB. For a picture of tens of
         // megapixels the modes' bits are estimated first, and if they would not fit, every mode decision prices mode
@@ -148,7 +148,7 @@ internal sealed class Vp8Encoder
         // fits; a row that runs ahead of its share codes whole-block luma until it is back within it. Without subblock
         // modes at all as a last resort.
         int price = ChooseModePrice(y, u, v, width, height, quantiser, effort, partitionLimit);
-        Segmentation? segmentation = Segmentation.For(y, width, height, quantiser, effort);
+        Segmentation? segmentation = Segmentation.For(y, width, height, quantiser, effort, hidden);
         var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
         encoder.EncodeRows();
         byte[]? frame = encoder.Write();
@@ -2118,7 +2118,7 @@ internal sealed class Vp8Encoder
 
         /// <summary>The segments for a picture, or <see langword="null"/> where one quantiser serves: at effort 0, and for
         /// pictures whose macroblocks are all about as busy.</summary>
-        public static Segmentation? For(byte[] y, int width, int height, int quantiser, int effort)
+        public static Segmentation? For(byte[] y, int width, int height, int quantiser, int effort, bool[]? hidden)
         {
             int mbWide = (width + 15) / 16;
             int mbHigh = (height + 15) / 16;
@@ -2165,9 +2165,18 @@ internal sealed class Vp8Encoder
             });
 
             // Centres from the quantiles, then a few rounds of k-means.
-            double[] sorted = [.. activity];
+            // Macroblocks that show nothing are left out of the statistics (their flat fill would make everything else
+            // look busy) and coded in the coarsest segment.
+            double[] shown = hidden is null ? activity : [.. activity.Where((_, i) => !hidden[i])];
+            if (shown.Length < 16)
+            {
+                return null;
+            }
+
+            double[] sorted = [.. shown];
             Array.Sort(sorted);
-            double[] centres = [sorted[count / 8], sorted[count * 3 / 8], sorted[count * 5 / 8], sorted[count * 7 / 8]];
+            int visible = sorted.Length;
+            double[] centres = [sorted[visible / 8], sorted[visible * 3 / 8], sorted[visible * 5 / 8], sorted[visible * 7 / 8]];
             byte[] map = new byte[count];
             for (int round = 0; round < 8; round++)
             {
@@ -2175,6 +2184,11 @@ internal sealed class Vp8Encoder
                 int[] members = new int[4];
                 for (int i = 0; i < count; i++)
                 {
+                    if (hidden is not null && hidden[i])
+                    {
+                        continue;
+                    }
+
                     int best = Nearest(centres, activity[i]);
                     map[i] = (byte)best;
                     sums[best] += activity[i];
@@ -2194,10 +2208,10 @@ internal sealed class Vp8Encoder
 
             for (int i = 0; i < count; i++)
             {
-                map[i] = (byte)Nearest(centres, activity[i]);
+                map[i] = hidden is not null && hidden[i] ? (byte)3 : (byte)Nearest(centres, activity[i]);
             }
 
-            double mean = activity.Average();
+            double mean = shown.Average();
             int[] deltas = new int[4];
             for (int k = 0; k < 4; k++)
             {

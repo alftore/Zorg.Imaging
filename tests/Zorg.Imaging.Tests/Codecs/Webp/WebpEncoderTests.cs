@@ -532,6 +532,20 @@ public class WebpEncoderTests
     }
 
     [Fact]
+    public void Macroblocks_that_show_nothing_are_found()
+    {
+        // 40 x 20: the first macroblock column has one faintly visible pixel at (15, 17), in the second row of
+        // macroblocks; everything else is transparent except the third column's top row.
+        const int Width = 40;
+        const int Height = 20;
+        uint[] argb = new uint[Width * Height];
+        argb[(17 * Width) + 15] = 0x01FFFFFFu;
+        argb[(3 * Width) + 39] = 0xFF102030u;
+        bool[] hidden = WebpEncoder.HiddenMacroblocks(argb, Width, Height);
+        Assert.Equal([true, true, false, false, true, true], hidden);
+    }
+
+    [Fact]
     public void Coloured_lines_keep_their_colour_from_effort_two()
     {
         // Yellow strokes a pixel wide on brown, as old game screens and coloured text have: averaged over 2 x 2 blocks,
