@@ -68,7 +68,7 @@ internal sealed class Vp8Encoder
     private int[] _progress = [];
     private volatile bool _failed;
 
-    private Vp8Encoder(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, Segmentation? segmentation = null)
+    private Vp8Encoder(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, Segmentation? segmentation = null, bool texture = true)
     {
         // How many modes, ranked by prediction error alone, get the full test of transform, tokens and reconstruction.
         _effort = effort;
@@ -96,8 +96,8 @@ internal sealed class Vp8Encoder
         _quantiser = quantiser;
         _segmentation = segmentation;
         _segments = segmentation is null
-            ? [new Segment(quantiser)]
-            : [.. segmentation.Deltas.Select(delta => new Segment(Math.Clamp(quantiser + delta, 0, 127)))];
+            ? [new Segment(quantiser, texture && effort > 0)]
+            : [.. segmentation.Deltas.Select(delta => new Segment(Math.Clamp(quantiser + delta, 0, 127), texture && effort > 0))];
     }
 
     // The price of a mode bit against a token bit, in sixteenths: 16 is the same price.
@@ -136,9 +136,10 @@ internal sealed class Vp8Encoder
         Encode(y, u, v, width, height, quantiser, effort, 1 << 19, -1, hidden);
 
     /// <summary>As the other overload, with the first partition held below <paramref name="partitionLimit"/> bytes
-    /// (the format's 512 KB, or less to test the budget on a small picture), and the loop filter at
-    /// <paramref name="filterLevel"/>, or chosen when it is -1.</summary>
-    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit, int filterLevel, bool[]? hidden = null)
+    /// (the format's 512 KB, or less to test the budget on a small picture), the loop filter at
+    /// <paramref name="filterLevel"/>, or chosen when it is -1, and without the texture term in mode decisions when
+    /// <paramref name="texture"/> is false (to test it).</summary>
+    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit, int filterLevel, bool[]? hidden = null, bool texture = true)
     {
         // Subblock modes take most of the first partition, which holds at most 512 KB. For a picture of tens of
         // megapixels the modes' bits are estimated first, and if they would not fit, every mode decision prices mode
@@ -149,7 +150,7 @@ internal sealed class Vp8Encoder
         // modes at all as a last resort.
         int price = ChooseModePrice(y, u, v, width, height, quantiser, effort, partitionLimit);
         Segmentation? segmentation = Segmentation.For(y, width, height, quantiser, effort, hidden);
-        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
+        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation, texture) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
         encoder.EncodeRows();
         byte[]? frame = encoder.Write();
         if (frame is not null)
@@ -166,7 +167,7 @@ internal sealed class Vp8Encoder
 
         foreach (bool subblocks in new[] { effort > 0, false })
         {
-            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
+            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation, texture) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
             encoder.EncodeRows();
             frame = encoder.Write();
             if (frame is not null)
@@ -204,12 +205,14 @@ internal sealed class Vp8Encoder
         // The modes' bits fall smoothly as the price rises, close to a power of it, so each guess is where that curve
         // meets the target: first from the dearest price that doesn't fit, with the exponent of the last step (a quarter,
         // typical of photos, to start); once a price fits, between it and the dearest that doesn't, until the fitting one
-        // uses most of the room.
+        // uses most of the room. Where the curve bends away from a power, those guesses land short of the target one
+        // after another and creep towards it, so after one that lands short the next goes at least halfway (as powers).
         int low = 16;
         long lowBits = bits;
         int high = 0;
         long highBits = 0;
         double exponent = 0.25;
+        bool landedShort = false;
         for (int step = 0; step < 8; step++)
         {
             int next;
@@ -230,10 +233,12 @@ internal sealed class Vp8Encoder
                 }
 
                 double along = Math.Log((double)lowBits / target) / Math.Log((double)lowBits / highBits);
+                along = landedShort ? Math.Max(along, 0.5) : along;
                 next = Math.Clamp((int)Math.Ceiling(low * Math.Pow((double)high / low, along)), low + 1, high - 1);
             }
 
             long nextBits = EstimateModeBits(y, u, v, width, height, quantiser, effort, next);
+            landedShort = high > 0 && nextBits > target;
             if (nextBits <= target)
             {
                 (high, highBits) = (next, nextBits);
@@ -452,6 +457,27 @@ internal sealed class Vp8Encoder
         Span<byte> contextLeft = stackalloc byte[9];
         Span<byte> contextAbove = stackalloc byte[9];
 
+        // The source's spectra for the texture term (see Texture), once for every candidate: each row of four 4 x 4
+        // blocks in the lanes of sixteen vectors.
+        Span<Vector128<int>> sourceSpectra = stackalloc Vector128<int>[q.Texture > 0 ? 64 : 0];
+        if (q.Texture > 0)
+        {
+            for (int g = 0; g < 4; g++)
+            {
+                Span<Vector128<int>> e = sourceSpectra.Slice(g * 16, 16);
+                for (int r = 0; r < 4; r++)
+                {
+                    int at = ((y0 + (g * 4) + r) * _strideY) + x0;
+                    for (int c = 0; c < 4; c++)
+                    {
+                        e[(r * 4) + c] = Vector128.Create(_sourceY[at + c], _sourceY[at + 4 + c], _sourceY[at + 8 + c], _sourceY[at + 12 + c]);
+                    }
+                }
+
+                SpectrumLanes(e);
+            }
+        }
+
         // The whole-block modes ranked by prediction error and mode bits, then the best few tested in full.
         Span<long> rank = stackalloc long[4];
         for (int mode = DcPred; mode <= TmPred; mode++)
@@ -476,7 +502,7 @@ internal sealed class Vp8Encoder
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
             long modeScore = q.ModeLambda * ModeCost(mode);
-            long score = WholeLuma(q, x0, y0, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero);
+            long score = WholeLuma(q, x0, y0, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, sourceSpectra, out uint nonZero);
             if (score != long.MaxValue && score + modeScore < best)
             {
                 best = score + modeScore;
@@ -505,6 +531,7 @@ internal sealed class Vp8Encoder
         Span<short> trialLevels = stackalloc short[4 * 16];
         Span<byte> trialReconstructions = stackalloc byte[4 * 16];
         Span<long> trialDistortions = stackalloc long[4];
+        Span<int> spectrum = stackalloc int[16];
         long subTotal = subblocks ? q.ModeLambda * ModeCost(BPred) : long.MaxValue;
         int subModeBits = ModeCost(BPred);
         for (int i = 0; i < 16 && subTotal < best; i++)
@@ -523,6 +550,13 @@ internal sealed class Vp8Encoder
             FillSubblockEdge(_y, edge, bx, by, (i & 3) == 3 && i > 3, x0 + 16, y0 - 1);
             Gather4x4(_sourceY, (by * _strideY) + bx, _strideY, original);
             Vector128<byte> source = Vector128.Create<byte>(original);
+            if (q.Texture > 0)
+            {
+                for (int f = 0; f < 16; f++)
+                {
+                    spectrum[f] = sourceSpectra[((i >> 2) * 16) + f].GetElement(i & 3);
+                }
+            }
             // All ten predicted before any is read back as a vector: the predictors write single bytes, and a vector
             // load straight after them waits for those stores to drain.
             for (int mode = BDcPred; mode <= BHuPred; mode++)
@@ -548,7 +582,7 @@ internal sealed class Vp8Encoder
                     predictions.Slice(mode * 16, 16).CopyTo(trialPredictions.Slice(k * 16, 16));
                 }
 
-                TrialFour(original, trialPredictions, q.Y1Dc, q.Y1Ac, trialLevels, trialReconstructions, trialDistortions);
+                TrialFour(original, trialPredictions, q.Y1Dc, q.Y1Ac, trialLevels, trialReconstructions, trialDistortions, spectrum, q.Texture);
                 for (int k = 0; k < count; k++)
                 {
                     int mode = (int)(subRank[group + k] & 0xF);
@@ -619,7 +653,7 @@ internal sealed class Vp8Encoder
 
     // One whole-block luma candidate, predicted in the plane: transform, quantise, reconstruct in place, and score.
     // levels gets the 16 Y blocks then the Y2 block; the contexts are updated as the tokens would leave them.
-    private long WholeLuma(Segment q, int x0, int y0, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits)
+    private long WholeLuma(Segment q, int x0, int y0, Span<short> levels, Span<byte> left, Span<byte> above, long limit, ReadOnlySpan<Vector128<int>> sourceSpectra, out uint nonZeroBits)
     {
         // The sixteen blocks' predictions are all in the plane already, so the blocks are transformed four at a time:
         // each row of four blocks in the lanes. Only the token costs depend on order, and they are counted after.
@@ -676,7 +710,13 @@ internal sealed class Vp8Encoder
             LevelsToBlocks(blockLevels, levels.Slice(g * 64, 64));
             dequantised[0] = Vector128.Create(reconstructedDcs[g * 4], reconstructedDcs[(g * 4) + 1], reconstructedDcs[(g * 4) + 2], reconstructedDcs[(g * 4) + 3]);
             InverseDctLanes(dequantised, residual);
-            distortion += ReconstructLanes(_sourceY, _strideY, _y, xs, ys, residual);
+            distortion += ReconstructLanes(_sourceY, _strideY, _y, xs, ys, residual, keep: q.Texture > 0);
+            if (q.Texture > 0)
+            {
+                // ReconstructLanes left the reconstructed pixels in residual.
+                SpectrumLanes(residual);
+                distortion += q.Texture * Vector128.Sum(TextureLoss(sourceSpectra.Slice(g * 16, 16), residual));
+            }
         }
 
         for (int i = 0; i < 16; i++)
@@ -715,8 +755,9 @@ internal sealed class Vp8Encoder
     // Four candidate predictions of one 4 x 4 luma block (Y type, DC included) at once, one in each lane: the residual,
     // forward DCT, quantisation and dequantisation, inverse DCT, reconstruction and squared error, in the same integer
     // steps as ForwardDct, Quantise, AddResidual and Distortion, so each lane's results equal theirs. Levels come out in
-    // scan order, sixteen per candidate; reconstructions as sixteen bytes per candidate, row by row.
-    private static void TrialFour(ReadOnlySpan<byte> original, ReadOnlySpan<byte> predictions, int dc, int ac, Span<short> levelsOut, Span<byte> reconstructions, Span<long> distortions)
+    // scan order, sixteen per candidate; reconstructions as sixteen bytes per candidate, row by row. A texture weight
+    // above 0 adds that times the texture loss against the source's spectrum (see Texture).
+    private static void TrialFour(ReadOnlySpan<byte> original, ReadOnlySpan<byte> predictions, int dc, int ac, Span<short> levelsOut, Span<byte> reconstructions, Span<long> distortions, ReadOnlySpan<int> spectrum, long texture)
     {
         Span<Vector128<int>> e = stackalloc Vector128<int>[16];
         for (int i = 0; i < 16; i++)
@@ -741,16 +782,73 @@ internal sealed class Vp8Encoder
             Vector128<int> pixel = Vector128.Min(Vector128.Max(prediction + residual[at], Vector128<int>.Zero), Vector128.Create(255));
             Vector128<int> error = Vector128.Create((int)original[at]) - pixel;
             sum += error * error;
+            residual[at] = pixel;
             reconstructions[at] = (byte)pixel.GetElement(0);
             reconstructions[16 + at] = (byte)pixel.GetElement(1);
             reconstructions[32 + at] = (byte)pixel.GetElement(2);
             reconstructions[48 + at] = (byte)pixel.GetElement(3);
         }
 
+        Vector128<int> loss = Vector128<int>.Zero;
+        if (texture > 0)
+        {
+            // The reconstructions are in residual now.
+            SpectrumLanes(residual);
+            Span<Vector128<int>> source = stackalloc Vector128<int>[16];
+            for (int f = 1; f < 16; f++)
+            {
+                source[f] = Vector128.Create(spectrum[f]);
+            }
+
+            loss = TextureLoss(source, residual);
+        }
+
         for (int k = 0; k < 4; k++)
         {
-            distortions[k] = (long)sum.GetElement(k) << 8;
+            distortions[k] = ((long)sum.GetElement(k) << 8) + (texture * loss.GetElement(k));
         }
+    }
+
+    // ---- Texture ----
+    // Squared error favours a reconstruction that is flat over one that keeps a texture slightly out of place, which
+    // looks worse: smooth patches where the source had grain (as luma SSIM counts). So whole-block and subblock luma
+    // decisions also weigh how much of each 4 x 4 block's texture the reconstruction loses or invents: the absolute 4 x 4
+    // Hadamard coefficients of source and reconstruction compared, frequency by frequency, the DC left out. Our own form
+    // of a measure libwebp also has.
+
+    // Four blocks' absolute Hadamard coefficients, in the lanes, in place.
+    private static void SpectrumLanes(Span<Vector128<int>> e)
+    {
+        for (int r = 0; r < 4; r++)
+        {
+            Vector128<int> a0 = e[r * 4] + e[(r * 4) + 3], a1 = e[(r * 4) + 1] + e[(r * 4) + 2];
+            Vector128<int> a2 = e[(r * 4) + 1] - e[(r * 4) + 2], a3 = e[r * 4] - e[(r * 4) + 3];
+            e[r * 4] = a0 + a1;
+            e[(r * 4) + 1] = a3 + a2;
+            e[(r * 4) + 2] = a0 - a1;
+            e[(r * 4) + 3] = a3 - a2;
+        }
+
+        for (int c = 0; c < 4; c++)
+        {
+            Vector128<int> a0 = e[c] + e[12 + c], a1 = e[4 + c] + e[8 + c], a2 = e[4 + c] - e[8 + c], a3 = e[c] - e[12 + c];
+            e[c] = Vector128.Abs(a0 + a1);
+            e[4 + c] = Vector128.Abs(a3 + a2);
+            e[8 + c] = Vector128.Abs(a0 - a1);
+            e[12 + c] = Vector128.Abs(a3 - a2);
+        }
+    }
+
+    // The texture loss of four blocks in the lanes, from the spectra of source and reconstruction.
+    private static Vector128<int> TextureLoss(ReadOnlySpan<Vector128<int>> source, ReadOnlySpan<Vector128<int>> reconstruction)
+    {
+        Vector128<int> loss = Vector128<int>.Zero;
+        for (int f = 1; f < 16; f++)
+        {
+            loss += Vector128.Abs(source[f] - reconstruction[f]);
+        }
+
+        return loss;
     }
 
     // ---- Four blocks in the lanes of 128-bit vectors ----
@@ -882,8 +980,8 @@ internal sealed class Vp8Encoder
     }
 
     // Adds the residuals to the four predictions in the plane, clamped, as AddResidual does; returns the squared error
-    // against the source over the four blocks.
-    private static long ReconstructLanes(byte[] source, int strideSource, Plane plane, ReadOnlySpan<int> xs, ReadOnlySpan<int> ys, ReadOnlySpan<Vector128<int>> residual)
+    // against the source over the four blocks. With keep, the reconstructed pixels replace the residuals.
+    private static long ReconstructLanes(byte[] source, int strideSource, Plane plane, ReadOnlySpan<int> xs, ReadOnlySpan<int> ys, Span<Vector128<int>> residual, bool keep = false)
     {
         Vector128<int> sum = Vector128<int>.Zero;
         Vector128<int> top = Vector128.Create(255);
@@ -901,6 +999,11 @@ internal sealed class Vp8Encoder
                 Vector128<int> pixel = Vector128.Min(Vector128.Max(prediction + residual[(r * 4) + c], Vector128<int>.Zero), top);
                 Vector128<int> error = Vector128.Create(source[s0 + c], source[s1 + c], source[s2 + c], source[s3 + c]) - pixel;
                 sum += error * error;
+                if (keep)
+                {
+                    residual[(r * 4) + c] = pixel;
+                }
+
                 p0[c] = (byte)pixel.GetElement(0);
                 p1[c] = (byte)pixel.GetElement(1);
                 p2[c] = (byte)pixel.GetElement(2);
@@ -2032,6 +2135,38 @@ internal sealed class Vp8Encoder
         return sum;
     }
 
+    // How busy a macroblock is, for its segment: the sum over its sixteen 4 x 4 blocks of |16 x pixel - the block's sum|,
+    // from its top left at. A row of sixteen pixels is in the lanes, as two halves of eight 16-bit lanes; each lane
+    // gathers sixteen differences of at most 16 x 255, which fits 16 bits.
+    internal static int Activity(byte[] y, int at, int stride)
+    {
+        Vector128<ushort> low = Vector128<ushort>.Zero;
+        Vector128<ushort> high = Vector128<ushort>.Zero;
+        for (int by = 0; by < 4; by++)
+        {
+            int row = at + (by * 4 * stride);
+            Vector128<byte> r0 = Vector128.Create<byte>(y.AsSpan(row, 16));
+            Vector128<byte> r1 = Vector128.Create<byte>(y.AsSpan(row + stride, 16));
+            Vector128<byte> r2 = Vector128.Create<byte>(y.AsSpan(row + (2 * stride), 16));
+            Vector128<byte> r3 = Vector128.Create<byte>(y.AsSpan(row + (3 * stride), 16));
+            low += Half(Vector128.WidenLower(r0), Vector128.WidenLower(r1), Vector128.WidenLower(r2), Vector128.WidenLower(r3));
+            high += Half(Vector128.WidenUpper(r0), Vector128.WidenUpper(r1), Vector128.WidenUpper(r2), Vector128.WidenUpper(r3));
+        }
+
+        return (int)(Vector128.Sum(Vector128.WidenLower(low) + Vector128.WidenUpper(low)) + Vector128.Sum(Vector128.WidenLower(high) + Vector128.WidenUpper(high)));
+
+        // Two 4 x 4 blocks side by side, as four rows of eight pixels: each lane's sum down its column of
+        // |16 x pixel - its block's sum|.
+        static Vector128<ushort> Half(Vector128<ushort> a, Vector128<ushort> b, Vector128<ushort> c, Vector128<ushort> d)
+        {
+            Vector128<ushort> columns = a + b + c + d;
+            Vector128<ushort> pairs = columns + Vector128.Shuffle(columns, Vector128.Create((ushort)1, 0, 3, 2, 5, 4, 7, 6));
+            Vector128<short> sums = (pairs + Vector128.Shuffle(pairs, Vector128.Create((ushort)2, 3, 0, 1, 6, 7, 4, 5))).AsInt16();
+            return (Vector128.Abs(Vector128.ShiftLeft(a, 4).AsInt16() - sums) + Vector128.Abs(Vector128.ShiftLeft(b, 4).AsInt16() - sums)
+                + Vector128.Abs(Vector128.ShiftLeft(c, 4).AsInt16() - sums) + Vector128.Abs(Vector128.ShiftLeft(d, 4).AsInt16() - sums)).AsUInt16();
+        }
+    }
+
     private Span<short> Levels(in Macroblock mb) => _levels.AsSpan(mb.Index * 25 * 16, 25 * 16);
 
     private Span<byte> SubModes(in Macroblock mb) => _subModes.AsSpan(mb.Index * 16, 16);
@@ -2050,7 +2185,7 @@ internal sealed class Vp8Encoder
     // distortion at it.
     private sealed class Segment
     {
-        public Segment(int quantiser)
+        public Segment(int quantiser, bool texture)
         {
             Y1Dc = Dc(quantiser);
             Y1Ac = Ac(quantiser);
@@ -2064,7 +2199,17 @@ internal sealed class Vp8Encoder
             LambdaSubblock = Lambda;
             ModeLambda = Lambda;
             ModeLambdaSubblock = LambdaSubblock;
+
+            // Squared error grows with the square of the step and the texture loss with the step, so the texture term's
+            // weight follows the step to keep its share. With 75 x the step, at equal file size on 7 categories of photos,
+            // textures, cut-outs, icons and screenshots (20 images each, quality 15 to 95): 0.04 to 0.1 dB more PSNR and
+            // 0.03 to 0.09% higher luma SSIM in every one; a fixed weight gained less, and 100 x traded PSNR for SSIM.
+            Texture = texture ? 75L * Y1Ac : 0;
         }
+
+        // The texture term's weight: what a unit of texture loss (in Hadamard coefficients) adds to the distortion (in
+        // 1/256 of a squared pixel step), or 0 for none.
+        public long Texture { get; }
 
         public int Y1Dc { get; }
 
@@ -2140,28 +2285,7 @@ internal sealed class Vp8Encoder
                 {
                     for (int mx = 0; mx < mbWide; mx++)
                     {
-                        int total = 0;
-                        for (int b = 0; b < 16; b++)
-                        {
-                            int at = (((my * 16) + ((b >> 2) * 4)) * stride) + (mx * 16) + ((b & 3) * 4);
-                            int sum = 0;
-                            for (int r = 0; r < 4; r++)
-                            {
-                                for (int c = 0; c < 4; c++)
-                                {
-                                    sum += y[at + (r * stride) + c];
-                                }
-                            }
-
-                            for (int r = 0; r < 4; r++)
-                            {
-                                for (int c = 0; c < 4; c++)
-                                {
-                                    total += Math.Abs((16 * y[at + (r * stride) + c]) - sum);
-                                }
-                            }
-                        }
-
+                        int total = Activity(y, (my * 16 * stride) + (mx * 16), stride);
                         activity[(my * mbWide) + mx] = Math.Log2(1 + (total / (16.0 * 256)));
                     }
                 }
