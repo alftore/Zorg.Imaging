@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Lossy WebP decides whether to try lossless for a flat graphic from a quarter of its rows first, so screenshots that stay lossy skip the full trial: 10 to 23% less time on one core and 24 to 28% on 16, with the same files.
+- PNG's default filter choice also tries no filter, which flat graphics often compress best with: game and web screenshots and cut-outs 1.5 to 2% smaller, others unchanged, about 3% more time.
+
 ## 0.1.0-preview.5
 
 Mostly WebP. Against cwebp at quality 80 on 167 test images, lossy files are 0.78 dB closer to the source at the same size and encode in about the same time on one core; lossless files are within 1% of cwebp's size (see `docs/performance.md`). Lossy WebP, GIF and lossy PNG output differs from preview.4.

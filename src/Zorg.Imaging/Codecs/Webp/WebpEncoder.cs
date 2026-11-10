@@ -65,8 +65,9 @@ internal static class WebpEncoder
         }
 
         // Opaque graphics of flat colour can code smaller lossless than lossy, every pixel exact: after the lossy coding,
-        // a quick lossless one at effort 1 is tried where an estimate says it may win, and kept if it is no larger. On 40
-        // game screenshots, 7 were kept lossless and the set was 9% smaller; nothing else in the test corpus changed.
+        // a quick lossless one at effort 1 is tried where two estimates say it may win (the entropy of the pixels, and a
+        // quarter of the rows coded beside the lossy coding), and kept if it is no larger. On 40 game screenshots, 7 were
+        // kept lossless and the set was 9% smaller; nothing else in the test corpus changed.
         if (!alpha && options.Effort >= LosslessTrialEffort && LosslessMayWin(argb, width))
         {
             // On one core the trial waits for the lossy size and is skipped where the estimate rules it out; with cores
@@ -74,6 +75,7 @@ internal static class WebpEncoder
             byte[] lossy = [];
             byte[] trial = [];
             long estimate = LosslessEstimate(argb, width);
+            long sampled = 0;
             int sides = Parallelism.Bands(argb.Length, 2);
             Parallelism.For(sides, side =>
             {
@@ -83,13 +85,21 @@ internal static class WebpEncoder
                     lossy = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
                 }
 
-                if (side == sides - 1 && (sides > 1 || estimate <= 5L * lossy.Length))
+                if (side == sides - 1)
                 {
-                    trial = Vp8lEncoder.Encode(argb, width, height, alpha: false, 1);
+                    sampled = SampledLosslessSize(argb, width, height);
                 }
             });
 
-            if (estimate > 5L * lossy.Length || trial.Length > lossy.Length)
+            // A sampled size over 1.3 times the lossy one rules lossless out: on 52 screenshots every picture that coded
+            // smaller lossless sampled at most 1.22 times its lossy size, every one that didn't at least 1.37.
+            if (estimate > 5L * lossy.Length || sampled * 10 > lossy.Length * 13L)
+            {
+                return (lossy, [], false);
+            }
+
+            trial = Vp8lEncoder.Encode(argb, width, height, alpha: false, 1);
+            if (trial.Length > lossy.Length)
             {
                 return (lossy, [], false);
             }
@@ -201,6 +211,27 @@ internal static class WebpEncoder
         }
 
         return hidden;
+    }
+
+    // The lossless size of a picture estimated from a quarter of its rows: bands of 32 rows, one in every 128, each coded
+    // at effort 1 on its own, scaled to the whole height. A small picture is coded whole.
+    internal static long SampledLosslessSize(uint[] argb, int width, int height)
+    {
+        if (height < 256)
+        {
+            return Vp8lEncoder.Encode(argb, width, height, alpha: false, 1).Length;
+        }
+
+        long total = 0;
+        int rows = 0;
+        for (int top = 0; top + 32 <= height; top += 128)
+        {
+            uint[] band = argb.AsSpan(top * width, 32 * width).ToArray();
+            total += Vp8lEncoder.Encode(band, width, 32, alpha: false, 1).Length;
+            rows += 32;
+        }
+
+        return total * height / rows;
     }
 
     /// <summary>The effort from which an opaque lossy picture may be coded lossless where that is no larger.</summary>

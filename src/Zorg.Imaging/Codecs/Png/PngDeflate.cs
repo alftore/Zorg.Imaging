@@ -25,7 +25,7 @@ internal static class PngDeflate
     private static readonly PngFilter[] OptimizeFilters = [PngFilter.None, PngFilter.Sub, PngFilter.Up, PngFilter.Average, PngFilter.Paeth, PngFilter.MinimumSum, PngFilter.Entropy, PngFilter.Bigrams, PngFilter.BigramEntropy];
 
     // What Adaptive tries on a sample of each band's rows, in this order (the first wins a tie).
-    private static readonly PngFilter[] AdaptiveFilters = [PngFilter.Sub, PngFilter.Up, PngFilter.Paeth, PngFilter.MinimumSum];
+    private static readonly PngFilter[] AdaptiveFilters = [PngFilter.None, PngFilter.Sub, PngFilter.Up, PngFilter.Paeth, PngFilter.MinimumSum];
     private static readonly ZLibCompressionStrategy[] OptimizeStrategies = [ZLibCompressionStrategy.Default, ZLibCompressionStrategy.Filtered, ZLibCompressionStrategy.HuffmanOnly, ZLibCompressionStrategy.RunLengthEncoding];
 
     /// <summary>Rows in each band.</summary>
@@ -159,6 +159,13 @@ internal static class PngDeflate
             }
 
             (_, int length) = Deflate(filtered.AsSpan(0, rows * stride), 1, ZLibCompressionStrategy.Default, last: true);
+            // None must win by 5% at level 1: closer than that, level 6 often ranks it worse (64-pixel icons came out 2%
+            // larger and photos 0.6% without the margin). Flat graphics, screenshots and cut-outs: 1.5 to 2% smaller.
+            if (f == PngFilter.None)
+            {
+                length += length / 20;
+            }
+
             if (length < bestLength)
             {
                 (best, bestLength) = (f, length);
