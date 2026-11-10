@@ -15,7 +15,7 @@ namespace Zorg.Imaging.Processing;
 /// antialiased edges gain 4 to 5 dB over grouping their colours), else of 64 levels a channel (alpha, and premultiplied
 /// red, green and blue), each cell
 /// keeping its count and sums. Median cut splits the cells into as many boxes as there are colours, always the box with
-/// the largest squared error, across its widest channel at the weighted median; then a few rounds of k-means move each
+/// the largest squared error, across its widest channel at the weighted median; then 12 rounds of k-means move each
 /// colour to the mean of the cells nearest it. A colour whose pixels are all opaque stays exactly opaque. Fully
 /// transparent pixels share one transparent entry. When any pixel is translucent, colours are compared by how they
 /// differ over both black and white, so an error in alpha counts as much as a page shows it.
@@ -28,7 +28,9 @@ namespace Zorg.Imaging.Processing;
 /// </remarks>
 internal static class RgbaQuantizer
 {
-    private const int Rounds = 4;
+    // Rounds of k-means after median cut: 12 rather than 4 brought photos and screenshots 0.1 to 0.16 dB closer to the
+    // source, with files 0.3% smaller, for a quarter more time on a photo. More gained little (16: 0.01 to 0.02 dB).
+    private const int Rounds = 12;
 
     /// <summary>The palette as straight ARGB, and an index per pixel.</summary>
     public readonly record struct Result(uint[] Palette, byte[] Indices);
@@ -218,15 +220,31 @@ internal static class RgbaQuantizer
         int[] nearest = new int[cells.Length];
         bool[] opaque = new bool[means.Length];
         var finder = new NearestColour(means, overPage);
+
+        // The cells are visited in the order of their place in the search cache, so each part of it is used while at hand.
+        var cellMeans = new Vector128<float>[cells.Length];
+        int[] visit = new int[cells.Length];
+        int[] place = new int[cells.Length];
+        for (int c = 0; c < cellMeans.Length; c++)
+        {
+            cellMeans[c] = cells.Mean(c);
+            Vector128<int> level = Vector128.Min(Vector128.Max(Vector128.ConvertToInt32(cellMeans[c]) >> 3, Vector128<int>.Zero), Vector128.Create(31));
+            place[c] = (level.GetElement(0) << 15) | (level.GetElement(1) << 10) | (level.GetElement(2) << 5) | level.GetElement(3);
+            visit[c] = c;
+        }
+
+        Array.Sort(place, visit);
+
         for (int round = 0; round <= Rounds; round++)
         {
             finder.Reset();
             Parallelism.For(Parallelism.Bands((long)cells.Length * means.Length / 16, 64), band =>
             {
                 int bands = Parallelism.Bands((long)cells.Length * means.Length / 16, 64);
-                for (int c = (int)((long)cells.Length * band / bands); c < (int)((long)cells.Length * (band + 1) / bands); c++)
+                for (int v = (int)((long)cells.Length * band / bands); v < (int)((long)cells.Length * (band + 1) / bands); v++)
                 {
-                    nearest[c] = finder.Find(cells.Mean(c));
+                    int c = visit[v];
+                    nearest[c] = finder.Find(cellMeans[c]);
                 }
             });
 

@@ -47,6 +47,80 @@ public class RgbaQuantizerTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Without_dithering_every_pixel_takes_its_nearest_colour(bool translucent)
+    {
+        // Runs of one colour, flat areas and noise, with more colours than the palette holds.
+        const int Width = 97, Height = 61;
+        var random = new Random(11);
+        uint[] argb = new uint[Width * Height];
+        for (int i = 0; i < argb.Length; i++)
+        {
+            uint alpha = translucent ? (uint)random.Next(0, 256) : 255u;
+            argb[i] = i % 7 == 0 && i > 0 ? argb[i - 1]
+                : i < Width * 20 ? 0xFF3366CCu
+                : (alpha << 24) | ((uint)random.Next(256) << 16) | ((uint)random.Next(256) << 8) | (uint)random.Next(256);
+        }
+
+        RgbaQuantizer.Result result = RgbaQuantizer.Run(argb, Width, Height, 64, dither: 0);
+
+        var palette = new Vector128<float>[result.Palette.Length];
+        for (int k = 0; k < palette.Length; k++)
+        {
+            palette[k] = RgbaQuantizer.Premultiply(result.Palette[k]);
+        }
+
+        bool overPage = Array.Exists(argb, p => p < 0xFF000000u);
+        for (int i = 0; i < argb.Length; i++)
+        {
+            if (argb[i] < 0x01000000u)
+            {
+                Assert.Equal(0u, result.Palette[result.Indices[i]]);
+                continue;
+            }
+
+            Vector128<float> p = RgbaQuantizer.Premultiply(argb[i]);
+            int best = 0;
+            float least = float.MaxValue;
+            for (int k = 0; k < palette.Length; k++)
+            {
+                float d = result.Palette[k] == 0 ? float.MaxValue : Distance(palette[k], p, overPage);
+                if (d < least)
+                {
+                    (least, best) = (d, k);
+                }
+            }
+
+            Assert.Equal(best, result.Indices[i]);
+        }
+    }
+
+    [Fact]
+    public void A_large_flat_area_keeps_its_exact_colour()
+    {
+        // A flat blue over most of the picture, counted in long runs, and reddish noise far from it with more colours than
+        // the palette holds. Dithering carries no error through the flat area, away from the noise.
+        const int Width = 120, Height = 80;
+        var random = new Random(5);
+        uint[] argb = new uint[Width * Height];
+        for (int i = 0; i < argb.Length; i++)
+        {
+            argb[i] = i % Width < 90 ? 0xFF2A7FD4u : 0xFF000000u | ((uint)random.Next(128, 256) << 16) | ((uint)random.Next(64) << 8) | (uint)random.Next(64);
+        }
+
+        RgbaQuantizer.Result result = RgbaQuantizer.Run(argb, Width, Height, 32, dither: 1);
+
+        for (int i = 0; i < argb.Length; i++)
+        {
+            if (i % Width < 80)
+            {
+                Assert.Equal(0xFF2A7FD4u, result.Palette[result.Indices[i]]);
+            }
+        }
+    }
+
     // As the quantiser measures, summed in the same order: plain, or over black plus over white.
     private static float Distance(Vector128<float> a, Vector128<float> b, bool overPage)
     {
