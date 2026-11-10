@@ -6,6 +6,7 @@ Lossless WebP:
 
 - Faster on small images: on one core at the default effort, 256 x 256 textures encode 44% faster (0.3% larger, from coarser code tiles below effort 5) and 64 x 64 icons 28% faster. Photos are 11% faster; large cut-outs about as fast as before.
 - The copy search passes over runs of one colour instead of stepping through them, so it reaches further back: icons and cut-outs 0.3 to 1% smaller, the most at effort 6.
+- Tiles are grouped under shared codes by a closer estimate of each code's header: icons, textures and cut-outs 0.2 to 0.6% smaller.
 
 ## 0.1.0-preview.5
 

@@ -1361,10 +1361,12 @@ internal static class Vp8lEncoder
     /// </remarks>
     private sealed class Histogram
     {
-        // A rough cost of writing one code's lengths in the header, per symbol used.
-        // A code's header, priced a symbol at a time: 4 undercounted the code-length code on small images, which then
-        // split into too many groups (a 64 x 64 icon spent a third of its bytes on code headers).
-        private const double HeaderBitsPerSymbol = 8;
+        // A rough cost of writing a code's lengths in the header: the code-length code and its own lengths, then a few
+        // bits for each symbol used. A flat 4 bits a symbol undercounted small images, which then split into too many
+        // groups (a 64 x 64 icon spent a third of its bytes on code headers); a flat 8 overcounted codes of many
+        // symbols against codes of few: 40 + 5 made icons, textures and cut-outs 0.2 to 0.6% smaller, photos the same.
+        private const double HeaderBitsPerCode = 40;
+        private const double HeaderBitsPerSymbol = 5;
 
         private readonly int _greenLength;
 
@@ -1606,7 +1608,7 @@ internal static class Vp8lEncoder
                 }
             }
 
-            return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol);
+            return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol) + HeaderBitsPerCode;
         }
 
         private static double MergedArrayBits(ReadOnlySpan<int> a, ReadOnlySpan<int> b)
@@ -1636,7 +1638,7 @@ internal static class Vp8lEncoder
                 }
             }
 
-            return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol);
+            return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol) + HeaderBitsPerCode;
         }
 
         // c log2 c, from a table for the small counts that most symbols have.
