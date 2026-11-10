@@ -496,6 +496,41 @@ public class WebpEncoderTests
         }
     }
 
+    [Theory]
+    [InlineData(4, "VP8L")]
+    [InlineData(6, "VP8L")]
+    [InlineData(1, "VP8 ")]
+    public void A_flat_graphic_asked_for_lossy_is_coded_lossless_when_that_is_no_larger(int effort, string chunk)
+    {
+        // Text-like strokes in a few flat colours, as a screenshot or pixel art: lossless is far smaller than lossy and
+        // exact, so from effort 2 the encoder keeps it; a photo stays lossy.
+        using var graphic = new Image(320, 200, PixelFormat.Rgba32);
+        for (int y = 0; y < graphic.Height; y++)
+        {
+            Span<Rgba32> row = graphic.GetRow<Rgba32>(y);
+            for (int x = 0; x < graphic.Width; x++)
+            {
+                bool stroke = (x % 7 == 2 && y % 12 < 9) || (y % 12 == 4 && x % 7 < 5);
+                row[x] = y < 24 ? new Rgba32(30, 60, 160, 255) : stroke ? new Rgba32(20, 20, 20, 255) : new Rgba32(250, 250, 245, 255);
+            }
+        }
+
+        byte[] webp = Save(graphic, new WebpEncoderOptions { Effort = effort });
+        Assert.Equal(chunk, System.Text.Encoding.ASCII.GetString(webp, 12, 4));
+        if (chunk == "VP8L")
+        {
+            using Image decoded = Image.Decode(webp, AsRgba);
+            Assert.True(graphic.GetPixelBytes().SequenceEqual(decoded.GetPixelBytes()));
+            Assert.True(webp.Length < Save(graphic, new WebpEncoderOptions { Effort = 1 }).Length);
+            byte[] animation = AnimationTests.Write(stream => AnimationWriter.CreateWebp(stream, 0, new WebpEncoderOptions { Effort = effort }), [(graphic, 100)]);
+            using Image frame = Image.Decode(animation, AsRgba);
+            Assert.True(graphic.GetPixelBytes().SequenceEqual(frame.GetPixelBytes()));
+        }
+
+        using Image photo = JpegEncoderTests.Photo(320, 200);
+        Assert.Equal("VP8 ", System.Text.Encoding.ASCII.GetString(Save(photo, new WebpEncoderOptions { Effort = effort }), 12, 4));
+    }
+
     [Fact]
     public void Coloured_lines_keep_their_colour_from_effort_two()
     {
@@ -624,10 +659,19 @@ public class WebpEncoderTests
         using Image photo = JpegEncoderTests.Photo(131, 77, format, seed: 3);
         byte[] webp = Save(photo, WebpEncoderOptions.Default);
         bool alpha = format is PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Rgba64;
-        Assert.Equal(alpha ? "VP8X"u8.ToArray() : "VP8 "u8.ToArray(), webp[12..16]);
+        string chunk = System.Text.Encoding.ASCII.GetString(webp, 12, 4);
         using Image decoded = Image.Decode(webp, new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
         byte[] expected = Rgba(photo);
         byte[] actual = decoded.GetPixelBytes().ToArray();
+        if (chunk == "VP8L")
+        {
+            // The grey pictures repeat enough pixels that lossless is tried, and is no larger: then they are exact.
+            Assert.False(alpha);
+            Assert.Equal(expected, actual);
+            return;
+        }
+
+        Assert.Equal(alpha ? "VP8X" : "VP8 ", chunk);
         double psnr = JpegEncoderTests.Psnr(Channels(actual, 3), Channels(expected, 3));
         Assert.True(psnr >= minimumPsnr, $"PSNR {psnr:0.0} dB");
         Assert.Equal(Channels(expected, 1, 3), Channels(actual, 1, 3));

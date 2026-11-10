@@ -398,9 +398,9 @@ public sealed class AnimationWriter
         }
 
         _alpha |= alpha;
-        (byte[] data, byte[] alphaChunk) = WebpEncoder.EncodePicture(region, width, height, alpha, _webp!);
+        (byte[] data, byte[] alphaChunk, bool lossless) = WebpEncoder.EncodePicture(region, width, height, alpha, _webp!);
         int duration = (int)Math.Clamp(Math.Round(_pendingDuration.TotalMilliseconds, MidpointRounding.AwayFromZero), 0, 0xFFFFFF);
-        byte[] payload = WebpEncoder.AnimationFrame(left, top, width, height, duration, dispose, _webp!.CodesLossless, data, alphaChunk);
+        byte[] payload = WebpEncoder.AnimationFrame(left, top, width, height, duration, dispose, lossless, data, alphaChunk);
         Span<byte> header = stackalloc byte[8];
         "ANMF"u8.CopyTo(header);
         BinaryPrimitives.WriteInt32LittleEndian(header[4..], payload.Length);

@@ -26,7 +26,9 @@ public sealed class WebpEncoderOptions
     /// <summary>
     /// Whether to keep every visible pixel exactly (VP8L), rather than the smaller lossy coding (VP8) that suits photos.
     /// Lossless suits logos, screenshots, line art and anything that will be edited again. The colour of fully
-    /// transparent pixels is kept too only with <see cref="Exact"/>. Defaults to <see langword="false"/>.
+    /// transparent pixels is kept too only with <see cref="Exact"/>. Defaults to <see langword="false"/>; even then, from
+    /// effort 2, an opaque picture of mostly flat colour (screenshots, pixel art) is coded lossless when that is no larger
+    /// than lossy, so it is exact as well as smaller.
     /// </summary>
     /// <example><code>var exact = new WebpEncoderOptions { Lossless = true };</code></example>
     public bool Lossless { get; init; }

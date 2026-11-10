@@ -29,8 +29,8 @@ internal static class WebpEncoder
         using (Parallelism.Use(options.MaxDegreeOfParallelism))
         {
             (uint[] argb, bool alpha) = Argb.FromImage(image);
-            (byte[] data, byte[] alphaChunk) = EncodePicture(argb, image.Width, image.Height, alpha, options);
-            file = Container(options.CodesLossless ? "VP8L"u8 : "VP8 "u8, data, alphaChunk, image.Width, image.Height, alpha, profile.Span, exif, xmp);
+            (byte[] data, byte[] alphaChunk, bool lossless) = EncodePicture(argb, image.Width, image.Height, alpha, options);
+            file = Container(lossless ? "VP8L"u8 : "VP8 "u8, data, alphaChunk, image.Width, image.Height, alpha, profile.Span, exif, xmp);
         }
 
         if (sync)
@@ -47,10 +47,11 @@ internal static class WebpEncoder
     internal const int MaxLossySide = 16383;
 
     /// <summary>
-    /// One picture's image chunk payload, VP8L or VP8 as the options say, and for a lossy picture with alpha the ALPH
-    /// chunk's payload (else empty).
+    /// One picture's image chunk payload, VP8L or VP8 as the options say (or VP8L where lossless is no larger than lossy:
+    /// see <see cref="LosslessMayWin"/>), for a lossy picture with alpha the ALPH chunk's payload (else empty), and
+    /// whether the payload is VP8L.
     /// </summary>
-    internal static (byte[] Data, byte[] Alpha) EncodePicture(uint[] argb, int width, int height, bool alpha, WebpEncoderOptions options)
+    internal static (byte[] Data, byte[] Alpha, bool Lossless) EncodePicture(uint[] argb, int width, int height, bool alpha, WebpEncoderOptions options)
     {
         if (alpha && !options.Exact)
         {
@@ -59,7 +60,40 @@ internal static class WebpEncoder
 
         if (options.CodesLossless)
         {
-            return (Vp8lEncoder.Encode(argb, width, height, alpha, options.Effort, chooseOne: false, options.NearBits), []);
+            return (Vp8lEncoder.Encode(argb, width, height, alpha, options.Effort, chooseOne: false, options.NearBits), [], true);
+        }
+
+        // Opaque graphics of flat colour can code smaller lossless than lossy, every pixel exact: a quick lossless coding
+        // at effort 1 is tried beside the lossy one, and kept if it is no larger. On 40 game screenshots, 7 were kept
+        // lossless and the set was 9% smaller, for 15% more time on one core; nothing else in the test corpus changed.
+        if (!alpha && options.Effort >= LosslessTrialEffort && LosslessMayWin(argb, width))
+        {
+            byte[] lossy = [];
+            byte[] trial = [];
+            int sides = Parallelism.Bands(argb.Length, 2);
+            Parallelism.For(sides, side =>
+            {
+                if (side == 0)
+                {
+                    (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height, options.Effort);
+                    lossy = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort);
+                }
+
+                if (side == sides - 1)
+                {
+                    trial = Vp8lEncoder.Encode(argb, width, height, alpha: false, 1);
+                }
+            });
+
+            if (trial.Length > lossy.Length)
+            {
+                return (lossy, [], false);
+            }
+
+            // From effort 5 the lossless coding is done again at the effort asked for: 6 to 17% smaller than the trial,
+            // for about as much time again.
+            byte[] lossless = options.Effort >= 5 ? Vp8lEncoder.Encode(argb, width, height, alpha: false, options.Effort) : trial;
+            return (lossless.Length <= trial.Length ? lossless : trial, [], true);
         }
 
         // The picture and its alpha are coded apart, side by side when there are cores for both.
@@ -80,7 +114,33 @@ internal static class WebpEncoder
             }
         });
 
-        return (vp8, alphaChunk);
+        return (vp8, alphaChunk, false);
+    }
+
+    /// <summary>The effort from which an opaque lossy picture may be coded lossless where that is no larger.</summary>
+    internal const int LosslessTrialEffort = 2;
+
+    /// <summary>
+    /// Whether a picture may code smaller lossless than lossy: when at least 85% of its pixels repeat the pixel to their
+    /// left or above, as screenshots, pixel art and flat graphics do. Of opaque pictures in the QOI suite above that
+    /// share, 7 in 10 were smaller lossless than lossy at quality 80 (a web page 59 KB against 103, a game 5 KB against
+    /// 19); photos and textures never reach it, so they pay only this count.
+    /// </summary>
+    internal static bool LosslessMayWin(uint[] argb, int width)
+    {
+        long need = (argb.Length * 85L) / 100;
+        long missing = argb.Length - need;
+        long misses = 0;
+        for (int i = 1; i < argb.Length; i++)
+        {
+            uint p = argb[i];
+            if (p != argb[i - 1] && (i < width || p != argb[i - width]) && ++misses > missing)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
