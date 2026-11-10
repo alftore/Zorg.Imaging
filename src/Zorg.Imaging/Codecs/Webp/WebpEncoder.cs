@@ -15,12 +15,12 @@ internal static class WebpEncoder
 {
     public static async ValueTask EncodeAsync(Image image, Stream stream, WebpEncoderOptions options, bool sync, CancellationToken cancellationToken)
     {
-        int most = options.Lossless ? Vp8lEncoder.MaxSide : MaxLossySide;
+        int most = options.CodesLossless ? Vp8lEncoder.MaxSide : MaxLossySide;
         if (image.Width > most || image.Height > most)
         {
             throw new NotSupportedException(string.Create(
                 CultureInfo.InvariantCulture,
-                $"{(options.Lossless ? "Lossless" : "Lossy")} WebP can't hold a {image.Width} x {image.Height} image: each side must be at most {most} pixels."));
+                $"{(options.CodesLossless ? "Lossless" : "Lossy")} WebP can't hold a {image.Width} x {image.Height} image: each side must be at most {most} pixels."));
         }
 
         ReadOnlyMemory<byte> profile = IccProfileWriter.For(image.ColorSpace, "WebP");
@@ -30,7 +30,7 @@ internal static class WebpEncoder
         {
             (uint[] argb, bool alpha) = Argb.FromImage(image);
             (byte[] data, byte[] alphaChunk) = EncodePicture(argb, image.Width, image.Height, alpha, options);
-            file = Container(options.Lossless ? "VP8L"u8 : "VP8 "u8, data, alphaChunk, image.Width, image.Height, alpha, profile.Span, exif, xmp);
+            file = Container(options.CodesLossless ? "VP8L"u8 : "VP8 "u8, data, alphaChunk, image.Width, image.Height, alpha, profile.Span, exif, xmp);
         }
 
         if (sync)
@@ -54,12 +54,12 @@ internal static class WebpEncoder
     {
         if (alpha && !options.Exact)
         {
-            HideTransparent(argb, width, height, options.Lossless);
+            HideTransparent(argb, width, height, options.CodesLossless);
         }
 
-        if (options.Lossless)
+        if (options.CodesLossless)
         {
-            return (Vp8lEncoder.Encode(argb, width, height, alpha, options.Effort), []);
+            return (Vp8lEncoder.Encode(argb, width, height, alpha, options.Effort, chooseOne: false, options.NearBits), []);
         }
 
         // The picture and its alpha are coded apart, side by side when there are cores for both.
@@ -389,7 +389,7 @@ internal static class WebpEncoder
             alpha[i] = 0xFF000000u | ((argb[i] >> 24) << 8);
         }
 
-        byte[] stream = Vp8lEncoder.Encode(alpha, width, height, alpha: false, effort, chooseOne: true);
+        byte[] stream = Vp8lEncoder.Encode(alpha, width, height, alpha: false, effort, chooseOne: true, nearBits: 0);
         byte[] chunk = new byte[stream.Length - 4];
         chunk[0] = 1;
         stream.AsSpan(5).CopyTo(chunk.AsSpan(1));

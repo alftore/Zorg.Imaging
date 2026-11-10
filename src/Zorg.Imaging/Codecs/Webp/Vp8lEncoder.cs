@@ -43,14 +43,15 @@ internal static class Vp8lEncoder
     /// An image of 17 to 256 colours is also coded with the predictor, above effort 0, and the smaller kept: a colour
     /// table suits graphics, but smooth grey or few-colour gradients predict better.
     /// </remarks>
-    public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort) => Encode(argb, width, height, alpha, effort, chooseOne: false);
+    public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort) => Encode(argb, width, height, alpha, effort, chooseOne: false, nearBits: 0);
 
     /// <summary>
     /// As the other overload; with <paramref name="chooseOne"/>, an image of 17 to 256 colours is coded only the way
     /// <see cref="IndexedLooksSmaller"/> expects to be smaller, not both ways: for a lossy picture's alpha, where the
     /// second coding took as long as the picture.
+    /// <paramref name="nearBits"/> above 0 codes near-lossless: see <see cref="NearLossless"/>.
     /// </summary>
-    public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort, bool chooseOne)
+    public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort, bool chooseOne, int nearBits)
     {
         // The header is 40 bits, so the rest starts on a byte and can be coded separately.
         byte[] header = new byte[5];
@@ -66,7 +67,7 @@ internal static class Vp8lEncoder
         uint[]? palette = Palette(argb);
         if (palette is null || effort == 0 || palette.Length <= 16)
         {
-            ReadOnlySpan<byte> only = palette is null ? Predicted(argb, width, height, effort) : Indexed(argb, width, height, palette, effort);
+            ReadOnlySpan<byte> only = palette is null ? Predicted(argb, width, height, effort, nearBits) : Indexed(argb, width, height, palette, effort);
             return [.. header, .. only];
         }
 
@@ -74,7 +75,7 @@ internal static class Vp8lEncoder
         {
             ReadOnlySpan<byte> one = IndexedLooksSmaller(argb, width, height, palette.Length, AnalysisTileBits(effort))
                 ? Indexed(argb, width, height, palette, effort)
-                : Predicted(argb, width, height, effort);
+                : Predicted(argb, width, height, effort, nearBits);
             return [.. header, .. one];
         }
 
@@ -85,7 +86,7 @@ internal static class Vp8lEncoder
         {
             if (band == 0)
             {
-                bodies[0] = Predicted(argb, width, height, effort).ToArray();
+                bodies[0] = Predicted(argb, width, height, effort, nearBits).ToArray();
             }
 
             if (band == bands - 1)
@@ -122,7 +123,7 @@ internal static class Vp8lEncoder
     // 32 at effort 0 and 1, 16 above, which saves about 0.3% on photos), then from effort 1 cross-colour. An image with
     // no red or blue, as a lossy picture's alpha is coded, gains nothing from subtract-green or cross-colour, and the
     // search for cross-colour's multipliers costs about a fifth of the time, so neither is tried.
-    private static ReadOnlySpan<byte> Predicted(uint[] argb, int width, int height, int effort)
+    private static ReadOnlySpan<byte> Predicted(uint[] argb, int width, int height, int effort, int nearBits)
     {
         var bits = new Vp8lBitWriter((argb.Length / 2) + 1024);
         uint[] pixels = (uint[])argb.Clone();
@@ -131,6 +132,7 @@ internal static class Vp8lEncoder
         // only) 2% larger.
         int tileBits = effort <= 1 ? 5 : greenOnly ? 4 : 3;
         (bool predict, bool subtractGreen) = ChooseTransforms(pixels, width, height, AnalysisTileBits(effort));
+
         if (!greenOnly && subtractGreen)
         {
             bits.Write(1, 1);
@@ -143,7 +145,7 @@ internal static class Vp8lEncoder
             bits.Write(1, 1);
             bits.Write((uint)Vp8lDecoder.TransformType.Predictor, 2);
             bits.Write((uint)(tileBits - 2), 3);
-            (pixels, uint[] modes) = Predict(pixels, width, height, tileBits, effort);
+            (pixels, uint[] modes) = Predict(pixels, width, height, tileBits, effort, greenOnly ? 0 : nearBits, !greenOnly && subtractGreen);
             EncodeImage(bits, modes, DivideUp(width, tileBits), effort, main: false);
         }
 
@@ -386,8 +388,9 @@ internal static class Vp8lEncoder
     // Section 4.1. The residual of each pixel from its prediction, with the mode for each tile chosen by the bits its
     // residuals would take if coded with the statistics of all residuals chosen so far. The statistics are refreshed
     // once per row of tiles, so the tiles of a row are independent and run in parallel, with the same result.
-    internal static (uint[] Residuals, uint[] Modes) Predict(uint[] p, int width, int height, int tileBits, int effort)
+    internal static (uint[] Residuals, uint[] Modes) Predict(uint[] p, int width, int height, int tileBits, int effort, int nearBits = 0, bool greenSubtracted = false)
     {
+        NearLossless? near = nearBits > 0 ? new NearLossless(p, width, nearBits, greenSubtracted) : null;
         int tilesWide = DivideUp(width, tileBits);
         int tilesHigh = DivideUp(height, tileBits);
         int tile = 1 << tileBits;
@@ -441,6 +444,11 @@ internal static class Vp8lEncoder
                     int right = Math.Min((tx + 1) * tile, width);
                     int best = ChooseMode(p, width, top, bottom, left, right, firstMode, lastMode, cost);
                     modes[(row * tilesWide) + tx] = 0xFF000000u | ((uint)best << 8);
+                    if (near is not null)
+                    {
+                        continue;
+                    }
+
                     for (int y = top; y < bottom; y++)
                     {
                         int start = (y * width) + left;
@@ -457,6 +465,27 @@ internal static class Vp8lEncoder
                 }
             });
 
+            if (near is not null)
+            {
+                // Row by row, each pixel from the pixels as the decoder will have them.
+                for (int y = top; y < bottom; y++)
+                {
+                    for (int x = 1; x < width; x++)
+                    {
+                        int i = (y * width) + x;
+                        int mode = (int)(modes[(ty * tilesWide) + (x >> tileBits)] >> 8) & 0xFF;
+                        uint prediction = Vp8lDecoder.Transform.Predict(mode, p[i - 1], p[i - width], p[i - width + 1], p[i - width - 1]);
+                        (residuals[i], p[i]) = near.Quantize(i, p[i], prediction);
+                        uint residual = residuals[i];
+                        int[] local = counts[0];
+                        local[(int)(residual >> 24)]++;
+                        local[256 + (int)((residual >> 16) & 0xFF)]++;
+                        local[512 + (int)((residual >> 8) & 0xFF)]++;
+                        local[768 + (int)(residual & 0xFF)]++;
+                    }
+                }
+            }
+
             foreach (int[] local in counts)
             {
                 for (int v = 0; v < local.Length; v++)
@@ -469,6 +498,119 @@ internal static class Vp8lEncoder
         }
 
         return (residuals, modes);
+    }
+
+    /// <summary>
+    /// Near-lossless coding, as the predictor makes its residuals: where the picture is busy, each colour residual is
+    /// rounded to a multiple of a step (a tie toward zero), and later pixels are predicted from the pixels as the decoder
+    /// will have them, so no error builds up. A pixel's step is the largest power of two up to the most any of its colour
+    /// channels differs from a 4-neighbour's, at most 2 to the power of the bits: smooth areas and gradients stay exact
+    /// and edges, text and noise take the full step, so a decoded channel is at most half the step off. Alpha, fully
+    /// transparent pixels and any value that would leave 0 to 255 stay exact. With green subtracted, red and blue are
+    /// rounded as they will be decoded, green added back, so their error is no larger and never wraps. Our own design
+    /// after cwebp's <c>-near_lossless</c>, which also quantises residuals.
+    /// </summary>
+    internal sealed class NearLossless
+    {
+        private readonly byte[] _steps;
+        private readonly bool _greenSubtracted;
+
+        public NearLossless(uint[] p, int width, int bits, bool greenSubtracted)
+        {
+            _greenSubtracted = greenSubtracted;
+            _steps = new byte[p.Length];
+            int height = p.Length / width;
+            int bands = Processing.Parallelism.Bands(p.Length, height);
+            Processing.Parallelism.For(bands, band =>
+            {
+                for (int y = height * band / bands; y < height * (band + 1) / bands; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        int i = (y * width) + x;
+                        uint here = p[i];
+                        if (here < 0x01000000u)
+                        {
+                            _steps[i] = 1;
+                            continue;
+                        }
+
+                        int most = Math.Max(
+                            Math.Max(Difference(here, x > 0 ? p[i - 1] : here), Difference(here, x < width - 1 ? p[i + 1] : here)),
+                            Math.Max(Difference(here, y > 0 ? p[i - width] : here), Difference(here, y < height - 1 ? p[i + width] : here)));
+                        int step = 1 << bits;
+                        while (step > most)
+                        {
+                            step >>= 1;
+                        }
+
+                        _steps[i] = (byte)Math.Max(step, 1);
+                    }
+                }
+            });
+        }
+
+        /// <summary>The residual to code for a pixel, and the pixel the decoder will then have.</summary>
+        public (uint Residual, uint Pixel) Quantize(int i, uint pixel, uint prediction)
+        {
+            int step = _steps[i];
+            if (step <= 1)
+            {
+                return (Subtract(pixel, prediction), pixel);
+            }
+
+            uint residual = Subtract(pixel, prediction) & 0xFF000000u;
+            uint shown = pixel & 0xFF000000u;
+            int green = (int)((pixel >> 8) & 0xFF);
+            (int q, int value) = Round(green, (int)((prediction >> 8) & 0xFF), 0, 0, step);
+            residual |= (uint)(q & 0xFF) << 8;
+            shown |= (uint)value << 8;
+            int added = _greenSubtracted ? value : 0;
+            int addedBefore = _greenSubtracted ? green : 0;
+            foreach (int shift in (ReadOnlySpan<int>)[16, 0])
+            {
+                (q, value) = Round((int)((pixel >> shift) & 0xFF), (int)((prediction >> shift) & 0xFF), added, addedBefore, step);
+                residual |= (uint)(q & 0xFF) << shift;
+                shown |= (uint)value << shift;
+            }
+
+            return (residual, shown);
+        }
+
+        // The residual for a channel and the coded value it leaves: wanted and predicted as coded, each decoding to
+        // itself plus green (mod 256) where green is subtracted.
+        private static (int Residual, int Value) Round(int wanted, int predicted, int added, int addedBefore, int step)
+        {
+            int target = (wanted + addedBefore) & 0xFF;
+            int from = (predicted + added) & 0xFF;
+            int d = target - from;
+
+            // To the nearest multiple, a tie toward zero: a residual of 1 with a step of 2 is better left 0 than made 2
+            // (made 2, near-lossless files at a step of 2 were larger than lossless ones).
+            int q = Math.Sign(d) * ((Math.Abs(d) + (step / 2) - 1) / step) * step;
+            if (from + q is < 0 or > 255)
+            {
+                q = d;
+            }
+
+            return (q, (predicted + q) & 0xFF);
+        }
+
+        // The most a colour channel differs between two pixels, as decoded.
+        private int Difference(uint a, uint b)
+        {
+            int ga = (int)((a >> 8) & 0xFF);
+            int gb = (int)((b >> 8) & 0xFF);
+            int most = Math.Abs(ga - gb);
+            int addA = _greenSubtracted ? ga : 0;
+            int addB = _greenSubtracted ? gb : 0;
+            foreach (int shift in (ReadOnlySpan<int>)[16, 0])
+            {
+                most = Math.Max(most, Math.Abs((((int)(a >> shift) + addA) & 0xFF) - (((int)(b >> shift) + addB) & 0xFF)));
+            }
+
+            return most;
+        }
     }
 
     // The mode whose residuals over the tile cost fewest bits; the lowest mode wins ties.

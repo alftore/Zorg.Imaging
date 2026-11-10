@@ -336,6 +336,8 @@ Zorg.Imaging.WebpEncoderOptions.Exact.get -> bool
 Zorg.Imaging.WebpEncoderOptions.Exact.init -> void
 Zorg.Imaging.WebpEncoderOptions.Lossless.get -> bool
 Zorg.Imaging.WebpEncoderOptions.Lossless.init -> void
+Zorg.Imaging.WebpEncoderOptions.NearLossless.get -> bool
+Zorg.Imaging.WebpEncoderOptions.NearLossless.init -> void
 Zorg.Imaging.WebpEncoderOptions.MaxDegreeOfParallelism.get -> int
 Zorg.Imaging.WebpEncoderOptions.MaxDegreeOfParallelism.init -> void
 Zorg.Imaging.WebpEncoderOptions.Quality.get -> int

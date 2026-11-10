@@ -181,7 +181,7 @@ public sealed class AnimationWriter
 
         if (Width == 0)
         {
-            int most = _gif is not null ? GifEncoder.MaxSide : _webp!.Lossless ? Vp8lEncoder.MaxSide : WebpEncoder.MaxLossySide;
+            int most = _gif is not null ? GifEncoder.MaxSide : _webp!.CodesLossless ? Vp8lEncoder.MaxSide : WebpEncoder.MaxLossySide;
             if (image.Width > most || image.Height > most)
             {
                 throw new NotSupportedException(string.Create(
@@ -400,7 +400,7 @@ public sealed class AnimationWriter
         _alpha |= alpha;
         (byte[] data, byte[] alphaChunk) = WebpEncoder.EncodePicture(region, width, height, alpha, _webp!);
         int duration = (int)Math.Clamp(Math.Round(_pendingDuration.TotalMilliseconds, MidpointRounding.AwayFromZero), 0, 0xFFFFFF);
-        byte[] payload = WebpEncoder.AnimationFrame(left, top, width, height, duration, dispose, _webp!.Lossless, data, alphaChunk);
+        byte[] payload = WebpEncoder.AnimationFrame(left, top, width, height, duration, dispose, _webp!.CodesLossless, data, alphaChunk);
         Span<byte> header = stackalloc byte[8];
         "ANMF"u8.CopyTo(header);
         BinaryPrimitives.WriteInt32LittleEndian(header[4..], payload.Length);

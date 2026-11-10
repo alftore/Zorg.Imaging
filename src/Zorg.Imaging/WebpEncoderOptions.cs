@@ -32,6 +32,25 @@ public sealed class WebpEncoderOptions
     public bool Lossless { get; init; }
 
     /// <summary>
+    /// Whether to code losslessly (VP8L) but let colours move a little where the picture is busy, for smaller files: at
+    /// edges, text and noise a colour channel may be off by up to half a step, while flat areas, gradients and alpha stay
+    /// exact. <see cref="Quality"/> sets the step, as libvips and sharp do: 100 is exactly lossless, 80 to 99 a step of 2
+    /// (each channel at most 1 off), 60 to 79 a step of 4, 40 to 59 of 8, 20 to 39 of 16 and below 20 of 32. It suits
+    /// screenshots, graphics and icons that lossy coding would ring or blur. On test images, against lossless: at the
+    /// default quality screenshots were 17 to 26% smaller and icons and cut-outs 16%, at 56 to 76 dB PSNR; at 60, 22 to
+    /// 34% smaller. Lossy coding at the same size was 5 to 40 dB further from the source. Overrides
+    /// <see cref="Lossless"/>. Defaults to <see langword="false"/>.
+    /// </summary>
+    /// <example><code>var smaller = new WebpEncoderOptions { NearLossless = true, Quality = 60 };</code></example>
+    public bool NearLossless { get; init; }
+
+    /// <summary>Whether the picture is coded as VP8L: lossless or near-lossless.</summary>
+    internal bool CodesLossless => Lossless || NearLossless;
+
+    /// <summary>The near-lossless step as a power of two (0: exact), from <see cref="Quality"/> as cwebp maps its level.</summary>
+    internal int NearBits => NearLossless ? Math.Clamp(5 - (Quality / 20), 0, 5) : 0;
+
+    /// <summary>
     /// Whether to keep the colour of fully transparent pixels. By default (<see langword="false"/>) it is replaced with
     /// whatever codes smallest, as cwebp does without <c>-exact</c>: no visible pixel changes, and a picture with
     /// transparent areas can be much smaller (a cut-out 14% transparent: 12% smaller lossless, 9% lossy). Set it when
@@ -42,7 +61,8 @@ public sealed class WebpEncoderOptions
 
     /// <summary>
     /// The lossy quality, 1 to 100: higher keeps more detail in larger files. 75 to 85 suits photos on the web. The scale is
-    /// fitted to cwebp's, so a quality gives about the file size cwebp gives for it. Lossless files ignore it.
+    /// fitted to cwebp's, so a quality gives about the file size cwebp gives for it. Lossless files ignore it;
+    /// near-lossless ones take their step from it (see <see cref="NearLossless"/>).
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value isn't 1 to 100.</exception>
     /// <example><code>var small = new WebpEncoderOptions { Quality = 70 };</code></example>

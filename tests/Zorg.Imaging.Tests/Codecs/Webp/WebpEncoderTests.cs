@@ -372,6 +372,82 @@ public class WebpEncoderTests
         return 10 * Math.Log10(255.0 * 255.0 * a.Length * 3 / 4 / Math.Max(error, 1e-9));
     }
 
+    [Theory]
+    [InlineData(100, 0)]
+    [InlineData(80, 1)]
+    [InlineData(60, 2)]
+    [InlineData(40, 4)]
+    [InlineData(1, 16)]
+    public void Near_lossless_moves_colours_by_at_most_half_a_step_and_never_alpha(int quality, int most)
+    {
+        using Image graphic = Busy(256, 160, seed: 3);
+        byte[] webp = Save(graphic, new WebpEncoderOptions { NearLossless = true, Quality = quality });
+        Assert.Equal("VP8L", System.Text.Encoding.ASCII.GetString(webp, 12, 4));
+        using Image decoded = Image.Decode(webp, AsRgba);
+        ReadOnlySpan<byte> a = graphic.GetPixelBytes();
+        ReadOnlySpan<byte> b = decoded.GetPixelBytes();
+        int[] worst = new int[4];
+        for (int i = 0; i < a.Length; i++)
+        {
+            // Fully transparent pixels lose their hidden colour, as without Exact.
+            if (a[(i & ~3) + 3] != 0)
+            {
+                worst[i % 4] = Math.Max(worst[i % 4], Math.Abs(a[i] - b[i]));
+            }
+        }
+
+        int colour = Math.Max(worst[0], Math.Max(worst[1], worst[2]));
+        Assert.Equal(0, worst[3]);
+        Assert.InRange(colour, Math.Min(most, 1), most);
+    }
+
+    [Fact]
+    public void Near_lossless_is_smaller_than_lossless_and_keeps_gradients_exact()
+    {
+        using Image graphic = Busy(256, 160, seed: 4);
+        byte[] lossless = Save(graphic, new WebpEncoderOptions { Lossless = true });
+        byte[] near = Save(graphic, new WebpEncoderOptions { NearLossless = true, Quality = 60 });
+        Assert.True(near.Length < lossless.Length * 0.9, $"{near.Length} bytes against {lossless.Length} lossless");
+
+        // The gradient (rows 112 to 159, a step of 1 between neighbours) has nothing busy to round.
+        using Image decoded = Image.Decode(near, AsRgba);
+        for (int y = 114; y < 158; y++)
+        {
+            Assert.True(graphic.GetRowBytes(y)[8..^8].SequenceEqual(decoded.GetRowBytes(y)[8..^8]), $"row {y}");
+        }
+    }
+
+    [Fact]
+    public void Near_lossless_is_the_same_on_one_core_and_on_many_and_in_animations()
+    {
+        using Image graphic = Busy(1024, 640, seed: 5);
+        byte[] one = Save(graphic, new WebpEncoderOptions { NearLossless = true, MaxDegreeOfParallelism = 1 });
+        byte[] many = Save(graphic, new WebpEncoderOptions { NearLossless = true, MaxDegreeOfParallelism = 8 });
+        Assert.Equal(one, many);
+
+        using Image small = Busy(64, 48, seed: 6);
+        byte[] animation = AnimationTests.Write(stream => AnimationWriter.CreateWebp(stream, 0, new WebpEncoderOptions { NearLossless = true }), [(small, 100)]);
+        Assert.Contains("VP8L", System.Text.Encoding.ASCII.GetString(animation), StringComparison.Ordinal);
+        Assert.DoesNotContain("VP8 ", System.Text.Encoding.ASCII.GetString(animation), StringComparison.Ordinal);
+    }
+
+    // The photo-like test picture with soft alpha (gradients, a hard edge, texture and noise), its bottom three tenths
+    // replaced by an opaque gradient that rises by one level a pixel.
+    private static Image Busy(int width, int height, int seed)
+    {
+        Image image = JpegEncoderTests.Photo(width, height, PixelFormat.Rgba32, seed);
+        for (int y = height * 7 / 10; y < height; y++)
+        {
+            Span<Rgba32> row = image.GetRow<Rgba32>(y);
+            for (int x = 0; x < width; x++)
+            {
+                row[x] = new Rgba32((byte)(x & 0xFF), (byte)((x / 2) + 20), 90, 255);
+            }
+        }
+
+        return image;
+    }
+
     [Fact]
     public void Coloured_lines_keep_their_colour_from_effort_two()
     {
