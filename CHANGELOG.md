@@ -4,7 +4,8 @@
 
 GIF and lossy PNG:
 
-- The colour search cache is made a block at a time, as colours need it, instead of 8 MB up front: lossy PNG at 256 colours encodes 20 to 25% faster on icons and photos, with the same output.
+- Colours are 0.1 to 0.16 dB closer to the source on photos and screenshots, with SSIM a little higher and files up to 0.6% smaller, from 12 rounds of k-means instead of 4.
+- Faster despite that: on one core, lossy PNG at 256 colours and GIF encode 20 to 25% faster on web screenshots and cut-outs, 30 to 43% faster on icons, and up to 10% slower on photos. The colour search cache is made as needed instead of 8 MB up front, colours are compared eight at a time, and runs of one colour are counted and mapped at once.
 
 ## 0.1.0-preview.5
 
