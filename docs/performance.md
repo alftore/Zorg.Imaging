@@ -11,15 +11,15 @@ tools and the change between runs made back to back.
 ## 2026-11-10: decoding on one core
 
 The 12-megapixel photo, `photo-lossy.webp` (cwebp `-q 80`) and `photo.jpg`, decoded to RGB by a small harness, best of
-20 runs after 15 warm-up runs, before and after run back to back while other sessions loaded the machine. The native
+20 runs after 15 warm-up runs, before and after run back to back three times with the machine otherwise idle. The native
 tools were timed in the gate image (busybox time, 10 ms resolution). Decoded pixels are unchanged: 1879 decodes (cwebp
 and cjpeg variants of 14 CID22 photos and odd-sized crops, the WebP corpus, the test fixtures, JPEG at 1/2, 1/4 and
 1/8) hash the same before and after.
 
 | | Before, one core | After, one core | Before, 16 cores | After, 16 cores | Native, one core |
 |---|---:|---:|---:|---:|---:|
-| WebP lossy decode | 283 ms | 220 ms | 159 ms | 145 ms | dwebp 160 ms (`-mt` 110 ms) |
-| JPEG decode, baseline | 70 ms | 70 ms | 35 ms | 35 ms | djpeg 30 to 40 ms |
+| WebP lossy decode | 279 ms | 211 ms | 156 ms | 134 ms | dwebp 160 ms (`-mt` 110 ms) |
+| JPEG decode, baseline | 71 ms | 70 ms | 34 ms | 34 ms | djpeg 30 to 40 ms |
 
 - **WebP lossy:** the boolean decoder's state stays in locals for a whole block, with the token probabilities looked
   up by position (parsing 125 to 120 ms; a branchless bit update was slower, 129 ms); the 4 x 4 inverse transform in
@@ -29,8 +29,8 @@ and cjpeg variants of 14 CID22 photos and odd-sized crops, the WebP corpus, the 
   multiply, compare and shift, at about 4.5 ns.
 - **JPEG baseline:** by profile, the float inverse DCT is 35% of the one-core time, Huffman decoding 23%, chroma
   upsampling and colour conversion 13%. Coefficients are now cleared block by block after the transform, while in
-  cache, and luma rows are read in place rather than copied (copying and clearing 5.5% to 2.7% of the profile; wall
-  time within the machine's noise). A wider Huffman lookup (10 or 11 bits) made no difference.
+  cache, and luma rows are read in place rather than copied (copying and clearing 5.5% to 2.7% of the profile; the
+  best run unchanged, the median one-core run 102 to 70 ms). A wider Huffman lookup (10 or 11 bits) made no difference.
 - **Not landed: a 16-bit integer inverse DCT** (pmaddwd, both passes as matrix products, empty rows skipped):
   70 to 64.5 ms on one core and 35 to 30.5 ms on 16, but 1.9% of output bytes change by 1 to 3 levels. For scale,
   today's float transform differs from djpeg in 9.35% of bytes over 140 cjpeg files, the integer prototype in 9.98%.
