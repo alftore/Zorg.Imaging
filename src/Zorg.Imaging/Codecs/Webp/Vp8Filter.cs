@@ -12,9 +12,9 @@ namespace Zorg.Imaging.Codecs.Webp;
 /// result is identical.
 /// </summary>
 /// <remarks>
-/// For a horizontal edge the eight pixels across it are eight rows, loaded directly; for a vertical edge the 8 x 8
-/// block around it is transposed into the same shape first, and back afterwards. Every pixel along an edge is filtered
-/// independently, which is what makes the lanes possible; edges stay in the reference order.
+/// For a horizontal edge the eight pixels across it are eight rows, loaded straight into registers; for a vertical edge
+/// the 8 x 8 block around it is transposed into the same shape first, and back afterwards. Every pixel along an edge is
+/// filtered independently, which is what makes the lanes possible; edges stay in the reference order.
 /// </remarks>
 internal static class Vp8Filter
 {
@@ -37,55 +37,159 @@ internal static class Vp8Filter
     /// <param name="hevThreshold">The high edge variance threshold.</param>
     public static void Edge(byte[] data, int at, int across, int along, int count, Kind kind, int edgeLimit, int interior, int hevThreshold)
     {
+        // Every byte the loads and stores below can touch (eight across each point, from p3), checked once here.
+        int lowest = at - (4 * across);
+        int highest = at + (3 * across) + ((count - 1) * along);
+        if (lowest < 0 || highest >= data.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(at));
+        }
+
+        int reach = kind == Kind.Macroblock ? 3 : 2;
+        if (along == 1 ? Vector128.IsHardwareAccelerated : Sse2.IsSupported)
+        {
+            ref byte origin = ref MemoryMarshal.GetArrayDataReference(data);
+            for (int group = 0; group < count; group += 8)
+            {
+                ref byte start = ref Unsafe.Add(ref origin, at + (group * along));
+                if (along == 1)
+                {
+                    HorizontalEdge(ref start, across, kind, edgeLimit, interior, hevThreshold, reach);
+                }
+                else
+                {
+                    VerticalEdge(ref start, along, kind, edgeLimit, interior, hevThreshold, reach);
+                }
+            }
+
+            return;
+        }
+
         Span<short> lanes = stackalloc short[64];
         for (int group = 0; group < count; group += 8)
         {
             int start = at + (group * along);
             Load(data, start, across, along, lanes);
             ref Vector128<short> v = ref Unsafe.As<short, Vector128<short>>(ref MemoryMarshal.GetReference(lanes));
-            Filter(ref v, kind, edgeLimit, interior, hevThreshold);
-            Store(data, start, across, along, lanes, kind == Kind.Macroblock ? 3 : 2);
+            Filter(
+                ref v,
+                ref Unsafe.Add(ref v, 1),
+                ref Unsafe.Add(ref v, 2),
+                ref Unsafe.Add(ref v, 3),
+                ref Unsafe.Add(ref v, 4),
+                ref Unsafe.Add(ref v, 5),
+                ref Unsafe.Add(ref v, 6),
+                ref Unsafe.Add(ref v, 7),
+                kind,
+                edgeLimit,
+                interior,
+                hevThreshold);
+            Store(data, start, across, along, lanes, reach);
         }
     }
 
-    // lanes[k * 8 + i]: pixel k - 4 across the edge (p3 .. q3) at point i along it.
+    // Eight points of a horizontal edge: the eight rows across it are eight loads, filtered in registers, and the rows
+    // the filter may change are stored back.
+    private static void HorizontalEdge(ref byte start, int across, Kind kind, int edgeLimit, int interior, int hevThreshold, int reach)
+    {
+        Vector128<short> p3 = ReadRow(ref start, -4 * across);
+        Vector128<short> p2 = ReadRow(ref start, -3 * across);
+        Vector128<short> p1 = ReadRow(ref start, -2 * across);
+        Vector128<short> p0 = ReadRow(ref start, -across);
+        Vector128<short> q0 = ReadRow(ref start, 0);
+        Vector128<short> q1 = ReadRow(ref start, across);
+        Vector128<short> q2 = ReadRow(ref start, 2 * across);
+        Vector128<short> q3 = ReadRow(ref start, 3 * across);
+        if (!Filter(ref p3, ref p2, ref p1, ref p0, ref q0, ref q1, ref q2, ref q3, kind, edgeLimit, interior, hevThreshold))
+        {
+            return;
+        }
+
+        if (reach == 3)
+        {
+            WriteRow(ref start, -3 * across, p2);
+            WriteRow(ref start, 2 * across, q2);
+        }
+
+        WriteRow(ref start, -2 * across, p1);
+        WriteRow(ref start, -across, p0);
+        WriteRow(ref start, 0, q0);
+        WriteRow(ref start, across, q1);
+
+        static Vector128<short> ReadRow(ref byte start, int offset) =>
+            Vector128.WidenLower(Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref start, offset))).AsByte()).AsInt16();
+
+        // The filtered values are 0 to 255 already.
+        static void WriteRow(ref byte start, int offset, Vector128<short> row) =>
+            Unsafe.WriteUnaligned(ref Unsafe.Add(ref start, offset), Vector128.Narrow(row.AsUInt16(), row.AsUInt16()).AsUInt64().ToScalar());
+    }
+
+    // Eight points of a vertical edge: the 8 x 8 block around it transposed into the shape of a horizontal edge.
+    private static void VerticalEdge(ref byte start, int along, Kind kind, int edgeLimit, int interior, int hevThreshold, int reach)
+    {
+        ref byte block = ref Unsafe.Add(ref start, -4);
+        Transpose(Rows(ref block, along, 0), Rows(ref block, along, 2), Rows(ref block, along, 4), Rows(ref block, along, 6), out var c0, out var c1, out var c2, out var c3);
+        Vector128<short> p3 = Sse2.UnpackLow(c0, Vector128<byte>.Zero).AsInt16();
+        Vector128<short> p2 = Sse2.UnpackHigh(c0, Vector128<byte>.Zero).AsInt16();
+        Vector128<short> p1 = Sse2.UnpackLow(c1, Vector128<byte>.Zero).AsInt16();
+        Vector128<short> p0 = Sse2.UnpackHigh(c1, Vector128<byte>.Zero).AsInt16();
+        Vector128<short> q0 = Sse2.UnpackLow(c2, Vector128<byte>.Zero).AsInt16();
+        Vector128<short> q1 = Sse2.UnpackHigh(c2, Vector128<byte>.Zero).AsInt16();
+        Vector128<short> q2 = Sse2.UnpackLow(c3, Vector128<byte>.Zero).AsInt16();
+        Vector128<short> q3 = Sse2.UnpackHigh(c3, Vector128<byte>.Zero).AsInt16();
+        if (!Filter(ref p3, ref p2, ref p1, ref p0, ref q0, ref q1, ref q2, ref q3, kind, edgeLimit, interior, hevThreshold))
+        {
+            return;
+        }
+
+        // Back to rows with the same transpose; only the pixels the filter may change are written.
+        Transpose(
+            Sse2.PackUnsignedSaturate(p3, p2),
+            Sse2.PackUnsignedSaturate(p1, p0),
+            Sse2.PackUnsignedSaturate(q0, q1),
+            Sse2.PackUnsignedSaturate(q2, q3),
+            out var r0,
+            out var r1,
+            out var r2,
+            out var r3);
+        WriteRow(ref block, 0, reach, r0.AsUInt64().ToScalar());
+        WriteRow(ref block, along, reach, r0.AsUInt64().GetElement(1));
+        WriteRow(ref block, 2 * along, reach, r1.AsUInt64().ToScalar());
+        WriteRow(ref block, 3 * along, reach, r1.AsUInt64().GetElement(1));
+        WriteRow(ref block, 4 * along, reach, r2.AsUInt64().ToScalar());
+        WriteRow(ref block, 5 * along, reach, r2.AsUInt64().GetElement(1));
+        WriteRow(ref block, 6 * along, reach, r3.AsUInt64().ToScalar());
+        WriteRow(ref block, 7 * along, reach, r3.AsUInt64().GetElement(1));
+
+        // Rows first and first + 1 of the block, step apart, as one vector.
+        static Vector128<byte> Rows(ref byte block, int step, int first) => Vector128.Create(
+            Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref block, first * step)),
+            Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref block, (first + 1) * step))).AsByte();
+
+        // The pixels a filter may change in one row of eight around a vertical edge: p2 .. q2 for reach 3, else p1 .. q1.
+        static void WriteRow(ref byte block, int offset, int reach, ulong row)
+        {
+            ref byte at = ref Unsafe.Add(ref block, offset);
+            if (reach == 3)
+            {
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref at, 1), (uint)(row >> 8));
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref at, 5), (ushort)(row >> 40));
+            }
+            else
+            {
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref at, 2), (uint)(row >> 16));
+            }
+        }
+    }
+
+    // Without vectors (or SSE2 for a vertical edge). lanes[k * 8 + i]: pixel k - 4 across the edge (p3 .. q3) at point i along it.
     private static void Load(byte[] data, int start, int across, int along, Span<short> lanes)
     {
-        if (along == 1)
-        {
-            // Horizontal edge: each of the eight rows holds eight consecutive points.
-            for (int k = 0; k < 8; k++)
-            {
-                ulong row = MemoryMarshal.Read<ulong>(data.AsSpan(start + ((k - 4) * across), 8));
-                Vector128<short> wide = Vector128.WidenLower(Vector128.CreateScalar(row).AsByte()).AsInt16();
-                wide.CopyTo(lanes.Slice(k * 8, 8));
-            }
-
-            return;
-        }
-
-        // Vertical edge: transpose eight rows of eight pixels.
-        if (Sse2.IsSupported)
-        {
-            Transpose(Rows(data, start - 4, along, 0), Rows(data, start - 4, along, 2), Rows(data, start - 4, along, 4), Rows(data, start - 4, along, 6), out var c0, out var c1, out var c2, out var c3);
-            Span<Vector128<short>> vectors = MemoryMarshal.Cast<short, Vector128<short>>(lanes);
-            vectors[0] = Vector128.WidenLower(c0).AsInt16();
-            vectors[1] = Vector128.WidenUpper(c0).AsInt16();
-            vectors[2] = Vector128.WidenLower(c1).AsInt16();
-            vectors[3] = Vector128.WidenUpper(c1).AsInt16();
-            vectors[4] = Vector128.WidenLower(c2).AsInt16();
-            vectors[5] = Vector128.WidenUpper(c2).AsInt16();
-            vectors[6] = Vector128.WidenLower(c3).AsInt16();
-            vectors[7] = Vector128.WidenUpper(c3).AsInt16();
-            return;
-        }
-
         for (int i = 0; i < 8; i++)
         {
-            ReadOnlySpan<byte> row = data.AsSpan(start + (i * along) - 4, 8);
             for (int k = 0; k < 8; k++)
             {
-                lanes[(k * 8) + i] = row[k];
+                lanes[(k * 8) + i] = data[start + (i * along) + ((k - 4) * across)];
             }
         }
     }
@@ -93,48 +197,11 @@ internal static class Vp8Filter
     // Writes back the pixels a filter may change: p1 .. q1, or p2 .. q2 for a macroblock edge.
     private static void Store(byte[] data, int start, int across, int along, ReadOnlySpan<short> lanes, int reach)
     {
-        if (along == 1)
-        {
-            for (int k = 4 - reach; k < 4 + reach; k++)
-            {
-                Vector128<short> wide = Vector128.Create(lanes.Slice(k * 8, 8));
-                Vector128<byte> bytes = Vector128.Narrow(wide.AsUInt16(), wide.AsUInt16());
-                MemoryMarshal.Write(data.AsSpan(start + ((k - 4) * across), 8), bytes.AsUInt64().ToScalar());
-            }
-
-            return;
-        }
-
-        if (Sse2.IsSupported)
-        {
-            // Back to rows with the same transpose; only the pixels the filter may change are written.
-            ReadOnlySpan<Vector128<short>> vectors = MemoryMarshal.Cast<short, Vector128<short>>(lanes);
-            Transpose(
-                Sse2.PackUnsignedSaturate(vectors[0], vectors[1]),
-                Sse2.PackUnsignedSaturate(vectors[2], vectors[3]),
-                Sse2.PackUnsignedSaturate(vectors[4], vectors[5]),
-                Sse2.PackUnsignedSaturate(vectors[6], vectors[7]),
-                out var r0,
-                out var r1,
-                out var r2,
-                out var r3);
-            WriteRow(data, start - 4, reach, r0.AsUInt64().ToScalar());
-            WriteRow(data, start - 4 + along, reach, r0.AsUInt64().GetElement(1));
-            WriteRow(data, start - 4 + (2 * along), reach, r1.AsUInt64().ToScalar());
-            WriteRow(data, start - 4 + (3 * along), reach, r1.AsUInt64().GetElement(1));
-            WriteRow(data, start - 4 + (4 * along), reach, r2.AsUInt64().ToScalar());
-            WriteRow(data, start - 4 + (5 * along), reach, r2.AsUInt64().GetElement(1));
-            WriteRow(data, start - 4 + (6 * along), reach, r3.AsUInt64().ToScalar());
-            WriteRow(data, start - 4 + (7 * along), reach, r3.AsUInt64().GetElement(1));
-            return;
-        }
-
         for (int i = 0; i < 8; i++)
         {
-            Span<byte> row = data.AsSpan(start + (i * along) - 4, 8);
             for (int k = 4 - reach; k < 4 + reach; k++)
             {
-                row[k] = (byte)lanes[(k * 8) + i];
+                data[start + (i * along) + ((k - 4) * across)] = (byte)lanes[(k * 8) + i];
             }
         }
     }
@@ -155,36 +222,10 @@ internal static class Vp8Filter
         c3 = Sse2.UnpackHigh(b1, b3).AsByte();
     }
 
-    // Rows first and first + 1 of an 8 x 8 block at start, step apart, as one vector.
-    private static Vector128<byte> Rows(byte[] data, int start, int step, int first) => Vector128.Create(
-        MemoryMarshal.Read<ulong>(data.AsSpan(start + (first * step), 8)),
-        MemoryMarshal.Read<ulong>(data.AsSpan(start + ((first + 1) * step), 8))).AsByte();
-
-    // The pixels a filter may change in one row of eight around a vertical edge: p2 .. q2 for reach 3, else p1 .. q1.
-    private static void WriteRow(byte[] data, int at, int reach, ulong row)
+    // Filters the eight points in the lanes; false when no point passes the thresholds, so nothing changed.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool Filter(ref Vector128<short> p3, ref Vector128<short> p2, ref Vector128<short> p1, ref Vector128<short> p0, ref Vector128<short> q0, ref Vector128<short> q1, ref Vector128<short> q2, ref Vector128<short> q3, Kind kind, int edgeLimit, int interior, int hevThreshold)
     {
-        if (reach == 3)
-        {
-            MemoryMarshal.Write(data.AsSpan(at + 1, 4), (uint)(row >> 8));
-            MemoryMarshal.Write(data.AsSpan(at + 5, 2), (ushort)(row >> 40));
-        }
-        else
-        {
-            MemoryMarshal.Write(data.AsSpan(at + 2, 4), (uint)(row >> 16));
-        }
-    }
-
-    private static void Filter(ref Vector128<short> v, Kind kind, int edgeLimit, int interior, int hevThreshold)
-    {
-        ref Vector128<short> p3 = ref v;
-        ref Vector128<short> p2 = ref Unsafe.Add(ref v, 1);
-        ref Vector128<short> p1 = ref Unsafe.Add(ref v, 2);
-        ref Vector128<short> p0 = ref Unsafe.Add(ref v, 3);
-        ref Vector128<short> q0 = ref Unsafe.Add(ref v, 4);
-        ref Vector128<short> q1 = ref Unsafe.Add(ref v, 5);
-        ref Vector128<short> q2 = ref Unsafe.Add(ref v, 6);
-        ref Vector128<short> q3 = ref Unsafe.Add(ref v, 7);
-
         // Which points to filter at all.
         Vector128<short> limit = Vector128.Create((short)(kind == Kind.Simple ? edgeLimit : (2 * edgeLimit) + interior));
         Vector128<short> mask = Vector128.LessThanOrEqual(
@@ -203,7 +244,7 @@ internal static class Vp8Filter
 
         if (mask == Vector128<short>.Zero)
         {
-            return;
+            return false;
         }
 
         // filter_common, with the outer taps where `outer` is set (always for the simple filter and macroblock edges
@@ -259,6 +300,7 @@ internal static class Vp8Filter
         q0 = Vector128.ConditionalSelect(mask, newQ0, q0);
         q1 = Vector128.ConditionalSelect(mask, newQ1, q1);
         q2 = Vector128.ConditionalSelect(mask, newQ2, q2);
+        return true;
     }
 
     private static Vector128<short> Saturate8(Vector128<short> x) =>

@@ -37,33 +37,69 @@ internal sealed class Vp8BoolDecoder
         Load();
     }
 
+    /// <summary>
+    /// The decoder's state, for a hot loop to copy into locals (where the JIT keeps it in registers), read with
+    /// <see cref="Read"/>, and give back with <see cref="Store"/>.
+    /// </summary>
+    public (ulong Value, int Bits, uint Range) State => (_value, _bits, _range);
+
+    public void Store(ulong value, int bits, uint range)
+    {
+        _value = value;
+        _bits = bits;
+        _range = range;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool ReadBool(int probability)
     {
-        if (_bits < 0)
+        ulong value = _value;
+        int bits = _bits;
+        uint range = _range;
+        bool bit = Read(ref value, ref bits, ref range, probability);
+        _value = value;
+        _bits = bits;
+        _range = range;
+        return bit;
+    }
+
+    /// <summary><see cref="ReadBool"/> on a hot loop's copy of <see cref="State"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Read(ref ulong value, ref int bits, ref uint range, int probability)
+    {
+        if (bits < 0)
         {
-            Load();
+            (value, bits) = Refill(value, bits);
         }
 
-        int position = _bits;
-        uint split = (_range * (uint)probability) >> 8;
-        uint value = (uint)(_value >> position);
-        uint range;
-        bool bit = value > split;
+        int position = bits;
+        uint split = (range * (uint)probability) >> 8;
+        bool bit = (uint)(value >> position) > split;
+        uint next;
         if (bit)
         {
-            range = _range - split;
-            _value -= (ulong)(split + 1) << position;
+            next = range - split;
+            value -= (ulong)(split + 1) << position;
         }
         else
         {
-            range = split + 1;
+            next = split + 1;
         }
 
-        int shift = 7 ^ BitOperations.Log2(range);
-        _range = (range << shift) - 1;
-        _bits = position - shift;
+        int shift = 7 ^ BitOperations.Log2(next);
+        range = (next << shift) - 1;
+        bits = position - shift;
         return bit;
+    }
+
+    // The bytes ahead, on a hot loop's locals: kept out of line, as it runs once for every seven bytes.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private (ulong Value, int Bits) Refill(ulong value, int bits)
+    {
+        _value = value;
+        _bits = bits;
+        Load();
+        return (_value, _bits);
     }
 
     public bool ReadFlag() => ReadBool(128);

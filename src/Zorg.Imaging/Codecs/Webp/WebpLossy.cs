@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Webp;
@@ -100,14 +101,23 @@ internal static class WebpLossy
     }
 
     // libwebp's fancy upsampler for one chroma plane: the row nearer `top`, and the row nearer `current`.
-    private static void Upsample(ReadOnlySpan<byte> topRow, ReadOnlySpan<byte> currentRow, Span<byte> nearTop, Span<byte> nearCurrent, int width)
+    // Optionally without vectors: the reference the vector path is tested against.
+    internal static void Upsample(ReadOnlySpan<byte> topRow, ReadOnlySpan<byte> currentRow, Span<byte> nearTop, Span<byte> nearCurrent, int width, bool useVectors = true)
     {
         int tl = topRow[0];
         int l = currentRow[0];
         nearTop[0] = (byte)(((3 * tl) + l + 2) >> 2);
         nearCurrent[0] = (byte)(((3 * l) + tl + 2) >> 2);
         int pairs = (width - 1) >> 1;
-        for (int x = 1; x <= pairs; x++)
+        int x = 1;
+        if (useVectors && Sse2.IsSupported)
+        {
+            x = UpsampleVector(topRow, currentRow, nearTop, nearCurrent, pairs);
+            tl = topRow[x - 1];
+            l = currentRow[x - 1];
+        }
+
+        for (; x <= pairs; x++)
         {
             int t = topRow[x];
             int c = currentRow[x];
@@ -126,6 +136,43 @@ internal static class WebpLossy
         {
             nearTop[width - 1] = (byte)(((3 * tl) + l + 2) >> 2);
             nearCurrent[width - 1] = (byte)(((3 * l) + tl + 2) >> 2);
+        }
+    }
+
+    // The same arithmetic on eight chroma pairs at a time, in 16-bit lanes (no value passes 2048). Returns the first x
+    // left for the scalar loop.
+    private static int UpsampleVector(ReadOnlySpan<byte> topRow, ReadOnlySpan<byte> currentRow, Span<byte> nearTop, Span<byte> nearCurrent, int pairs)
+    {
+        ref byte top0 = ref MemoryMarshal.GetReference(topRow);
+        ref byte current0 = ref MemoryMarshal.GetReference(currentRow);
+        ref byte nearTop0 = ref MemoryMarshal.GetReference(nearTop);
+        ref byte nearCurrent0 = ref MemoryMarshal.GetReference(nearCurrent);
+        Vector128<short> eight = Vector128.Create((short)8);
+        int x = 1;
+        for (; x + 7 <= pairs; x += 8)
+        {
+            Vector128<short> tl = Load8(ref top0, x - 1);
+            Vector128<short> t = Load8(ref top0, x);
+            Vector128<short> l = Load8(ref current0, x - 1);
+            Vector128<short> c = Load8(ref current0, x);
+            Vector128<short> average = tl + t + l + c + eight;
+            Vector128<short> diag12 = Vector128.ShiftRightArithmetic(average + Vector128.ShiftLeft(t + l, 1), 3);
+            Vector128<short> diag03 = Vector128.ShiftRightArithmetic(average + Vector128.ShiftLeft(tl + c, 1), 3);
+            Store16(ref nearTop0, (2 * x) - 1, Vector128.ShiftRightArithmetic(diag12 + tl, 1), Vector128.ShiftRightArithmetic(diag03 + t, 1));
+            Store16(ref nearCurrent0, (2 * x) - 1, Vector128.ShiftRightArithmetic(diag03 + l, 1), Vector128.ShiftRightArithmetic(diag12 + c, 1));
+        }
+
+        return x;
+
+        static Vector128<short> Load8(ref byte source, int at) =>
+            Vector128.WidenLower(Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref source, at))).AsByte()).AsInt16();
+
+        // Odd outputs from `odd`, even from `even`, interleaved: positions at, at + 1, ... at + 15.
+        static void Store16(ref byte target, int at, Vector128<short> odd, Vector128<short> even)
+        {
+            Vector128<byte> o = Sse2.PackUnsignedSaturate(odd, odd);
+            Vector128<byte> e = Sse2.PackUnsignedSaturate(even, even);
+            Sse2.UnpackLow(o, e).StoreUnsafe(ref Unsafe.Add(ref target, at));
         }
     }
 
