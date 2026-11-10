@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Lossless WebP:
+
+- Faster grouping of an image's tiles under shared codes, with the same output: on one core, 256 x 256 textures encode 32% faster and 64 x 64 icons 40% faster at the default effort.
+
 ## 0.1.0-preview.5
 
 Mostly WebP. Against cwebp at quality 80 on 167 test images, lossy files are 0.78 dB closer to the source at the same size and encode in about the same time on one core; lossless files are within 1% of cwebp's size (see `docs/performance.md`). Lossy WebP, GIF and lossy PNG output differs from preview.4.

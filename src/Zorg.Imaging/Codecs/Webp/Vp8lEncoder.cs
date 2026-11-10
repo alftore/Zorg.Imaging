@@ -1,7 +1,6 @@
 using System;
 using System.Runtime.Intrinsics;
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 
 namespace Zorg.Imaging.Codecs.Webp;
@@ -210,7 +209,7 @@ internal static class Vp8lEncoder
             counts[row * 256]++;
         }
 
-        double Row(int row) => Entropy(counts.AsSpan(row * 256, 256).ToArray());
+        double Row(int row) => Entropy(counts.AsSpan(row * 256, 256));
         double tiles = (double)DivideUp(width, tileBits) * DivideUp(height, tileBits);
         double indexed = Entropy(hashes) + (colours * 8);
         double direct = Row(0) + Row(1) + Row(2) + Row(3);
@@ -265,7 +264,7 @@ internal static class Vp8lEncoder
             counts[row * 256]++;
         }
 
-        double Row(int row) => Entropy(counts.AsSpan(row * 256, 256).ToArray());
+        double Row(int row) => Entropy(counts.AsSpan(row * 256, 256));
         double tiles = (double)DivideUp(width, tileBits) * DivideUp(height, tileBits);
         double direct = Row(0) + Row(1) + Row(2) + Row(3);
         double predicted = Row(4) + Row(5) + Row(6) + Row(7) + (tiles * Math.Log2(14));
@@ -1140,13 +1139,18 @@ internal static class Vp8lEncoder
             perPixel[c] = new double[n];
         }
 
+        bool[] empty = new bool[n];
+
         for (int t = 0; t < n; t++)
         {
             Histogram h = tiles[t];
-            long symbols = Math.Max(Sum(h.Green), 1);
-            perPixel[0][t] = Entropy(h.Green) / symbols;
-            perPixel[1][t] = Entropy(h.Red) / Math.Max(Sum(h.Red), 1);
-            perPixel[2][t] = Entropy(h.Blue) / Math.Max(Sum(h.Blue), 1);
+            h.Freeze();
+            for (int c = 0; c < 3; c++)
+            {
+                (double entropy, long total) = h.EntropyOf(c);
+                perPixel[c][t] = entropy / Math.Max(total, 1);
+                empty[t] |= c == 0 && total == 0;
+            }
         }
 
         // Up to 4 x 4 x 4 bins between each channel's least and most.
@@ -1174,7 +1178,7 @@ internal static class Vp8lEncoder
         int[] tileCluster = new int[n];
         for (int t = 0; t < n; t++)
         {
-            if (Sum(tiles[t].Green) == 0)
+            if (empty[t])
             {
                 tileCluster[t] = -1;
                 continue;
@@ -1293,7 +1297,7 @@ internal static class Vp8lEncoder
         }
 
         groupCount = Math.Max(groupCount, 1);
-        float[][][] costs = new float[final.Count][][];
+        float[][] costs = new float[final.Count][];
         for (int g = 0; g < final.Count; g++)
         {
             costs[g] = final[g].SymbolCosts();
@@ -1349,38 +1353,44 @@ internal static class Vp8lEncoder
         return tileGroups;
     }
 
-    private static long Sum(int[] counts)
-    {
-        long total = 0;
-        foreach (int c in counts)
-        {
-            total += c;
-        }
-
-        return total;
-    }
-
     /// <summary>The symbol counts of one parse, or of the part of it in one group, as the decoder will see the cache.</summary>
-    private sealed class Histogram(int cacheBits)
+    /// <remarks>
+    /// The five codes' counts lie end to end in one array (green with the lengths and cache, red, blue, alpha, then
+    /// distance), so the clustering adds, merges and prices them in plain loops.
+    /// </remarks>
+    private sealed class Histogram
     {
         // A rough cost of writing one code's lengths in the header, per symbol used.
         // A code's header, priced a symbol at a time: 4 undercounted the code-length code on small images, which then
         // split into too many groups (a 64 x 64 icon spent a third of its bytes on code headers).
         private const double HeaderBitsPerSymbol = 8;
 
-        public int CacheBits { get; } = cacheBits;
+        private readonly int _greenLength;
 
-        public int[] Green { get; } = new int[GreenAlphabet + (cacheBits == 0 ? 0 : 1 << cacheBits)];
+        // The symbols a frozen histogram uses, in order; null until Freeze.
+        private int[]? _used;
 
-        public int[] Red { get; } = new int[256];
+        public Histogram(int cacheBits)
+        {
+            CacheBits = cacheBits;
+            _greenLength = GreenAlphabet + (cacheBits == 0 ? 0 : 1 << cacheBits);
+            Counts = new int[_greenLength + (3 * 256) + DistanceAlphabet];
+        }
 
-        public int[] Blue { get; } = new int[256];
+        public int CacheBits { get; }
 
-        public int[] Alpha { get; } = new int[256];
+        /// <summary>All five codes' counts: green from 0, then red, blue and alpha (256 each), then distance.</summary>
+        public int[] Counts { get; }
 
-        public int[] Distance { get; } = new int[DistanceAlphabet];
+        public Span<int> Green => Code(0);
 
-        private IEnumerable<int[]> Arrays => [Green, Red, Blue, Alpha, Distance];
+        public Span<int> Red => Code(1);
+
+        public Span<int> Blue => Code(2);
+
+        public Span<int> Alpha => Code(3);
+
+        public Span<int> Distance => Code(4);
 
         /// <summary>
         /// Counts the tokens into one histogram per group (all into the first when <paramref name="tokenGroups"/> is
@@ -1394,13 +1404,17 @@ internal static class Vp8lEncoder
                 groups[g] = new Histogram(cacheBits);
             }
 
+            int redAt = groups[0].Start(1);
+            int blueAt = groups[0].Start(2);
+            int alphaAt = groups[0].Start(3);
+            int distanceAt = groups[0].Start(4);
             int[] hits = new int[count];
             uint[] cache = new uint[cacheBits == 0 ? 1 : 1 << cacheBits];
             int shift = 32 - cacheBits;
             int at = 0;
             for (int k = 0; k < count; k++)
             {
-                Histogram h = groups[tokenGroups is null ? 0 : tokenGroups[k]];
+                int[] h = groups[tokenGroups is null ? 0 : tokenGroups[k]].Counts;
                 if (lengths[k] == 0)
                 {
                     uint pixel = pixels[at++];
@@ -1411,22 +1425,22 @@ internal static class Vp8lEncoder
                         if (cache[key] == pixel)
                         {
                             hits[k] = key;
-                            h.Green[GreenAlphabet + key]++;
+                            h[GreenAlphabet + key]++;
                             continue;
                         }
 
                         cache[key] = pixel;
                     }
 
-                    h.Green[(pixel >> 8) & 0xFF]++;
-                    h.Red[(pixel >> 16) & 0xFF]++;
-                    h.Blue[pixel & 0xFF]++;
-                    h.Alpha[pixel >> 24]++;
+                    h[(pixel >> 8) & 0xFF]++;
+                    h[redAt + (int)((pixel >> 16) & 0xFF)]++;
+                    h[blueAt + (int)(pixel & 0xFF)]++;
+                    h[alphaAt + (int)(pixel >> 24)]++;
                     continue;
                 }
 
-                h.Green[256 + Prefix(lengths[k]).Prefix]++;
-                h.Distance[Prefix(DistanceCode(distances[k], width)).Prefix]++;
+                h[256 + Prefix(lengths[k]).Prefix]++;
+                h[distanceAt + Prefix(DistanceCode(distances[k], width)).Prefix]++;
                 if (cacheBits > 0)
                 {
                     for (int i = at; i < at + lengths[k]; i++)
@@ -1446,26 +1460,38 @@ internal static class Vp8lEncoder
         public static double MergedBits(Histogram a, Histogram b)
         {
             double total = 0;
-            using IEnumerator<int[]> left = a.Arrays.GetEnumerator();
-            using IEnumerator<int[]> right = b.Arrays.GetEnumerator();
-            while (left.MoveNext() && right.MoveNext())
+            for (int code = 0; code < 5; code++)
             {
-                total += MergedArrayBits(left.Current, right.Current);
+                total += MergedArrayBits(a.Code(code), b.Code(code));
             }
 
             return total;
         }
 
+        /// <summary>Adds another histogram's counts: a frozen one's only where it has any.</summary>
         public void Add(Histogram other)
         {
-            using IEnumerator<int[]> mine = Arrays.GetEnumerator();
-            using IEnumerator<int[]> theirs = other.Arrays.GetEnumerator();
-            while (mine.MoveNext() && theirs.MoveNext())
+            int[] mine = Counts;
+            int[] theirs = other.Counts;
+            if (other._used is not null)
             {
-                for (int i = 0; i < mine.Current.Length; i++)
+                foreach (int i in other._used)
                 {
-                    mine.Current[i] += theirs.Current[i];
+                    mine[i] += theirs[i];
                 }
+
+                return;
+            }
+
+            int k = 0;
+            for (; k <= mine.Length - Vector<int>.Count; k += Vector<int>.Count)
+            {
+                (new Vector<int>(mine, k) + new Vector<int>(theirs, k)).CopyTo(mine, k);
+            }
+
+            for (; k < mine.Length; k++)
+            {
+                mine[k] += theirs[k];
             }
         }
 
@@ -1473,42 +1499,105 @@ internal static class Vp8lEncoder
         public double Bits()
         {
             double total = 0;
-            foreach (int[] counts in Arrays)
+            for (int code = 0; code < 5; code++)
             {
-                total += ArrayBits(counts);
+                total += ArrayBits(Code(code));
             }
 
             return total;
         }
 
-        /// <summary>Each array's bits per symbol under codes built for this histogram.</summary>
-        public float[][] SymbolCosts() => [.. Arrays.Select(Costs)];
-
-        /// <summary>The bits this histogram's symbols take under other codes' costs.</summary>
-        // A tile's symbols are few and its histogram is not changed once counted, so the symbols it uses are listed once,
-        // on the first call, and only they are priced.
-        public double BitsUnder(float[][] costs)
+        /// <summary>Each symbol's bits under codes built for this histogram, laid out as <see cref="Counts"/>.</summary>
+        public float[] SymbolCosts()
         {
-            _used ??= [.. Arrays.Select(counts => Enumerable.Range(0, counts.Length).Where(i => counts[i] != 0).ToArray())];
-            double total = 0;
-            int a = 0;
-            foreach (int[] counts in Arrays)
+            float[] costs = new float[Counts.Length];
+            for (int code = 0; code < 5; code++)
             {
-                float[] cost = costs[a];
-                foreach (int i in _used[a])
+                Costs(Code(code), costs.AsSpan(Start(code), End(code) - Start(code)));
+            }
+
+            return costs;
+        }
+
+        /// <summary>Lists the symbols used, once the counts are final: a tile's are few, and then only they are added and priced.</summary>
+        public void Freeze()
+        {
+            // A vector at a time, as most of a tile's counts are 0.
+            int[] counts = Counts;
+            int width = Vector<int>.Count;
+            int whole = counts.Length - (counts.Length % width);
+            int used = 0;
+            for (int i = 0; i < whole; i += width)
+            {
+                used += width + Vector.Sum(Vector.Equals(new Vector<int>(counts, i), Vector<int>.Zero));
+            }
+
+            for (int i = whole; i < counts.Length; i++)
+            {
+                used += counts[i] != 0 ? 1 : 0;
+            }
+
+            int[] list = new int[used];
+            used = 0;
+            for (int i = 0; i < counts.Length; i++)
+            {
+                if (i % width == 0 && i < whole && Vector.EqualsAll(new Vector<int>(counts, i), Vector<int>.Zero))
                 {
-                    total += counts[i] * (double)cost[i];
+                    i += width - 1;
+                    continue;
                 }
 
-                a++;
+                if (counts[i] != 0)
+                {
+                    list[used++] = i;
+                }
+            }
+
+            _used = list;
+        }
+
+        /// <summary>A frozen histogram's code's entropy, as <see cref="Entropy"/> gives it, and its count of symbols.</summary>
+        public (double Entropy, long Total) EntropyOf(int code)
+        {
+            int start = Start(code);
+            int end = End(code);
+            long total = 0;
+            double sum = 0;
+            int used = 0;
+            foreach (int i in _used!)
+            {
+                if (i >= start && i < end)
+                {
+                    int c = Counts[i];
+                    total += c;
+                    sum += c * Math.Log2(c);
+                    used++;
+                }
+            }
+
+            return (EntropyFrom(total, sum, used), total);
+        }
+
+        /// <summary>The bits a frozen histogram's symbols take under costs from <see cref="SymbolCosts"/>.</summary>
+        public double BitsUnder(float[] costs)
+        {
+            int[] counts = Counts;
+            double total = 0;
+            foreach (int i in _used!)
+            {
+                total += counts[i] * (double)costs[i];
             }
 
             return total;
         }
 
-        private int[][]? _used;
+        private int Start(int code) => code == 0 ? 0 : _greenLength + ((code - 1) * 256);
 
-        private static double ArrayBits(int[] counts)
+        private int End(int code) => code == 4 ? Counts.Length : _greenLength + (code * 256);
+
+        private Span<int> Code(int code) => Counts.AsSpan(Start(code), End(code) - Start(code));
+
+        private static double ArrayBits(ReadOnlySpan<int> counts)
         {
             long total = 0;
             double sum = 0;
@@ -1526,7 +1615,7 @@ internal static class Vp8lEncoder
             return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol);
         }
 
-        private static double MergedArrayBits(int[] a, int[] b)
+        private static double MergedArrayBits(ReadOnlySpan<int> a, ReadOnlySpan<int> b)
         {
             long total = 0;
             double sum = 0;
@@ -1548,7 +1637,18 @@ internal static class Vp8lEncoder
         // c log2 c, from a table for the small counts that most symbols have.
         private static double TimesLog2(long c) => c < TimesLog2Table.Length ? TimesLog2Table[c] : c * Math.Log2(c);
 
-        private static readonly double[] TimesLog2Table = [.. Enumerable.Range(0, 4096).Select(c => c == 0 ? 0 : c * Math.Log2(c))];
+        private static readonly double[] TimesLog2Table = BuildTimesLog2();
+
+        private static double[] BuildTimesLog2()
+        {
+            double[] table = new double[4096];
+            for (int c = 1; c < table.Length; c++)
+            {
+                table[c] = c * Math.Log2(c);
+            }
+
+            return table;
+        }
     }
 
     // Section 5.2.2: a value of 1 or more as a prefix symbol and extra bits.
@@ -1849,7 +1949,14 @@ internal static class Vp8lEncoder
     }
 
     // Bits for each symbol by its share of the counts; unseen symbols cost a little more than the rarest seen.
-    private static float[] Costs(int[] counts)
+    private static float[] Costs(ReadOnlySpan<int> counts)
+    {
+        float[] cost = new float[counts.Length];
+        Costs(counts, cost);
+        return cost;
+    }
+
+    private static void Costs(ReadOnlySpan<int> counts, Span<float> cost)
     {
         long total = 0;
         foreach (int c in counts)
@@ -1857,14 +1964,11 @@ internal static class Vp8lEncoder
             total += c;
         }
 
-        float[] cost = new float[counts.Length];
         float log = MathF.Log2(Math.Max(total, 1));
         for (int i = 0; i < counts.Length; i++)
         {
             cost[i] = counts[i] == 0 ? log + 2 : log - MathF.Log2(counts[i]);
         }
-
-        return cost;
     }
 
     /// <summary>
@@ -2172,7 +2276,7 @@ internal static class Vp8lEncoder
     // The bits a prefix code needs for these counts: their Shannon entropy, but at least a bit a symbol once two or more
     // are used, as no prefix code does better. Without the floor a nearly constant channel seemed to cost nothing, and
     // the colour cache (one symbol a pixel) seemed not worth having on grey textures: 18% larger files.
-    private static double Entropy(int[] counts)
+    private static double Entropy(ReadOnlySpan<int> counts)
     {
         long total = 0;
         double sum = 0;
@@ -2187,6 +2291,12 @@ internal static class Vp8lEncoder
             }
         }
 
+        return EntropyFrom(total, sum, used);
+    }
+
+    // The entropy of counts of `total` in all, with `used` symbols seen and sum c log2 c over them.
+    private static double EntropyFrom(long total, double sum, int used)
+    {
         double bits = total == 0 ? 0 : (total * Math.Log2(total)) - sum;
         return used >= 2 ? Math.Max(bits, total) : bits;
     }
