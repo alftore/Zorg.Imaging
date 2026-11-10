@@ -649,6 +649,59 @@ public class WebpEncoderTests
         Assert.Equal("VP8 ", System.Text.Encoding.ASCII.GetString(Save(photo, new WebpEncoderOptions { Effort = effort }), 12, 4));
     }
 
+    [Theory]
+    [InlineData(50)]
+    [InlineData(65)]
+    [InlineData(80)]
+    public void Flat_areas_keep_their_colour_where_prediction_brings_in_another(int quality)
+    {
+        // Grey (44, 44, 44) under a band of (48, 48, 44) along the top and left. Predicted from the band, the grey's
+        // chroma is off by less than half a DC step, so without diffusion no residual is coded and the whole area comes
+        // out 2 too low in blue; with it, the error adds up over a few blocks until it is coded, and the rest is right.
+        const int Size = 256;
+        using var image = new Image(Size, Size, PixelFormat.Rgb24);
+        for (int y = 0; y < Size; y++)
+        {
+            Span<Rgb24> row = image.GetRow<Rgb24>(y);
+            for (int x = 0; x < Size; x++)
+            {
+                row[x] = x < 16 || y < 16 ? new Rgb24(48, 48, 44) : new Rgb24(44, 44, 44);
+            }
+        }
+
+        using Image decoded = Image.Decode(Save(image, new WebpEncoderOptions { Quality = quality }), AsRgba);
+        double r = 0, g = 0, b = 0;
+        int count = 0;
+        for (int y = 32; y < Size; y++)
+        {
+            ReadOnlySpan<byte> row = decoded.GetRowBytes(y);
+            for (int x = 32; x < Size; x++)
+            {
+                r += row[4 * x];
+                g += row[(4 * x) + 1];
+                b += row[(4 * x) + 2];
+                count++;
+            }
+        }
+
+        Assert.True(Math.Abs((r / count) - 44) < 0.5 && Math.Abs((g / count) - 44) < 0.5 && Math.Abs((b / count) - 44) < 0.5, $"{r / count:F2}, {g / count:F2}, {b / count:F2}");
+    }
+
+    [Fact]
+    public void Wholly_opaque_blocks_are_found()
+    {
+        // 20 x 10: three 8 x 8 blocks across (the third partly past the edge) and two down (the second partly), in a
+        // map four across and two down as the picture is two macroblocks by one; one pixel at the top left not quite
+        // opaque.
+        const int Width = 20;
+        const int Height = 10;
+        uint[] argb = new uint[Width * Height];
+        Array.Fill(argb, 0xFF808080u);
+        argb[0] = 0xFE808080u;
+        bool[] opaque = WebpEncoder.OpaqueBlocks(argb, Width, Height);
+        Assert.Equal([false, true, true, false, true, true, true, false], opaque);
+    }
+
     [Fact]
     public void Macroblocks_that_show_nothing_are_found()
     {

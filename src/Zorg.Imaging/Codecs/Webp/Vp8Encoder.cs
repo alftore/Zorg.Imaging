@@ -52,6 +52,12 @@ internal sealed class Vp8Encoder
     private readonly byte[] _subModes;
     private readonly byte[] _aboveNonZero;
     private readonly byte[] _aboveModes;
+
+    // The chroma DC errors carried down from the macroblock above each column (see DcDiffusion): U then V, two each.
+    private readonly int[] _aboveDcError;
+
+    // Which 8 x 8 blocks of the picture are wholly opaque, two a macroblock across; null when it has no alpha.
+    private bool[]? _opaque;
     private readonly int _quantiser;
 
     // The quantisers macroblocks are coded with: one, or four with each macroblock's in the map (see Segmentation).
@@ -92,6 +98,7 @@ internal sealed class Vp8Encoder
         _subModes = new byte[(long)_mbWide * _mbHigh * 16];
         _aboveNonZero = new byte[_mbWide * 9];
         _aboveModes = new byte[_mbWide * 4];
+        _aboveDcError = new int[_mbWide * 4];
 
         _quantiser = quantiser;
         _segmentation = segmentation;
@@ -132,14 +139,14 @@ internal sealed class Vp8Encoder
     /// both padded to whole macroblocks) as a VP8 frame: the payload of a <c>VP8 </c> chunk.</summary>
     /// <exception cref="NotSupportedException">The macroblock modes don't fit the 512 KB the first partition can hold,
     /// even without subblock modes: only for pictures of tens of megapixels.</exception>
-    public static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, bool[]? hidden = null) =>
-        Encode(y, u, v, width, height, quantiser, effort, 1 << 19, -1, hidden);
+    public static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, bool[]? hidden = null, bool[]? opaque = null) =>
+        Encode(y, u, v, width, height, quantiser, effort, 1 << 19, -1, hidden, opaque: opaque);
 
     /// <summary>As the other overload, with the first partition held below <paramref name="partitionLimit"/> bytes
     /// (the format's 512 KB, or less to test the budget on a small picture), the loop filter at
     /// <paramref name="filterLevel"/>, or chosen when it is -1, and without the texture term in mode decisions when
     /// <paramref name="texture"/> is false (to test it).</summary>
-    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit, int filterLevel, bool[]? hidden = null, bool texture = true)
+    internal static byte[] Encode(byte[] y, byte[] u, byte[] v, int width, int height, int quantiser, int effort, int partitionLimit, int filterLevel, bool[]? hidden = null, bool texture = true, bool[]? opaque = null)
     {
         // Subblock modes take most of the first partition, which holds at most 512 KB. For a picture of tens of
         // megapixels the modes' bits are estimated first, and if they would not fit, every mode decision prices mode
@@ -150,7 +157,7 @@ internal sealed class Vp8Encoder
         // modes at all as a last resort.
         int price = ChooseModePrice(y, u, v, width, height, quantiser, effort, partitionLimit);
         Segmentation? segmentation = Segmentation.For(y, width, height, quantiser, effort, hidden);
-        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation, texture) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
+        var encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation, texture) { _subblocks = effort > 0, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price, _opaque = opaque };
         encoder.EncodeRows();
         byte[]? frame = encoder.Write();
         if (frame is not null)
@@ -167,7 +174,7 @@ internal sealed class Vp8Encoder
 
         foreach (bool subblocks in new[] { effort > 0, false })
         {
-            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation, texture) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price };
+            encoder = new Vp8Encoder(y, u, v, width, height, quantiser, effort, segmentation, texture) { _subblocks = subblocks, _rowModeBudget = budget, _partitionLimit = partitionLimit, _fixedFilterLevel = filterLevel, ModePrice = price, _opaque = opaque };
             encoder.EncodeRows();
             frame = encoder.Write();
             if (frame is not null)
@@ -399,6 +406,8 @@ internal sealed class Vp8Encoder
         Span<byte> leftModes = stackalloc byte[4];
         leftNonZero.Clear();
         leftModes.Clear();
+        Span<int> leftDcError = stackalloc int[4];
+        leftDcError.Clear();
         int[] edge = new int[13];
         long spent = 0;
         for (int mx = 0; mx < _mbWide; mx++)
@@ -426,7 +435,7 @@ internal sealed class Vp8Encoder
             mb.Segment = _segmentation is null ? 0 : _segmentation.Map[mb.Index];
             Segment q = _segments[mb.Segment];
             spent += ChooseLuma(ref mb, q, mx, my, subblocks, edge, leftNonZero, aboveNonZero, leftModes, aboveModes);
-            ChooseChroma(ref mb, q, mx, my, leftNonZero, aboveNonZero);
+            ChooseChroma(ref mb, q, mx, my, leftNonZero, aboveNonZero, leftDcError, _aboveDcError.AsSpan(mx * 4, 4));
             spent += SkipBits + ChromaModeCosts[mb.UvMode];
             mb.Skip = mb.NonZero == 0;
 
@@ -1017,10 +1026,13 @@ internal sealed class Vp8Encoder
     // A value as the scalar code's (short) cast leaves it: the low 16 bits, sign-extended.
     private static Vector128<int> Short(Vector128<int> value) => Vector128.ShiftRightArithmetic(Vector128.ShiftLeft(value, 16), 16);
 
-    private void ChooseChroma(ref Macroblock mb, Segment q, int mx, int my, Span<byte> leftNonZero, Span<byte> aboveNonZero)
+    private void ChooseChroma(ref Macroblock mb, Segment q, int mx, int my, Span<byte> leftNonZero, Span<byte> aboveNonZero, Span<int> leftDcError, Span<int> aboveDcError)
     {
         int cx = mx * 8;
         int cy = my * 8;
+        Span<int> dcErrors = stackalloc int[8];
+        Span<int> bestDcErrors = stackalloc int[8];
+        var diffusion = new DcDiffusion(this, cx, cy, leftDcError, aboveDcError, dcErrors);
         Span<short> levels = stackalloc short[8 * 16];
         Span<byte> contextLeft = stackalloc byte[9];
         Span<byte> contextAbove = stackalloc byte[9];
@@ -1052,7 +1064,7 @@ internal sealed class Vp8Encoder
             leftNonZero.CopyTo(contextLeft);
             aboveNonZero.CopyTo(contextAbove);
             long modeScore = q.ModeLambda * ChromaModeCosts[mode];
-            long score = WholeChroma(q, cx, cy, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero);
+            long score = WholeChroma(q, cx, cy, levels, contextLeft, contextAbove, best == long.MaxValue ? long.MaxValue : best - modeScore, out uint nonZero, ref diffusion);
             if (score != long.MaxValue && score + modeScore < best)
             {
                 best = score + modeScore;
@@ -1063,7 +1075,17 @@ internal sealed class Vp8Encoder
                 contextLeft.CopyTo(bestLeft);
                 contextAbove.CopyTo(bestAbove);
                 bestNonZero = nonZero;
+                dcErrors.CopyTo(bestDcErrors);
             }
+        }
+
+        // The chosen blocks' DC errors carried on: the right column's to the next macroblock, the bottom row's below.
+        for (int g = 0; g < 2; g++)
+        {
+            leftDcError[g * 2] = bestDcErrors[(g * 4) + 1];
+            leftDcError[(g * 2) + 1] = bestDcErrors[(g * 4) + 3];
+            aboveDcError[g * 2] = bestDcErrors[(g * 4) + 2];
+            aboveDcError[(g * 2) + 1] = bestDcErrors[(g * 4) + 3];
         }
 
         mb.UvMode = bestMode;
@@ -1075,7 +1097,7 @@ internal sealed class Vp8Encoder
         mb.NonZero |= bestNonZero << 16;
     }
 
-    private long WholeChroma(Segment q, int cx, int cy, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits)
+    private long WholeChroma(Segment q, int cx, int cy, Span<short> levels, Span<byte> left, Span<byte> above, long limit, out uint nonZeroBits, ref DcDiffusion diffusion)
     {
         // The four U blocks in the lanes, then the four V blocks; token costs after, in block order.
         Span<Vector128<int>> e = stackalloc Vector128<int>[16];
@@ -1098,6 +1120,7 @@ internal sealed class Vp8Encoder
             ResidualLanes(source, _strideUv, plane, xs, ys, e);
             ForwardDctLanes(e);
             QuantiseLanes(e, 0, q.UvDc, q.UvAc, blockLevels, dequantised);
+            diffusion.Quantise(g, source, e[0], q.UvDc, blockLevels, dequantised);
             LevelsToBlocks(blockLevels, levels.Slice(g * 64, 64));
             InverseDctLanes(dequantised, e);
             distortion += ReconstructLanes(source, _strideUv, plane, xs, ys, e);
@@ -1126,6 +1149,125 @@ internal sealed class Vp8Encoder
 
         return distortion + (q.Lambda * bits);
     }
+
+    // Chroma DC error diffusion. A flat area's chroma comes from prediction: where the colour its neighbours left it
+    // differs from its own by less than half a DC step, no residual is coded, and the shift spreads on through every
+    // macroblock predicted from it. On a cut-out of flat grey (darth_vader_PNG6) half the picture came out with U one
+    // level high, 2 too much blue. So in a macroblock whose chroma is one colour, each 4 x 4 block's DC is quantised with
+    // a quarter of the DC errors of the blocks to its left and above (where they are the same colour) added, and its own
+    // error is carried on: a shift too small to code in one block adds up over a few until it is coded, and what is
+    // predicted from there is right. Only blocks that would code no residual otherwise (no AC levels, a DC below half a
+    // step), and only wholly opaque ones: elsewhere the carried errors cost bits for nothing that shows.
+    private readonly ref struct DcDiffusion
+    {
+        private readonly Vp8Encoder _encoder;
+        private readonly int _cx;
+        private readonly int _cy;
+        private readonly bool _flat;
+        private readonly ReadOnlySpan<int> _left;
+        private readonly ReadOnlySpan<int> _above;
+
+        // The DC errors of the candidate last quantised: four U blocks then four V blocks, 0 for those not diffused.
+        private readonly Span<int> _errors;
+
+        public DcDiffusion(Vp8Encoder encoder, int cx, int cy, ReadOnlySpan<int> left, ReadOnlySpan<int> above, Span<int> errors)
+        {
+            _encoder = encoder;
+            _cx = cx;
+            _cy = cy;
+            _left = left;
+            _above = above;
+            _errors = errors;
+            _flat = encoder.OneColour(encoder._sourceU, cx, cy) && encoder.OneColour(encoder._sourceV, cx, cy);
+        }
+
+        // Quantises again the DCs (a lane a block) of one plane's four blocks, with the errors carried in.
+        public void Quantise(int plane, byte[] source, Vector128<int> dcs, int q, Span<Vector128<int>> levels, Span<Vector128<int>> dequantised)
+        {
+            Span<int> errors = _errors.Slice(plane * 4, 4);
+            errors.Clear();
+            if (!_flat)
+            {
+                return;
+            }
+
+            Span<int> level = stackalloc int[4];
+            Span<int> value = stackalloc int[4];
+            levels[0].CopyTo(level);
+            dequantised[0].CopyTo(value);
+            int colour = source[(_cy * _encoder._strideUv) + _cx] * 16;
+            for (int b = 0; b < 4; b++)
+            {
+                int col = b & 1;
+                int row = b >> 1;
+                int x = _cx + (col * 4);
+                int y = _cy + (row * 4);
+                int dc = dcs.GetElement(b);
+                if (!_encoder.Opaque(x, y) || Math.Abs(dc) > q / 2 || HasAc(levels, b))
+                {
+                    continue;
+                }
+
+                int fromLeft = col == 1 ? errors[b - 1] : x > 0 && _encoder.BlockSum(source, x - 4, y) == colour ? _left[(plane * 2) + row] : 0;
+                int fromAbove = row == 1 ? errors[b - 2] : y > 0 && _encoder.BlockSum(source, x, y - 4) == colour ? _above[(plane * 2) + col] : 0;
+                int carried = fromLeft + fromAbove;
+                int v = dc + ((carried + (carried < 0 ? -2 : 2)) / 4);
+                int l = Math.Min((Math.Abs(v) + (q / 2)) / q, 2048);
+                level[b] = v < 0 ? -l : l;
+                value[b] = (short)(level[b] * q);
+                errors[b] = v - value[b];
+            }
+
+            levels[0] = Vector128.Create(level[0], level[1], level[2], level[3]);
+            dequantised[0] = Vector128.Create(value[0], value[1], value[2], value[3]);
+        }
+
+        private static bool HasAc(ReadOnlySpan<Vector128<int>> levels, int lane)
+        {
+            for (int n = 1; n < 16; n++)
+            {
+                if (levels[n].GetElement(lane) != 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    // Whether a macroblock's 8 x 8 block of a chroma plane is all one value.
+    private bool OneColour(byte[] source, int cx, int cy)
+    {
+        byte first = source[(cy * _strideUv) + cx];
+        for (int y = 0; y < 8; y++)
+        {
+            if (source.AsSpan(((cy + y) * _strideUv) + cx, 8).ContainsAnyExcept(first))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // The sum of a 4 x 4 chroma block's values.
+    private int BlockSum(byte[] source, int cx, int cy)
+    {
+        int sum = 0;
+        for (int y = 0; y < 4; y++)
+        {
+            for (int x = 0; x < 4; x++)
+            {
+                sum += source[((cy + y) * _strideUv) + cx + x];
+            }
+        }
+
+        return sum;
+    }
+
+    // Whether the 8 x 8 picture block under 4 x 4 chroma block (cx, cy) is wholly opaque.
+    private bool Opaque(int cx, int cy) => _opaque is null || _opaque[(cy / 4 * _mbWide * 2) + (cx / 4)];
 
     // The whole-block luma and chroma mode costs, fixed for key frames like the subblock ones.
     private static readonly int[] LumaModeCosts = [.. Enumerable.Range(0, 5).Select(mode => TreeCost(YModeTree, YModeProbabilities, mode))];

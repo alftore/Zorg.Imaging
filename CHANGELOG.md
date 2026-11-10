@@ -6,6 +6,7 @@ Lossy WebP:
 
 - Mode choices weigh how much of each block's texture they keep, not only squared error: at equal file size 0.04 to 0.1 dB higher PSNR and 0.03 to 0.09% higher luma SSIM in every category, for up to 4% more time. Files are up to 1% larger at the same quality.
 - Whether a flat graphic is worth trying lossless is decided from a quarter of its rows first: screenshots that stay lossy encode 10 to 28% faster, with the same files.
+- Flat areas no longer take on a slight tint from what they are predicted from: the chroma DC errors of flat, opaque blocks are carried to their neighbours until they are coded. A cut-out with large flat grey areas is 1.1 to 2 dB closer to the source at equal size at qualities 50 to 80, icons 0.09 to 0.13 dB (luma SSIM 0.01% lower, as the colour costs a few bytes); photos are unchanged.
 - Decoding is 24% faster on one core (a 12-megapixel photo: 279 to 211 ms; 156 to 134 ms on 16 cores), with the same pixels.
 
 Lossless WebP:
