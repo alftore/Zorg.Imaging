@@ -47,17 +47,17 @@ public class RgbaQuantizerTests
         }
     }
 
-    // As the quantiser measures: plain, or over black plus over white.
+    // As the quantiser measures, summed in the same order: plain, or over black plus over white.
     private static float Distance(Vector128<float> a, Vector128<float> b, bool overPage)
     {
         Vector128<float> d = a - b;
+        float da = d.GetElement(0), dr = d.GetElement(1), dg = d.GetElement(2), db = d.GetElement(3);
         if (!overPage)
         {
-            return Vector128.Sum(d * d);
+            return (da * da) + (dr * dr) + ((dg * dg) + (db * db));
         }
 
-        Vector128<float> colour = d.WithElement(0, 0f);
-        Vector128<float> onWhite = colour - Vector128.Create(0f, d.GetElement(0), d.GetElement(0), d.GetElement(0));
-        return Vector128.Sum(colour * colour) + Vector128.Sum(onWhite * onWhite);
+        float wr = dr - da, wg = dg - da, wb = db - da;
+        return (dr * dr) + (dg * dg) + (db * db) + ((wr * wr) + (wg * wg) + (wb * wb));
     }
 }

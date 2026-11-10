@@ -113,24 +113,6 @@ internal static class RgbaQuantizer
         return ((uint)a << 24) | (Channel(1) << 16) | (Channel(2) << 8) | Channel(3);
     }
 
-    // The squared distance between premultiplied colours. With overPage, the difference as it shows over black plus as it
-    // shows over white: over white a premultiplied colour adds 255 less its alpha to each channel, so the difference there
-    // is the colour difference less the alpha difference. An error in alpha then counts as much as the page shows it,
-    // where the plain distance counted it once whatever the colour. It is still a Euclidean distance (in six
-    // dimensions), so means and the candidate bounds below hold.
-    private static float Distance(Vector128<float> a, Vector128<float> b, bool overPage)
-    {
-        Vector128<float> d = a - b;
-        if (!overPage)
-        {
-            return Vector128.Sum(d * d);
-        }
-
-        Vector128<float> colour = d.WithElement(0, 0f);
-        Vector128<float> onWhite = colour - Vector128.Create(0f, d.GetElement(0), d.GetElement(0), d.GetElement(0));
-        return Vector128.Sum(colour * colour) + Vector128.Sum(onWhite * onWhite);
-    }
-
     // The boxes, split until there are enough or none can be split: each step takes the box with the largest squared
     // error and cuts its widest channel at the weighted median.
     private static Vector128<float>[] MedianCut(Cells cells, int colours)
@@ -300,13 +282,24 @@ internal static class RgbaQuantizer
     // cell the colours that can be nearest to some value in it; cells are filled as first met, by any thread, each the
     // same whoever fills it. The cells are held in a block per alpha level, made when first needed: an opaque picture
     // uses one block of 32,768 cells instead of all 32 (zeroing the whole cache was a fifth of a small icon's encode).
-    internal sealed class NearestColour(Vector128<float>[] colours, bool overPage)
+    // A cell keeps its colours a channel at a time, so they are measured eight at a time.
+    internal sealed class NearestColour
     {
-        private readonly int[]?[]?[] _cache = new int[]?[]?[32];
+        private readonly Vector128<float>[] _colours;
+        private readonly bool _overPage;
+        private readonly Cell?[]?[] _cache = new Cell?[]?[32];
         private readonly System.Collections.Concurrent.ConcurrentQueue<int> _filled = new();
 
-        // The colours a channel at a time, padded to a whole number of vectors with colours too far to be candidates.
-        private readonly float[][] _channels = Channels(colours);
+        // All the colours a channel at a time, as a cell keeps its own.
+        private readonly float[] _channels;
+
+        public NearestColour(Vector128<float>[] colours, bool overPage)
+        {
+            _colours = colours;
+            _overPage = overPage;
+            _channels = new float[Padded(colours.Length) * 4];
+            Load();
+        }
 
         // Forgets the cells filled so far, for colours that have moved (the array is the same, its values changed).
         public void Reset()
@@ -316,13 +309,7 @@ internal static class RgbaQuantizer
                 _cache[key >> 15]![key & 0x7FFF] = null;
             }
 
-            for (int k = 0; k < colours.Length; k++)
-            {
-                for (int lane = 0; lane < 4; lane++)
-                {
-                    _channels[lane][k] = colours[k].GetElement(lane);
-                }
-            }
+            Load();
         }
 
         public int Find(Vector128<float> p)
@@ -330,124 +317,163 @@ internal static class RgbaQuantizer
             Vector128<int> level = Vector128.Min(Vector128.Max(Vector128.ConvertToInt32(p) >> 3, Vector128<int>.Zero), Vector128.Create(31));
             int alpha = level.GetElement(0);
             int key = (level.GetElement(1) << 10) | (level.GetElement(2) << 5) | level.GetElement(3);
-            int[]?[] block = _cache[alpha] ?? Block(alpha);
-            int[]? candidates = block[key];
-            if (candidates is null)
+            Cell?[] block = _cache[alpha] ?? Block(alpha);
+            Cell? cell = block[key];
+            if (cell is null)
             {
-                candidates = Candidates(Vector128.ConvertToSingle((level << 3) + Vector128.Create(4)));
-                block[key] = candidates;
+                cell = Fill(Vector128.ConvertToSingle((level << 3) + Vector128.Create(4)));
+                block[key] = cell;
                 _filled.Enqueue((alpha << 15) | key);
             }
 
-            if (candidates.Length == 1)
+            int[] index = cell.Index;
+            if (index.Length == 1)
             {
-                return candidates[0];
+                return index[0];
             }
 
-            int best = candidates[0];
-            float least = float.MaxValue;
-            foreach (int k in candidates)
+            float[] channels = cell.Channels;
+            int stride = channels.Length / 4;
+            if (stride == Vector256<float>.Count)
             {
-                float d = Distance(colours[k], p, overPage);
-                if (d < least)
-                {
-                    (least, best) = (d, k);
-                }
+                Vector256<float> d = Distances(channels, stride, 0, p, _overPage);
+                return index[System.Numerics.BitOperations.TrailingZeroCount(Vector256.Equals(d, Vector256.Create(Least(d))).ExtractMostSignificantBits())];
             }
 
-            return best;
-        }
-
-        // The colours, in index order, that can be nearest to some value within 4 a channel of the centre: those within
-        // the distance of the colour nearest the centre plus twice the farthest a value lies from it (4 a channel, so 8
-        // in all). The distances to all colours are taken eight at a time; they can differ from Distance's in the last
-        // bit, which the 0.01 of slack in the radius covers, so the candidates always hold the nearest colour of every
-        // value in the cell.
-        private int[] Candidates(Vector128<float> centre)
-        {
-            int length = _channels[0].Length;
-            Span<float> distances = length <= 256 ? stackalloc float[256] : new float[length];
-            Vector256<float> a = Vector256.Create(centre.GetElement(0));
-            Vector256<float> r = Vector256.Create(centre.GetElement(1));
-            Vector256<float> g = Vector256.Create(centre.GetElement(2));
-            Vector256<float> b = Vector256.Create(centre.GetElement(3));
+            Span<float> distances = stackalloc float[stride];
             Vector256<float> least = Vector256.Create(float.MaxValue);
-            for (int k = 0; k < length; k += Vector256<float>.Count)
+            for (int k = 0; k < stride; k += Vector256<float>.Count)
             {
-                Vector256<float> da = Vector256.Create(_channels[0], k) - a;
-                Vector256<float> dr = Vector256.Create(_channels[1], k) - r;
-                Vector256<float> dg = Vector256.Create(_channels[2], k) - g;
-                Vector256<float> db = Vector256.Create(_channels[3], k) - b;
-                Vector256<float> d;
-                if (overPage)
-                {
-                    Vector256<float> wr = dr - da;
-                    Vector256<float> wg = dg - da;
-                    Vector256<float> wb = db - da;
-                    d = (dr * dr) + (dg * dg) + (db * db) + ((wr * wr) + (wg * wg) + (wb * wb));
-                }
-                else
-                {
-                    d = (da * da) + (dr * dr) + ((dg * dg) + (db * db));
-                }
-
+                Vector256<float> d = Distances(channels, stride, k, p, _overPage);
                 d.CopyTo(distances[k..]);
                 least = Vector256.Min(least, d);
             }
 
-            float nearest = float.MaxValue;
-            for (int i = 0; i < Vector256<float>.Count; i++)
+            Vector256<float> nearest = Vector256.Create(Least(least));
+            int at = 0;
+            uint mask;
+            while ((mask = Vector256.Equals(Vector256.Create<float>(distances[at..]), nearest).ExtractMostSignificantBits()) == 0)
             {
-                nearest = Math.Min(nearest, least.GetElement(i));
+                at += Vector256<float>.Count;
             }
 
-            float radius = MathF.Sqrt(nearest) + (overPage ? Reach : 16.01f);
-            Vector256<float> limit = Vector256.Create(radius * radius);
-            Span<uint> masks = stackalloc uint[(length / Vector256<float>.Count) + 1];
-            int count = 0;
-            for (int k = 0, m = 0; k < length; k += Vector256<float>.Count, m++)
+            return index[at + System.Numerics.BitOperations.TrailingZeroCount(mask)];
+        }
+
+        // The cell around a centre: the colours, in index order, that can be nearest to some value within 4 a channel of
+        // it. Those are within the distance of the colour nearest the centre plus twice the farthest a value lies from
+        // it (up to 4 a channel; see Reach), with 0.01 to spare.
+        private Cell Fill(Vector128<float> centre)
+        {
+            int stride = _channels.Length / 4;
+            Span<float> distances = stackalloc float[stride];
+            Vector256<float> least = Vector256.Create(float.MaxValue);
+            for (int k = 0; k < stride; k += Vector256<float>.Count)
             {
-                masks[m] = Vector256.LessThanOrEqual(Vector256.Create<float>(distances[k..]), limit).ExtractMostSignificantBits();
+                Vector256<float> d = Distances(_channels, stride, k, centre, _overPage);
+                d.CopyTo(distances[k..]);
+                least = Vector256.Min(least, d);
+            }
+
+            float radius = MathF.Sqrt(Least(least)) + (_overPage ? Reach : 16.01f);
+            Vector256<float> limit = Vector256.Create(radius * radius);
+            Span<uint> masks = stackalloc uint[stride / Vector256<float>.Count];
+            int count = 0;
+            for (int m = 0; m < masks.Length; m++)
+            {
+                masks[m] = Vector256.LessThanOrEqual(Vector256.Create<float>(distances[(m * Vector256<float>.Count)..]), limit).ExtractMostSignificantBits();
                 count += System.Numerics.BitOperations.PopCount(masks[m]);
             }
 
             // Padding is never within the radius, so every bit set is a colour.
-            int[] candidates = new int[count];
+            int[] index = new int[count];
             count = 0;
-            for (int m = 0; m < length / Vector256<float>.Count; m++)
+            for (int m = 0; m < masks.Length; m++)
             {
                 for (uint bits = masks[m]; bits != 0; bits &= bits - 1)
                 {
-                    candidates[count++] = (m * Vector256<float>.Count) + System.Numerics.BitOperations.TrailingZeroCount(bits);
+                    index[count++] = (m * Vector256<float>.Count) + System.Numerics.BitOperations.TrailingZeroCount(bits);
                 }
             }
 
-            return candidates;
+            int padded = Padded(count);
+            float[] channels = new float[padded * 4];
+            Array.Fill(channels, Padding);
+            for (int i = 0; i < count; i++)
+            {
+                for (int lane = 0; lane < 4; lane++)
+                {
+                    channels[(lane * padded) + i] = _channels[(lane * stride) + index[i]];
+                }
+            }
+
+            return new Cell(index, channels);
         }
 
-        private static float[][] Channels(Vector128<float>[] colours)
+        private void Load()
         {
-            int length = Math.Max(colours.Length + Vector256<float>.Count - 1, 1) / Vector256<float>.Count * Vector256<float>.Count;
-            float[][] channels = new float[4][];
-            for (int lane = 0; lane < 4; lane++)
+            int stride = _channels.Length / 4;
+            Array.Fill(_channels, Padding);
+            for (int k = 0; k < _colours.Length; k++)
             {
-                channels[lane] = new float[length];
-                Array.Fill(channels[lane], 1e6f);
-                for (int k = 0; k < colours.Length; k++)
+                for (int lane = 0; lane < 4; lane++)
                 {
-                    channels[lane][k] = colours[k].GetElement(lane);
+                    _channels[(lane * stride) + k] = _colours[k].GetElement(lane);
                 }
             }
-
-            return channels;
         }
 
         // The block for an alpha level; threads that make one at the same time all use the first stored.
-        private int[]?[] Block(int alpha)
+        private Cell?[] Block(int alpha)
         {
-            int[]?[] block = new int[]?[1 << 15];
+            var block = new Cell?[1 << 15];
             return System.Threading.Interlocked.CompareExchange(ref _cache[alpha], block, null) ?? block;
         }
+
+        // A whole number of vectors, at least one.
+        private static int Padded(int count) => Math.Max((count + Vector256<float>.Count - 1) / Vector256<float>.Count, 1) * Vector256<float>.Count;
+
+        private static float Least(Vector256<float> v)
+        {
+            Vector128<float> m = Vector128.Min(v.GetLower(), v.GetUpper());
+            m = Vector128.Min(m, Vector128.Shuffle(m, Vector128.Create(2, 3, 0, 1)));
+            m = Vector128.Min(m, Vector128.Shuffle(m, Vector128.Create(1, 0, 3, 2)));
+            return m.ToScalar();
+        }
+
+        // The colours of a cell, its candidates and their channels (each padded to a whole number of vectors).
+        private sealed class Cell(int[] index, float[] channels)
+        {
+            public int[] Index { get; } = index;
+
+            public float[] Channels { get; } = channels;
+        }
+    }
+
+    // A colour far from every other, filling vectors past the last colour.
+    private const float Padding = 1e6f;
+
+    // The squared distances from p to eight colours, held a channel at a time from k (a lane every stride). Colours are
+    // compared premultiplied. With overPage, the distance is the difference as it shows over black plus as it shows over
+    // white: over white a premultiplied colour adds 255 less its alpha to each channel, so the difference there is the
+    // colour difference less the alpha difference. An error in alpha then counts as much as the page shows it, where
+    // the plain distance counted it once whatever the colour. It is still a Euclidean distance (in six dimensions), so
+    // means and the candidate bounds hold. The sums run in a fixed order, so equal colours tie exactly.
+    internal static Vector256<float> Distances(float[] channels, int stride, int k, Vector128<float> p, bool overPage)
+    {
+        Vector256<float> da = Vector256.Create(channels, k) - Vector256.Create(p.GetElement(0));
+        Vector256<float> dr = Vector256.Create(channels, stride + k) - Vector256.Create(p.GetElement(1));
+        Vector256<float> dg = Vector256.Create(channels, (2 * stride) + k) - Vector256.Create(p.GetElement(2));
+        Vector256<float> db = Vector256.Create(channels, (3 * stride) + k) - Vector256.Create(p.GetElement(3));
+        if (!overPage)
+        {
+            return (da * da) + (dr * dr) + ((dg * dg) + (db * db));
+        }
+
+        Vector256<float> wr = dr - da;
+        Vector256<float> wg = dg - da;
+        Vector256<float> wb = db - da;
+        return (dr * dr) + (dg * dg) + (db * db) + ((wr * wr) + (wg * wg) + (wb * wb));
     }
 
     // Twice the farthest a value in a cell lies from its centre under the over-the-page distance: up to 4 in each channel
