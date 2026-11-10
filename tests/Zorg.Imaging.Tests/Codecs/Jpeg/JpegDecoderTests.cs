@@ -40,9 +40,9 @@ public class JpegDecoderTests
         Assert.Equal(channels == 1 ? PixelFormat.L8 : PixelFormat.Rgb24, image.PixelFormat);
         Assert.Equal(ColorSpace.Srgb, image.ColorSpace);
 
-        // Our float inverse DCT against libjpeg's integer one: a level or two apart at most.
+        // The same integer inverse DCT, upsampling and colour conversion as djpeg's defaults: every byte the same.
         (int max, double mean) = Compare(image.GetPixelBytes(), expected);
-        Assert.True(max <= 4 && mean < 0.6, $"{name}: largest difference {max}, mean {mean:0.###}");
+        Assert.True(max == 0, $"{name}: largest difference {max}, mean {mean:0.###}");
     }
 
     [Theory]

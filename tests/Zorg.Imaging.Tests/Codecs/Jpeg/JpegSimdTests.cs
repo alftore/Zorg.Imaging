@@ -70,7 +70,8 @@ public class JpegSimdTests
         short[] sums = new short[columns];
         JpegColour.ColumnSums(near, far, vertical, sums);
         byte[] output = new byte[outputWidth];
-        JpegColour.UpsampleTwice(sums, output);
+        (int evenBias, int oddBias) = vertical ? (8, 7) : (4, 8);
+        JpegColour.UpsampleTwice(sums, output, evenBias, oddBias);
 
         for (int i = 0; i < columns; i++)
         {
@@ -81,7 +82,7 @@ public class JpegSimdTests
         {
             int i = x / 2;
             int neighbour = Math.Clamp(i + ((x & 1) == 0 ? -1 : 1), 0, columns - 1);
-            Assert.Equal((byte)(((3 * sums[i]) + sums[neighbour] + 8) >> 4), output[x]);
+            Assert.Equal((byte)(((3 * sums[i]) + sums[neighbour] + ((x & 1) == 0 ? evenBias : oddBias)) >> 4), output[x]);
         }
     }
 
