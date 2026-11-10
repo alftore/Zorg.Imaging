@@ -8,6 +8,11 @@
 - Lossy WebP's mode choices weigh how much of each block's texture they keep, not only their squared error: at equal file size 0.04 to 0.1 dB higher PSNR and 0.03 to 0.09% higher luma SSIM in every image category, for up to 4% more time (2 to 3% on photos at quality 80, 4% at 50). Files are up to 1% larger at the same quality.
 - Lossy WebP decides whether to try lossless for a flat graphic from a quarter of its rows first, so screenshots that stay lossy skip the full trial: 10 to 23% less time on one core and 24 to 28% on 16, with the same files.
 - PNG's default filter choice also tries no filter, which flat graphics often compress best with: game and web screenshots and cut-outs 1.5 to 2% smaller, others unchanged, about 3% more time.
+Lossless WebP:
+
+- Faster on small images: on one core at the default effort, 256 x 256 textures encode 45% faster (0.1% larger, from coarser code tiles below effort 5) and 64 x 64 icons 22 to 36% faster. Photos are 9% faster; large cut-outs about as fast as before.
+- The copy search passes over runs of one colour instead of stepping through them, so it reaches further back: icons and cut-outs 0.3 to 1% smaller, the most at effort 6.
+- Tiles are grouped under shared codes by a closer estimate of each code's header: icons, textures and cut-outs 0.2 to 0.6% smaller.
 
 ## 0.1.0-preview.5
 
