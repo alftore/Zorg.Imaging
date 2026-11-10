@@ -76,11 +76,9 @@ internal sealed class JpegStream : IDisposable
         _unit = unit;
         for (int i = 0; i < _components.Length; i++)
         {
-            short[] buffer = _buffers[_set][i];
-
-            // The decoder writes only the coefficients that aren't zero, so the buffer starts clear, as a new one would.
-            Array.Clear(buffer);
-            _components[i].Coefficients = buffer;
+            // The decoder writes only the coefficients that aren't zero, so the buffer must start clear: it is new, or
+            // the last band's transform cleared it (End).
+            _components[i].Coefficients = _buffers[_set][i];
             _components[i].FirstRow = unit * _rowsPerUnit[i];
         }
     }
@@ -95,7 +93,7 @@ internal sealed class JpegStream : IDisposable
             for (int i = 0; i < _components.Length; i++)
             {
                 int first = unit * _rowsPerUnit[i];
-                _planes[i].Transform(_components[i], buffers[i], first, first, units * _rowsPerUnit[i]);
+                _planes[i].Transform(_components[i], buffers[i], first, first, units * _rowsPerUnit[i], clear: true);
             }
         }
 

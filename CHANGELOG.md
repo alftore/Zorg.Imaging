@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Baseline JPEG decoding clears each band's coefficients block by block right after the inverse DCT, while they are in cache, instead of all at once before the band, and takes luma rows straight from the plane rather than copying them: the same pixels, copying and clearing down from 5.5% to 2.7% of a 12-megapixel decode, run-to-run spikes gone (median 102 to 72 ms on one core).
 - Lossy WebP decodes about 22% faster on one core (12-megapixel photo, 283 to 220 ms) with the same pixels: the boolean decoder works on locals for a whole block, and the inverse transform, the loop filter's loads and stores and the chroma upsampling run as vectors.
 - Lossy WebP decides whether to try lossless for a flat graphic from a quarter of its rows first, so screenshots that stay lossy skip the full trial: 10 to 23% less time on one core and 24 to 28% on 16, with the same files.
 - PNG's default filter choice also tries no filter, which flat graphics often compress best with: game and web screenshots and cut-outs 1.5 to 2% smaller, others unchanged, about 3% more time.

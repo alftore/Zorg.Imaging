@@ -195,6 +195,7 @@ internal static class JpegColour
         return Vector256.ConvertToSingle(Vector256.Create(Vector128.WidenLower(shorts), Vector128.WidenUpper(shorts)).AsInt32());
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static (Vector256<int> Low, Vector256<int> High) Widen(Vector128<byte> bytes)
     {
         Vector256<ushort> shorts = Vector256.Create(Vector128.WidenLower(bytes), Vector128.WidenUpper(bytes));
@@ -203,6 +204,7 @@ internal static class JpegColour
     }
 
     // Clamps 16 ints to 0..255 and narrows them to bytes, in order.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector128<byte> Pack(Vector256<int> low, Vector256<int> high, Vector256<int> top)
     {
         low = Vector256.Min(Vector256.Max(low, Vector256<int>.Zero), top);
@@ -211,6 +213,7 @@ internal static class JpegColour
         return Vector128.Narrow(shorts.GetLower(), shorts.GetUpper());
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector128<byte> Shuffle(Vector128<byte> source, Vector128<byte> mask) =>
         Ssse3.IsSupported ? Ssse3.Shuffle(source, mask) : AdvSimd.Arm64.VectorTableLookup(source, mask);
 

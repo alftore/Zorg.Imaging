@@ -90,18 +90,22 @@ internal static class JpegOutput
                 int end = (int)((long)height * (band + 1) / bands);
                 for (int y = (int)((long)height * band / bands); y < end; y++)
                 {
-                    for (int i = 0; i < planes.Length; i++)
-                    {
-                        planes[i].Row(y, rows[i]);
-                    }
-
                     if (cmyk is not null)
                     {
+                        for (int i = 0; i < planes.Length; i++)
+                        {
+                            planes[i].Row(y, rows[i]);
+                        }
+
                         cmyk.WriteRow(rows, image.GetRowBytes(y), image.PixelFormat, width);
+                    }
+                    else if (grey)
+                    {
+                        WriteRow(image, y, planes[0].View(y, rows[0]), default, default, grey: true, isRgb);
                     }
                     else
                     {
-                        WriteRow(image, y, rows, grey, isRgb);
+                        WriteRow(image, y, planes[0].View(y, rows[0]), planes[1].View(y, rows[1]), planes[2].View(y, rows[2]), grey: false, isRgb);
                     }
                 }
             });
@@ -115,14 +119,14 @@ internal static class JpegOutput
         }
     }
 
-    private static void WriteRow(Image image, int y, byte[][] rows, bool grey, bool isRgb)
+    private static void WriteRow(Image image, int y, ReadOnlySpan<byte> c0, ReadOnlySpan<byte> c1, ReadOnlySpan<byte> c2, bool grey, bool isRgb)
     {
         Span<byte> output = image.GetRowBytes(y);
         int width = image.Width;
         PixelFormat format = image.PixelFormat;
         if (grey)
         {
-            ReadOnlySpan<byte> l = rows[0];
+            ReadOnlySpan<byte> l = c0;
             if (format == PixelFormat.L8)
             {
                 l[..width].CopyTo(output);
@@ -137,9 +141,6 @@ internal static class JpegOutput
             return;
         }
 
-        ReadOnlySpan<byte> c0 = rows[0];
-        ReadOnlySpan<byte> c1 = rows[1];
-        ReadOnlySpan<byte> c2 = rows[2];
         if (format == PixelFormat.Rgb24 && !isRgb)
         {
             // The usual case: 16 pixels at a time where the hardware allows, then the rest one by one.
@@ -285,10 +286,29 @@ internal static class JpegOutput
         /// Transforms block rows <paramref name="first"/> to <paramref name="first"/> + <paramref name="count"/> of
         /// <paramref name="component"/> into the plane, stopping at the last row that holds samples. The coefficients
         /// are passed rather than read from the component, whose buffer a streaming decode may already have moved on.
+        /// With <paramref name="clear"/>, the coefficients of the <paramref name="count"/> block rows are left zero, each
+        /// block cleared just after its transform while it is still in cache, ready for the next band.
         /// </summary>
-        public void Transform(JpegComponent component, short[] coefficients, int coefficientsFirstRow, int first, int count)
+        public void Transform(JpegComponent component, short[] coefficients, int coefficientsFirstRow, int first, int count, bool clear = false)
         {
             int last = Math.Min(first + count, component.UsedHigh);
+            if (clear)
+            {
+                // The rows past the last that holds samples (only in a frame's last band) and the padding blocks right
+                // of the used ones are never transformed: cleared here.
+                int blocksWide = component.BlocksWide;
+                int rows = count;
+                int transformed = Math.Max(last - first, 0);
+                coefficients.AsSpan((first - coefficientsFirstRow + transformed) * blocksWide * 64, (rows - transformed) * blocksWide * 64).Clear();
+                if (component.UsedWide < blocksWide)
+                {
+                    for (int by = first; by < last; by++)
+                    {
+                        coefficients.AsSpan((((by - coefficientsFirstRow) * blocksWide) + component.UsedWide) * 64, (blocksWide - component.UsedWide) * 64).Clear();
+                    }
+                }
+            }
+
             if (last <= first)
             {
                 return;
@@ -310,7 +330,7 @@ internal static class JpegOutput
                 {
                     for (int bx = 0; bx < component.UsedWide; bx++)
                     {
-                        ReadOnlySpan<short> block = coefficients.AsSpan((((by - coefficientsFirstRow) * component.BlocksWide) + bx) * 64, 64);
+                        Span<short> block = coefficients.AsSpan((((by - coefficientsFirstRow) * component.BlocksWide) + bx) * 64, 64);
                         Span<byte> target = samples.AsSpan((by * high * stride) + (bx * wide));
                         if (reduced is not null)
                         {
@@ -320,9 +340,29 @@ internal static class JpegOutput
                         {
                             JpegIdct.Transform(block, quantisation, wide, high, target, stride);
                         }
+
+                        if (clear)
+                        {
+                            block.Clear();
+                        }
                     }
                 }
             });
+        }
+
+        /// <summary>
+        /// Row <paramref name="y"/> at full size: the plane's own row when it needs no upsampling, else
+        /// <paramref name="scratch"/> filled.
+        /// </summary>
+        public ReadOnlySpan<byte> View(int y, byte[] scratch)
+        {
+            if (_factorX == 1 && _factorY == 1)
+            {
+                return _samples.AsSpan(Math.Min(y, _high - 1) * _stride, scratch.Length);
+            }
+
+            Row(y, (Span<byte>)scratch);
+            return scratch;
         }
 
         public void Row(int y, Span<byte> output)
