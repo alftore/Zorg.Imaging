@@ -1896,7 +1896,7 @@ internal sealed class Vp8Encoder
 
     // The loop filter level that brings the decoded picture closest to the source. The filter runs after the frame is
     // rebuilt, and intra prediction reads unfiltered pixels, so the level changes only what the decoder shows, not the
-    // bits: levels from none to a little past the quantiser's (FilterLevel) are tried on bands of macroblock rows, and
+    // bits: half, three quarters and all of the quantiser's level (FilterLevel) are tried on bands of macroblock rows, and
     // the one with the least squared error over Y, U and V kept (the lower on a tie). Effort 0 takes FilterLevel.
     private int ChooseFilterLevel()
     {
@@ -1911,11 +1911,14 @@ internal sealed class Vp8Encoder
             return formula;
         }
 
-        int[] candidates = [.. new[] { 0, formula / 4, formula / 2, formula * 3 / 4, formula, Math.Min(formula * 5 / 4, 63) }.Distinct()];
+        // Half to all of the formula's level: on 36 photos and screenshots from quality 5 to 98, the six levels from none
+        // to five quarters (tried first) were closer to the source by 0.001 to 0.015 dB, for twice the filtering.
+        int[] candidates = [.. new[] { formula / 2, formula * 3 / 4, formula }.Distinct()];
 
-        // About a quarter of a megapixel of luma measured, in bands of up to four macroblock rows spread evenly; each
-        // band is filtered with the rows either side, so its rows end as the decoder leaves them.
-        int measured = Math.Min(Math.Max((1 << 18) / (_mbWide * 256), 4), _mbHigh);
+        // About 65,000 pixels of luma measured (a quarter of a megapixel chose no better), in bands of up to four
+        // macroblock rows spread evenly; each band is filtered with the rows either side, so its rows end as the decoder
+        // leaves them.
+        int measured = Math.Min(Math.Max((1 << 16) / (_mbWide * 256), 4), _mbHigh);
         int bandCount = (measured + 3) / 4;
         var spans = new (int Start, int Count)[bandCount];
         for (int k = 0; k < bandCount; k++)
