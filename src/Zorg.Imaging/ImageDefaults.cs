@@ -7,7 +7,10 @@ namespace Zorg.Imaging;
 /// <example><code>ImageDefaults.MaxDegreeOfParallelism = 1; // one core per request, for a busy server</code></example>
 public static class ImageDefaults
 {
+    private static readonly Lock CodecsLock = new();
     private static int _maxDegreeOfParallelism = Environment.ProcessorCount;
+    private static ImageCodecs _codecs = ImageCodecs.Empty;
+    private static bool _codecsUsed;
 
     /// <summary>
     /// How many cores one decode, resize or encode may use at once. Defaults to <see cref="Environment.ProcessorCount"/>,
@@ -36,6 +39,53 @@ public static class ImageDefaults
         {
             ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
             Volatile.Write(ref _maxDegreeOfParallelism, value);
+        }
+    }
+
+    /// <summary>
+    /// The codecs from other packages that decoding and identifying use when the options don't name any. Set it once at
+    /// start-up, before the first image is read: it can't change after a decode or identify has used it, so every call
+    /// sees the same codecs. For apps; a library should pass <see cref="DecodeOptions.Codecs"/> instead.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">The value is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">An image has already been read with the default codecs.</exception>
+    /// <example><code>ImageDefaults.Codecs = ImageCodecs.Empty.Add(SystemCodecs.Heif, SystemCodecs.Avif);</code></example>
+    public static ImageCodecs Codecs
+    {
+        get => Volatile.Read(ref _codecs);
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            lock (CodecsLock)
+            {
+                if (_codecsUsed)
+                {
+                    throw new InvalidOperationException("ImageDefaults.Codecs can't change after an image has been read with it. Set it at start-up.");
+                }
+
+                Volatile.Write(ref _codecs, value);
+            }
+        }
+    }
+
+    /// <summary>The default codecs, fixed from now on.</summary>
+    /// <returns>The codecs.</returns>
+    internal static ImageCodecs UseCodecs()
+    {
+        lock (CodecsLock)
+        {
+            _codecsUsed = true;
+            return _codecs;
+        }
+    }
+
+    /// <summary>For tests: lets the default codecs be set again.</summary>
+    internal static void ResetCodecs()
+    {
+        lock (CodecsLock)
+        {
+            _codecsUsed = false;
+            _codecs = ImageCodecs.Empty;
         }
     }
 }

@@ -23,10 +23,7 @@ internal static class Identifier
 
         if (!format.IsSupported)
         {
-            return IdentifyResult.Failed(
-                IdentifyStatus.UnsupportedFormat,
-                format,
-                string.Create(CultureInfo.InvariantCulture, $"{format.Name} images aren't supported. Use PNG, JPEG, GIF, WebP, BMP or TIFF."));
+            return await IdentifyWithCodecAsync(format, reader, options, cancellationToken).ConfigureAwait(false);
         }
 
         reader.FormatName = format.Name;
@@ -42,6 +39,25 @@ internal static class Identifier
         }
     }
 
+    // A format the library recognises but doesn't read: a codec from another package, if one was added.
+    private static async ValueTask<IdentifyResult> IdentifyWithCodecAsync(ImageFormat format, HeaderReader reader, IdentifyOptions options, CancellationToken cancellationToken)
+    {
+        reader.FormatName = format.Name;
+        try
+        {
+            ImageCodec codec = PluginCodecs.Find(options.Codecs, format)
+                ?? throw new UnsupportedImageFormatException(
+                    string.Create(CultureInfo.InvariantCulture, $"{format.Name} images aren't supported. Use PNG, JPEG, GIF, WebP, BMP or TIFF."),
+                    format);
+            ReadOnlyMemory<byte> head = await reader.PeekHeadAsync(cancellationToken).ConfigureAwait(false);
+            return IdentifyResult.Ok(PluginCodecs.ReadHeader(codec, head.Span, options.Limits, cancellationToken));
+        }
+        catch (ImageException failure)
+        {
+            return IdentifyResult.Failed(failure.Status, format, failure.Message);
+        }
+    }
+
     private static ValueTask<ImageInfo> ReadHeadersAsync(ImageFormat format, HeaderReader reader, IdentifyOptions options, CancellationToken cancellationToken) =>
         CodecTable.For(format) is { } codec
             ? codec.ReadHeaders(reader, options, cancellationToken)
@@ -49,7 +65,7 @@ internal static class Identifier
                 string.Create(CultureInfo.InvariantCulture, $"{format.Name} images aren't supported."),
                 format);
 
-    private static void CheckLimits(ImageInfo info, ImageLimits limits)
+    internal static void CheckLimits(ImageInfo info, ImageLimits limits)
     {
         if (info.Width <= 0 || info.Height <= 0)
         {

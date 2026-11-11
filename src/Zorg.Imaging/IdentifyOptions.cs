@@ -45,4 +45,11 @@ public sealed class IdentifyOptions
     /// </summary>
     /// <example><code>var options = new IdentifyOptions { ReadColorSpace = true };</code></example>
     public bool ReadColorSpace { get; init; }
+
+    /// <summary>
+    /// Codecs from other packages for formats the library doesn't read itself, such as HEIC. <see langword="null"/>
+    /// (the default) uses <see cref="ImageDefaults.Codecs"/>.
+    /// </summary>
+    /// <example><code>var options = new IdentifyOptions { Codecs = ImageCodecs.Empty.Add(heicCodec) };</code></example>
+    public ImageCodecs? Codecs { get; init; }
 }

@@ -86,6 +86,13 @@ public sealed class DecodeOptions
     /// For shrink-on-load: given the upright size, the size the first step will make. A decoder that can decode
     /// smaller (JPEG) then does, staying at least twice that size. Set only by <see cref="ImagePipeline"/>.
     /// </summary>
+    /// <summary>
+    /// Codecs from other packages for formats the library doesn't decode itself, such as HEIC. <see langword="null"/>
+    /// (the default) uses <see cref="ImageDefaults.Codecs"/>.
+    /// </summary>
+    /// <example><code>var options = new DecodeOptions { Codecs = ImageCodecs.Empty.Add(heicCodec) };</code></example>
+    public ImageCodecs? Codecs { get; init; }
+
     internal Func<int, int, (int Width, int Height)>? ShrinkTarget { get; init; }
 
     internal DecodeOptions WithShrinkTarget(Func<int, int, (int Width, int Height)>? target) => new()
@@ -94,6 +101,7 @@ public sealed class DecodeOptions
         PixelFormat = PixelFormat,
         ApplyOrientation = ApplyOrientation,
         MaxDegreeOfParallelism = MaxDegreeOfParallelism,
+        Codecs = Codecs,
         ShrinkTarget = target,
     };
 }
