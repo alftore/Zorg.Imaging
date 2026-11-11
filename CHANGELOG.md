@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.1.0-preview.6
 
 Faster and closer to the C tools. Against cwebp at quality 80 on 167 test images, lossy files are 1.15 dB closer to the source at the same size and encode in 0.99 times cwebp's time on one core; lossless files are 0.6% smaller than cwebp's. JPEG decoding now gives the same pixels as libjpeg-turbo's djpeg at full size. Lossy WebP, lossless WebP, GIF and lossy PNG output differs from preview.5's.
