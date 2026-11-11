@@ -10,7 +10,8 @@ namespace Zorg.Imaging.Tests.Codecs.Jpeg;
 
 /// <summary>
 /// Checks the JPEG decoder against libjpeg-turbo: <c>cjpeg</c> writes files in every mode it has, <c>djpeg</c> decodes
-/// them, and our decode must agree within the rounding of a float against an integer inverse DCT.
+/// them, and our full-size decode must be byte for byte the same (the same integer inverse DCT, upsampling and colour
+/// conversion); reduced sizes, made differently, must be close.
 /// </summary>
 public class JpegOracleTests
 {
@@ -87,7 +88,7 @@ public class JpegOracleTests
 
             (int max, double mean) = JpegTestFiles.Compare(image.GetPixelBytes(), expected);
             bool fourToOne = mode.Contains("4x1", StringComparison.Ordinal);
-            bool ok = denominator == 1 ? max <= 6 && mean < 0.75
+            bool ok = denominator == 1 ? max == 0
                 : squareChroma ? max <= 12 && mean < 1.5
                 : max <= (fourToOne ? 40 : 24) && mean < (fourToOne ? 6 : 2.5);
             Assert.True(ok, $"{mode} {width}x{height} at 1/{denominator}: largest difference {max}, mean {mean:0.###}");

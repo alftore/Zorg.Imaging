@@ -20,6 +20,7 @@ GIF and lossy PNG:
 PNG and JPEG:
 
 - PNG's default filter choice also tries no filter: game and web screenshots and cut-outs 1.5 to 2% smaller, others unchanged.
+- JPEG decoding uses libjpeg's integer inverse DCT and rounds chroma upsampling as libjpeg does, so a full-size decode is byte for byte what libjpeg-turbo's djpeg gives (before, 7 to 8% of bytes were 1 to 4 levels off), and is faster: a 12-megapixel photo 70 to 54 ms on one core, 34 to 28 ms on 16; at 1/2 scale 70 to 44 ms.
 - JPEG decoding clears coefficients as it goes and reads luma rows in place: the same pixels, with steadier one-core times (median 102 to 70 ms on a 12-megapixel photo). WebP and GIF decoding write 8-bit output four pixels at a time.
 
 ## 0.1.0-preview.5

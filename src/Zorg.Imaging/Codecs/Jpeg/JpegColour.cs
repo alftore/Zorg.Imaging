@@ -101,9 +101,11 @@ internal static class JpegColour
     }
 
     /// <summary>
-    /// The horizontal half: output 2i is (3 x sum i + sum i-1 + 8) / 16 and output 2i+1 uses sum i+1, edges repeated.
+    /// The horizontal half: output 2i is (3 x sum i + sum i-1 + <paramref name="evenBias"/>) / 16 and output 2i+1 uses
+    /// sum i+1 and <paramref name="oddBias"/>, edges repeated. libjpeg rounds the two outputs of a pair differently
+    /// (8 and 7 after a vertical step, 4 and 8 without one), so that the rounding errors don't all lean one way.
     /// </summary>
-    public static void UpsampleTwice(ReadOnlySpan<short> sums, Span<byte> output)
+    public static void UpsampleTwice(ReadOnlySpan<short> sums, Span<byte> output, int evenBias, int oddBias)
     {
         int columns = sums.Length;
         int last = columns - 1;
@@ -113,41 +115,42 @@ internal static class JpegColour
             // Columns 1 .. columns-2 have both neighbours; eight at a time, as long as two whole output pixels fit.
             ref short s0 = ref MemoryMarshal.GetReference(sums);
             ref byte o0 = ref MemoryMarshal.GetReference(output);
-            Vector128<short> eight = Vector128.Create((short)8);
+            Vector128<short> evenBiases = Vector128.Create((short)evenBias);
+            Vector128<short> oddBiases = Vector128.Create((short)oddBias);
             Vector128<byte> zip = Vector128.Create((byte)0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15);
             for (i = 1; i + 8 < columns && (2 * (i + 8)) <= output.Length; i += 8)
             {
                 Vector128<short> here = Vector128.LoadUnsafe(ref s0, (nuint)i);
                 Vector128<short> before = Vector128.LoadUnsafe(ref s0, (nuint)(i - 1));
                 Vector128<short> after = Vector128.LoadUnsafe(ref s0, (nuint)(i + 1));
-                Vector128<short> three = (here * 3) + eight;
-                Vector128<ushort> even = Vector128.ShiftRightLogical(three + before, 4).AsUInt16();
-                Vector128<ushort> odd = Vector128.ShiftRightLogical(three + after, 4).AsUInt16();
+                Vector128<short> three = here * 3;
+                Vector128<ushort> even = Vector128.ShiftRightLogical(three + before + evenBiases, 4).AsUInt16();
+                Vector128<ushort> odd = Vector128.ShiftRightLogical(three + after + oddBiases, 4).AsUInt16();
                 Vector128<byte> packed = Vector128.Narrow(even, odd);
                 Shuffle(packed, zip).StoreUnsafe(ref o0, (nuint)(2 * i));
             }
 
             // Column 0 and whatever is left go through the scalar loop below.
-            Scalar(sums, output, 0, 1, last);
+            Scalar(sums, output, 0, 1, last, evenBias, oddBias);
         }
         else
         {
             i = 0;
         }
 
-        Scalar(sums, output, i, columns, last);
+        Scalar(sums, output, i, columns, last, evenBias, oddBias);
     }
 
-    private static void Scalar(ReadOnlySpan<short> sums, Span<byte> output, int from, int to, int last)
+    private static void Scalar(ReadOnlySpan<short> sums, Span<byte> output, int from, int to, int last, int evenBias, int oddBias)
     {
         for (int i = from; i < to; i++)
         {
-            int three = (3 * sums[i]) + 8;
+            int three = 3 * sums[i];
             int x = 2 * i;
-            output[x] = (byte)((three + sums[Math.Max(i - 1, 0)]) >> 4);
+            output[x] = (byte)((three + sums[Math.Max(i - 1, 0)] + evenBias) >> 4);
             if (x + 1 < output.Length)
             {
-                output[x + 1] = (byte)((three + sums[Math.Min(i + 1, last)]) >> 4);
+                output[x + 1] = (byte)((three + sums[Math.Min(i + 1, last)] + oddBias) >> 4);
             }
         }
     }

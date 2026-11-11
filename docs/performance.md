@@ -8,6 +8,37 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-11: JPEG decoding as djpeg decodes
+
+The full-size inverse DCT is now libjpeg's integer `jpeg_idct_islow` (djpeg's default), with its constants, scaling,
+rounding and range limit, in 16-bit multiply-adds: AVX2 `pmaddwd` for the columns as the butterfly's even and odd
+halves, eight columns at a time, and for the rows two at a time, using the same symmetry (about 30 ns a block). Chroma
+upsampling now rounds as libjpeg's "fancy" upsampling does: 8 and 7 for the two outputs of a 2 x 2 pair, 1 and 2 (in
+quarters) for 2 x 1 and 1 x 2. The 12-megapixel `photo.jpg`, best of 20 runs after 15 warm-up runs, before and after
+alternated three times:
+
+| | Before, one core | After, one core | Before, 16 cores | After, 16 cores |
+|---|---:|---:|---:|---:|
+| JPEG decode, baseline | 69 to 71 ms | 54 to 55 ms | 33 to 35 ms | 28 ms |
+| JPEG decode, progressive | 155 to 167 ms | 135 to 140 ms | 130 to 135 ms | 128 to 141 ms |
+| JPEG decode at 1/2 scale (steady state) | 70 ms | 44 ms | | |
+
+djpeg takes 30 to 40 ms on one core. Bytes that differ from djpeg's output (`djpeg -pnm`, libjpeg-turbo in the gate
+image), over 142 files (14 CID22 photos through cjpeg at quality 50 to 97, 4:2:0, 4:2:2, 4:4:0, 4:4:4, grey and
+progressive, and the two benchmark photos) and the 18 JPEGs of the orientation corpus:
+
+| | Before | Integer transform only | After |
+|---|---:|---:|---:|
+| cjpeg files, full size | 6.89% (at most 4 levels) | 4.14% | 0 |
+| of which grey, 4:4:4 | 1.14%, 4.07% | 0, 0 | 0, 0 |
+| Orientation corpus, full size | 8.46% | | 0 |
+| cjpeg files at 1/2, 1/4, 1/8 | 5.80%, 6.71%, 6.34% | | 4.73%, 6.71%, 6.34% |
+
+So the transform made the grey and 4:4:4 files exact, colour conversion already was, and the rest was the upsampler's
+rounding. Reduced sizes are still area averages rather than libjpeg's reduced transforms; at 1/2 the 4:2:0 chroma goes
+through the full-size transform, hence the change there. The test fixtures and the cjpeg oracle test now require exact
+equality at full size.
+
 ## 2026-11-10: decoding on one core
 
 The 12-megapixel photo, `photo-lossy.webp` (cwebp `-q 80`) and `photo.jpg`, decoded to RGB by a small harness, best of

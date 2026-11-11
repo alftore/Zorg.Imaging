@@ -12,10 +12,14 @@ namespace Zorg.Imaging.Codecs.Jpeg;
 /// <para>
 /// Chroma stored at half size (or less) is brought to full size as cheaply and smoothly as possible. When decoding at a
 /// reduced scale, a chroma block is transformed at a larger size instead, across and down separately, so at 1/2 scale
-/// 4:2:0, 4:2:2 and 4:4:0 chroma need no upsampling at all. Otherwise a 2x step uses the triangle filter (3/4 of the nearer sample, 1/4 of the further), with
-/// samples centred between luma samples as JFIF places them; other ratios repeat samples.
+/// 4:2:0, 4:2:2 and 4:4:0 chroma need no upsampling at all. Otherwise a 2x step uses the triangle filter (3/4 of the
+/// nearer sample, 1/4 of the further), with samples centred between luma samples as JFIF places them, rounded as
+/// libjpeg's "fancy" upsampling rounds; other ratios repeat samples.
 /// </para>
-/// <para>YCbCr to RGB follows JFIF (T.871, section 7), full range.</para>
+/// <para>
+/// YCbCr to RGB follows JFIF (T.871, section 7), full range, in libjpeg's 16.16 fixed point. With the integer inverse
+/// DCT, a full-size decode is byte for byte what libjpeg-turbo's <c>djpeg</c> gives with its defaults.
+/// </para>
 /// </remarks>
 internal static class JpegOutput
 {
@@ -226,7 +230,7 @@ internal static class JpegOutput
         private int _factorX;
         private int _factorY;
 
-        private float[] _quantisation = [];
+        private short[] _quantisation = [];
         private float[]? _reducedWeights;
         private int _blockWide;
         private int _blockHigh;
@@ -265,18 +269,26 @@ internal static class JpegOutput
             plane._blockWide = wide;
             plane._blockHigh = high;
 
-            // The quantisation table, stored in zigzag order, in natural order as floats for the transform.
+            // The quantisation table, stored in zigzag order, in natural order: as the integer transform's 16-bit
+            // multipliers at full size, else folded with both passes into one weight row per coefficient.
             ushort[] zigzag = component.Quantisation ?? new ushort[64];
-            plane._quantisation = new float[64];
-            for (int k = 0; k < 64; k++)
-            {
-                plane._quantisation[JpegIdct.ZigZag[k]] = zigzag[k];
-            }
-
-            // Below full size, quantisation and both passes fold into one weight row per coefficient.
             if (wide != 8 || high != 8)
             {
-                plane._reducedWeights = JpegIdct.ReducedWeights(plane._quantisation, wide, high);
+                float[] quantisation = new float[64];
+                for (int k = 0; k < 64; k++)
+                {
+                    quantisation[JpegIdct.ZigZag[k]] = zigzag[k];
+                }
+
+                plane._reducedWeights = JpegIdct.ReducedWeights(quantisation, wide, high);
+            }
+            else
+            {
+                plane._quantisation = new short[64];
+                for (int k = 0; k < 64; k++)
+                {
+                    plane._quantisation[JpegIdct.ZigZag[k]] = (short)zigzag[k];
+                }
             }
 
             return plane;
@@ -318,7 +330,7 @@ internal static class JpegOutput
             int stride = _stride;
             int wide = _blockWide;
             int high = _blockHigh;
-            float[] quantisation = _quantisation;
+            short[] quantisation = _quantisation;
             float[]? reduced = _reducedWeights;
 
             // Each block row writes its own rows of the plane, so large components are transformed in parallel.
@@ -338,7 +350,7 @@ internal static class JpegOutput
                         }
                         else
                         {
-                            JpegIdct.Transform(block, quantisation, wide, high, target, stride);
+                            JpegIdct.Transform(block, quantisation, target, stride);
                         }
 
                         if (clear)
@@ -385,16 +397,17 @@ internal static class JpegOutput
                 return;
             }
 
-            // Triangle filter: vertically 3/4 nearer row + 1/4 further (times 4), then the same across (times 16).
+            // Triangle filter: vertically 3/4 nearer row + 1/4 further (times 4), then the same across (times 16). The
+            // rounding is libjpeg's, which alternates between the two outputs of each pair.
             int far = _factorY == 2 ? Math.Clamp(near + ((y & 1) == 0 ? -1 : 1), 0, _high - 1) : near;
             ReadOnlySpan<byte> farRow = _samples.AsSpan(far * _stride, _wide);
-            int last = _wide - 1;
             if (_factorX == 1)
             {
+                // Only down (4:4:0): the upper row of each pair rounds with 1, the lower with 2.
+                int bias = 1 + (y & 1);
                 for (int x = 0; x < output.Length; x++)
                 {
-                    int column = _factorY == 2 ? (3 * nearRow[x]) + farRow[x] : 4 * nearRow[x];
-                    output[x] = (byte)((column + 2) >> 2);
+                    output[x] = (byte)(((3 * nearRow[x]) + farRow[x] + bias) >> 2);
                 }
 
                 return;
@@ -404,7 +417,14 @@ internal static class JpegOutput
             int columns = (output.Length + 1) >> 1;
             Span<short> sums = columns <= 4096 ? stackalloc short[columns] : new short[columns];
             JpegColour.ColumnSums(nearRow[..columns], _factorY == 2 ? farRow[..columns] : nearRow[..columns], _factorY == 2, sums);
-            JpegColour.UpsampleTwice(sums, output);
+            if (_factorY == 2)
+            {
+                JpegColour.UpsampleTwice(sums, output, 8, 7);
+            }
+            else
+            {
+                JpegColour.UpsampleTwice(sums, output, 4, 8);
+            }
         }
 
         public void Dispose()
