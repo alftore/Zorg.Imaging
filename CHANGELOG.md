@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+Other packages can now add codecs for the formats Zorg.Imaging recognises but doesn't decode, and the first one is here: `Zorg.Imaging.SystemCodecs` decodes AVIF and HEIC through Windows' and macOS's own decoders, for desktop apps. Image output is the same as 0.1.0, and the same on .NET 11 as on .NET 10.
 
 Added:
 
@@ -12,6 +14,8 @@ Added:
 Other:
 
 - The package readme on nuget.org has a short example, the comparison with the C tools and links to the documentation.
+- Tested on .NET 11: the library still targets .NET 10, and every test passes and every output is byte-identical on the .NET 11 runtime. CI now runs the tests on .NET 11 too.
+- GitHub Actions are locked with a workflow lockfile (`.github/workflows/actions.lock`) instead of SHA pins in the workflows.
 
 ## 0.1.0
 

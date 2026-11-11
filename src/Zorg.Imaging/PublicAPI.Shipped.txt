@@ -1,9 +1,13 @@
 #nullable enable
+abstract Zorg.Imaging.ImageCodec.Decode(System.ReadOnlyMemory<byte> data, Zorg.Imaging.ImageInfo! header, Zorg.Imaging.CodecContext! context) -> Zorg.Imaging.Image!
+abstract Zorg.Imaging.ImageCodec.Format.get -> Zorg.Imaging.ImageFormat!
+abstract Zorg.Imaging.ImageCodec.ReadHeader(System.ReadOnlySpan<byte> head, Zorg.Imaging.CodecContext! context) -> Zorg.Imaging.ImageInfo!
 const Zorg.Imaging.ColorSpace.MaxIccProfileBytes = 4194304 -> int
 const Zorg.Imaging.GifEncoderOptions.DefaultAlphaThreshold = 128 -> int
 const Zorg.Imaging.GifEncoderOptions.DefaultMaxColors = 256 -> int
 const Zorg.Imaging.Image.MaxSigma = 1000 -> double
 const Zorg.Imaging.ImageFormats.MaxSignatureLength = 64 -> int
+const Zorg.Imaging.ImageLimits.DefaultMaxFileBytes = 268435456 -> long
 const Zorg.Imaging.ImageLimits.DefaultMaxFrames = 10000 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxHeaderBytes = 1048576 -> int
 const Zorg.Imaging.ImageLimits.DefaultMaxPixels = 268402689 -> long
@@ -14,12 +18,14 @@ const Zorg.Imaging.WebpEncoderOptions.DefaultQuality = 80 -> int
 override Zorg.Imaging.Bgra32.Equals(object? obj) -> bool
 override Zorg.Imaging.Bgra32.GetHashCode() -> int
 override Zorg.Imaging.Bgra32.ToString() -> string!
+override Zorg.Imaging.CodecAvailability.ToString() -> string!
 override Zorg.Imaging.ColorSpace.Equals(object? obj) -> bool
 override Zorg.Imaging.ColorSpace.GetHashCode() -> int
 override Zorg.Imaging.ColorSpace.ToString() -> string!
 override Zorg.Imaging.GeoLocation.ToString() -> string!
 override Zorg.Imaging.IdentifyResult.ToString() -> string!
 override Zorg.Imaging.Image.ToString() -> string!
+override Zorg.Imaging.ImageCodec.ToString() -> string!
 override Zorg.Imaging.ImageFormat.ToString() -> string!
 override Zorg.Imaging.ImageInfo.ToString() -> string!
 override Zorg.Imaging.ImagePipeline.ToString() -> string!
@@ -49,6 +55,8 @@ static Zorg.Imaging.AnimationWriter.CreateGif(System.IO.Stream! stream, int loop
 static Zorg.Imaging.AnimationWriter.CreateWebp(System.IO.Stream! stream, int loopCount = 0, Zorg.Imaging.WebpEncoderOptions? options = null) -> Zorg.Imaging.AnimationWriter!
 static Zorg.Imaging.Bgra32.operator !=(Zorg.Imaging.Bgra32 left, Zorg.Imaging.Bgra32 right) -> bool
 static Zorg.Imaging.Bgra32.operator ==(Zorg.Imaging.Bgra32 left, Zorg.Imaging.Bgra32 right) -> bool
+static Zorg.Imaging.CodecAvailability.Available.get -> Zorg.Imaging.CodecAvailability!
+static Zorg.Imaging.CodecAvailability.Unavailable(string! reason) -> Zorg.Imaging.CodecAvailability!
 static Zorg.Imaging.ColorSpace.DisplayP3.get -> Zorg.Imaging.ColorSpace!
 static Zorg.Imaging.ColorSpace.FromCicp(int primaries, int transfer) -> Zorg.Imaging.ColorSpace!
 static Zorg.Imaging.ColorSpace.FromIccProfile(System.ReadOnlySpan<byte> profile) -> Zorg.Imaging.ColorSpace!
@@ -66,6 +74,9 @@ static Zorg.Imaging.Image.Decode(byte[]! data, Zorg.Imaging.DecodeOptions? optio
 static Zorg.Imaging.Image.DecodeAsync(System.IO.Stream! stream, Zorg.Imaging.DecodeOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.Image!>
 static Zorg.Imaging.Image.Identify(byte[]! data, Zorg.Imaging.IdentifyOptions? options = null) -> Zorg.Imaging.IdentifyResult!
 static Zorg.Imaging.Image.IdentifyAsync(System.IO.Stream! stream, Zorg.Imaging.IdentifyOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.IdentifyResult!>
+static Zorg.Imaging.ImageCodecs.Empty.get -> Zorg.Imaging.ImageCodecs!
+static Zorg.Imaging.ImageDefaults.Codecs.get -> Zorg.Imaging.ImageCodecs!
+static Zorg.Imaging.ImageDefaults.Codecs.set -> void
 static Zorg.Imaging.ImageDefaults.MaxDegreeOfParallelism.get -> int
 static Zorg.Imaging.ImageDefaults.MaxDegreeOfParallelism.set -> void
 static Zorg.Imaging.ImageFormat.Avif.get -> Zorg.Imaging.ImageFormat!
@@ -115,6 +126,9 @@ static Zorg.Imaging.Rgba32.operator ==(Zorg.Imaging.Rgba32 left, Zorg.Imaging.Rg
 static Zorg.Imaging.Rgba64.operator !=(Zorg.Imaging.Rgba64 left, Zorg.Imaging.Rgba64 right) -> bool
 static Zorg.Imaging.Rgba64.operator ==(Zorg.Imaging.Rgba64 left, Zorg.Imaging.Rgba64 right) -> bool
 static Zorg.Imaging.WebpEncoderOptions.Default.get -> Zorg.Imaging.WebpEncoderOptions!
+virtual Zorg.Imaging.ImageCodec.Availability.get -> Zorg.Imaging.CodecAvailability!
+virtual Zorg.Imaging.ImageCodec.Name.get -> string!
+virtual Zorg.Imaging.ImageCodec.UsesNativeCode.get -> bool
 Zorg.Imaging.AnimationFrame
 Zorg.Imaging.AnimationFrame.AnimationFrame(Zorg.Imaging.Image! image, System.TimeSpan duration) -> void
 Zorg.Imaging.AnimationFrame.Dispose() -> void
@@ -148,6 +162,14 @@ Zorg.Imaging.Bgra32.G.get -> byte
 Zorg.Imaging.Bgra32.G.set -> void
 Zorg.Imaging.Bgra32.R.get -> byte
 Zorg.Imaging.Bgra32.R.set -> void
+Zorg.Imaging.CodecAvailability
+Zorg.Imaging.CodecAvailability.IsAvailable.get -> bool
+Zorg.Imaging.CodecAvailability.Reason.get -> string?
+Zorg.Imaging.CodecContext
+Zorg.Imaging.CodecContext.CancellationToken.get -> System.Threading.CancellationToken
+Zorg.Imaging.CodecContext.Limits.get -> Zorg.Imaging.ImageLimits!
+Zorg.Imaging.CodecContext.PixelFormat.get -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.CodecContext.ShrinkTo(int width, int height) -> (int Width, int Height)?
 Zorg.Imaging.ColorSpace
 Zorg.Imaging.ColorSpace.CicpPrimaries.get -> int?
 Zorg.Imaging.ColorSpace.CicpTransfer.get -> int?
@@ -163,6 +185,8 @@ Zorg.Imaging.ColorSpaceHandling.SrgbWhenLossless = 0 -> Zorg.Imaging.ColorSpaceH
 Zorg.Imaging.DecodeOptions
 Zorg.Imaging.DecodeOptions.ApplyOrientation.get -> bool
 Zorg.Imaging.DecodeOptions.ApplyOrientation.init -> void
+Zorg.Imaging.DecodeOptions.Codecs.get -> Zorg.Imaging.ImageCodecs?
+Zorg.Imaging.DecodeOptions.Codecs.init -> void
 Zorg.Imaging.DecodeOptions.DecodeOptions() -> void
 Zorg.Imaging.DecodeOptions.Limits.get -> Zorg.Imaging.ImageLimits!
 Zorg.Imaging.DecodeOptions.Limits.init -> void
@@ -200,6 +224,8 @@ Zorg.Imaging.GifEncoderOptions.MaxColors.init -> void
 Zorg.Imaging.GifEncoderOptions.MaxDegreeOfParallelism.get -> int
 Zorg.Imaging.GifEncoderOptions.MaxDegreeOfParallelism.init -> void
 Zorg.Imaging.IdentifyOptions
+Zorg.Imaging.IdentifyOptions.Codecs.get -> Zorg.Imaging.ImageCodecs?
+Zorg.Imaging.IdentifyOptions.Codecs.init -> void
 Zorg.Imaging.IdentifyOptions.CountFrames.get -> bool
 Zorg.Imaging.IdentifyOptions.CountFrames.init -> void
 Zorg.Imaging.IdentifyOptions.IdentifyOptions() -> void
@@ -214,6 +240,7 @@ Zorg.Imaging.IdentifyResult.Message.get -> string?
 Zorg.Imaging.IdentifyResult.Status.get -> Zorg.Imaging.IdentifyStatus
 Zorg.Imaging.IdentifyResult.Succeeded.get -> bool
 Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.CodecFailed = 7 -> Zorg.Imaging.IdentifyStatus
 Zorg.Imaging.IdentifyStatus.Corrupt = 5 -> Zorg.Imaging.IdentifyStatus
 Zorg.Imaging.IdentifyStatus.ExceedsLimits = 6 -> Zorg.Imaging.IdentifyStatus
 Zorg.Imaging.IdentifyStatus.None = 0 -> Zorg.Imaging.IdentifyStatus
@@ -259,6 +286,20 @@ Zorg.Imaging.Image.ToBlurHash(int componentsX = 4, int componentsY = 3) -> strin
 Zorg.Imaging.Image.ToSrgb() -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.Trim(int threshold = 10) -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.Width.get -> int
+Zorg.Imaging.ImageCodec
+Zorg.Imaging.ImageCodec.ImageCodec() -> void
+Zorg.Imaging.ImageCodecException
+Zorg.Imaging.ImageCodecException.CodecName.get -> string?
+Zorg.Imaging.ImageCodecException.ImageCodecException() -> void
+Zorg.Imaging.ImageCodecException.ImageCodecException(string! message) -> void
+Zorg.Imaging.ImageCodecException.ImageCodecException(string! message, string? codecName, System.Exception? innerException) -> void
+Zorg.Imaging.ImageCodecException.ImageCodecException(string! message, System.Exception! innerException) -> void
+Zorg.Imaging.ImageCodecs
+Zorg.Imaging.ImageCodecs.Add(params System.ReadOnlySpan<Zorg.Imaging.ImageCodec!> codecs) -> Zorg.Imaging.ImageCodecs!
+Zorg.Imaging.ImageCodecs.Count.get -> int
+Zorg.Imaging.ImageCodecs.GetEnumerator() -> System.Collections.Generic.IEnumerator<Zorg.Imaging.ImageCodec!>!
+Zorg.Imaging.ImageCodecs.Supports(Zorg.Imaging.ImageFormat! format) -> bool
+Zorg.Imaging.ImageCodecs.this[int index].get -> Zorg.Imaging.ImageCodec!
 Zorg.Imaging.ImageDefaults
 Zorg.Imaging.ImageException
 Zorg.Imaging.ImageException.ImageException() -> void
@@ -276,16 +317,22 @@ Zorg.Imaging.ImageFormatException.ImageFormatException(string! message, System.E
 Zorg.Imaging.ImageFormats
 Zorg.Imaging.ImageInfo
 Zorg.Imaging.ImageInfo.ColorSpace.get -> Zorg.Imaging.ColorSpace?
+Zorg.Imaging.ImageInfo.ColorSpace.init -> void
 Zorg.Imaging.ImageInfo.DisplayHeight.get -> int
 Zorg.Imaging.ImageInfo.DisplayWidth.get -> int
 Zorg.Imaging.ImageInfo.Format.get -> Zorg.Imaging.ImageFormat!
 Zorg.Imaging.ImageInfo.FrameCount.get -> int?
 Zorg.Imaging.ImageInfo.HasAlpha.get -> bool
+Zorg.Imaging.ImageInfo.HasAlpha.init -> void
 Zorg.Imaging.ImageInfo.HasExif.get -> bool
+Zorg.Imaging.ImageInfo.HasExif.init -> void
 Zorg.Imaging.ImageInfo.HasIccProfile.get -> bool
+Zorg.Imaging.ImageInfo.HasIccProfile.init -> void
 Zorg.Imaging.ImageInfo.Height.get -> int
+Zorg.Imaging.ImageInfo.ImageInfo(Zorg.Imaging.ImageFormat! format, int width, int height) -> void
 Zorg.Imaging.ImageInfo.IsAnimated.get -> bool
 Zorg.Imaging.ImageInfo.Orientation.get -> int
+Zorg.Imaging.ImageInfo.Orientation.init -> void
 Zorg.Imaging.ImageInfo.Width.get -> int
 Zorg.Imaging.ImageLimitException
 Zorg.Imaging.ImageLimitException.ImageLimitException() -> void
@@ -293,6 +340,8 @@ Zorg.Imaging.ImageLimitException.ImageLimitException(string! message) -> void
 Zorg.Imaging.ImageLimitException.ImageLimitException(string! message, System.Exception! innerException) -> void
 Zorg.Imaging.ImageLimits
 Zorg.Imaging.ImageLimits.ImageLimits() -> void
+Zorg.Imaging.ImageLimits.MaxFileBytes.get -> long
+Zorg.Imaging.ImageLimits.MaxFileBytes.init -> void
 Zorg.Imaging.ImageLimits.MaxFrames.get -> int
 Zorg.Imaging.ImageLimits.MaxFrames.init -> void
 Zorg.Imaging.ImageLimits.MaxHeaderBytes.get -> int
