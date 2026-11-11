@@ -290,6 +290,13 @@ public class TiffDecoderTests
         Assert.Equal(expected.Length, actual.Length);
         for (int i = 0; i < actual.Length; i++)
         {
+            // A fully transparent pixel's colour means nothing, and with associated alpha it can't be divided out:
+            // some ImageMagick builds write colour under alpha 0 and read it back as 255.
+            if (i % 4 != 3 && expected[(i & ~3) + 3] == 0)
+            {
+                continue;
+            }
+
             // Associated alpha divides out with rounding that may differ by one.
             Assert.True(Math.Abs(expected[i] - actual[i]) <= (options.Contains("=associated", StringComparison.Ordinal) ? 1 : 0), $"byte {i}: {actual[i]}, expected {expected[i]}");
         }

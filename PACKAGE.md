@@ -2,7 +2,7 @@
 
 Managed image decoding, resizing and encoding for .NET 10, written in C# only, with no native binaries and no dependencies.
 
-**Early development: preview releases, and the API may still change.**
+**Early releases: the API may still change before 1.0.**
 
 - **Formats:** PNG, JPEG, WebP (lossy and lossless) and GIF, decoded and encoded. BMP and TIFF are decoded.
 - **Pipeline:** `ImagePipeline` loads, fits and saves in one chain. JPEG shrinks on load, so a thumbnail never decodes every pixel.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The library is the same as 0.1.0-preview.7. The repository is getting ready to go public:
+
+- `docs/limits.md` lists the formats and features that aren't supported yet, and the default input limits.
+- Issue forms for bug reports and feature requests; pull requests are for collaborators only (see CONTRIBUTING.md).
+- SECURITY.md says how fast reports are answered, how releases are protected and how to verify a package.
+- Rulesets for `main` and release tags in `.github/rulesets`.
+
 ## 0.1.0-preview.7
 
 Lossy WebP encoding is faster with the same quality: 0.95 times cwebp's time on one core over 167 test images (0.99 in preview.6), 1.16 dB closer to the source at cwebp's file size.

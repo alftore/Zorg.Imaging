@@ -1,0 +1,73 @@
+name: Bug report
+description: An image decodes, encodes or resizes wrongly, or an operation throws.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please check [the known limits](https://github.com/alftore/Zorg.Imaging/blob/main/docs/limits.md) first. A sample file and a few lines of code get a fix fastest.
+
+        A crafted file that causes a crash, a hang or unbounded memory is a security problem: [report it privately](https://github.com/alftore/Zorg.Imaging/security/advisories/new) instead.
+  - type: input
+    id: version
+    attributes:
+      label: Zorg.Imaging version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: .NET version and OS
+      description: Say if you publish with Native AOT.
+      placeholder: .NET 10.0.1 on Ubuntu 24.04, x64
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Decoding (Image.Decode, Image.Identify)
+        - Encoding (SaveAsWebp, SaveAsJpeg, SaveAsPng, SaveAsGif)
+        - Resizing and other operations
+        - Animations (AnimationReader, AnimationWriter)
+        - Colour or metadata
+        - The pipeline (ImagePipeline)
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: format
+    attributes:
+      label: Image format
+      placeholder: WebP, lossy with alpha
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Code and sample file
+      description: The code you run, and the image (attach it, or say how to make one). Remove anything private from the image and its metadata first.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What another tool (cwebp, libjpeg-turbo, ImageMagick, a browser...) gives, if you checked.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: The output (attach it), or the exception with its stack trace.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: A fix you have in mind, or a link to the spec.

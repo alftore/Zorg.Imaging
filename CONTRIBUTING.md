@@ -1,5 +1,13 @@
 # Contributing
 
+## How to contribute
+
+Issues are welcome: bug reports, files that decode differently from other tools, format and feature requests, and questions about the documentation. Please use one of the issue forms. A bug report with a sample file and a few lines of code usually gets fixed fastest. Remove anything private from the image and its metadata before you post it.
+
+Pull requests are open to collaborators only. Decoders are a security boundary for anyone who takes uploads, and one maintainer can't review a stranger's change to a codec well enough. That also keeps one person responsible for every change, its tests and its signed history. If you have a fix in mind, describe it or paste the patch in the issue, and it will be credited in the changelog.
+
+Report security problems privately, as [SECURITY.md](SECURITY.md) describes, not in an issue. Check [docs/limits.md](docs/limits.md) for what isn't supported yet.
+
 ## Build and test
 
 You need the .NET SDK version in `global.json`.

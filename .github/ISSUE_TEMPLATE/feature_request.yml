@@ -1,0 +1,32 @@
+name: Feature or format request
+description: A format, option or operation you'd like.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The library stays managed code with no runtime packages. Formats that need native code or carry patent risk (HEIC) can only come as an opt-in add-on.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: The format, option or operation, with a short example of the API you'd want.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: others
+    attributes:
+      label: What other tools do
+      description: How libvips, sharp, ImageMagick, cwebp or others handle it, if you know.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried
