@@ -69,7 +69,8 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             nint width = Native.CGImageGetWidth(cgImage);
             nint height = Native.CGImageGetHeight(cgImage);
             bool shown = width == header.DisplayWidth && height == header.DisplayHeight;
-            if (!shown && (width != header.Width || height != header.Height))
+            bool cropped = width == header.Crop.Width && height == header.Crop.Height;
+            if (!shown && !cropped && (width != header.Width || height != header.Height))
             {
                 throw new ImageFormatException(string.Create(
                     CultureInfo.InvariantCulture,

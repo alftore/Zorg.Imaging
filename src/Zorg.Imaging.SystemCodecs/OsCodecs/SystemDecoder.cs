@@ -42,12 +42,17 @@ internal abstract class SystemDecoder
     {
         bool shown = decoded.Width == header.DisplayWidth && decoded.Height == header.DisplayHeight;
         bool stored = decoded.Width == header.Width && decoded.Height == header.Height;
+        Crop crop = header.Crop;
+        bool cropped = crop.Width != header.Width || crop.Height != header.Height;
+
+        // ImageIO crops but leaves the turn and mirror to the caller: the size is the cropped one.
+        bool croppedOnly = cropped && decoded.Width == crop.Width && decoded.Height == crop.Height;
         if (shown && (systemApplied || !header.IsTransformed))
         {
             return decoded;
         }
 
-        if (!stored)
+        if (!stored && !croppedOnly)
         {
             if (shown)
             {
@@ -63,8 +68,7 @@ internal abstract class SystemDecoder
         Image current = decoded;
         try
         {
-            Crop crop = header.Crop;
-            if (crop.Width != header.Width || crop.Height != header.Height)
+            if (cropped && !croppedOnly)
             {
                 current = Replace(current, current.Crop(crop.X, crop.Y, crop.Width, crop.Height));
             }
