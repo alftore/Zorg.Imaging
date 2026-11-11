@@ -72,11 +72,11 @@ and cjpeg variants of 14 CID22 photos and odd-sized crops, the WebP corpus, the 
 textures, cut-outs; at most 4 megapixels) and the CID22 validation photos, on one core. Made by a corpus runner kept
 outside the repository; the reference tools ran in the Linux gate image. Size and time are ours over theirs (geometric
 mean); PSNR and SSIM are ours less theirs, over white. Their time is the whole process, start-up and reading the input
-included; ours is the better of two encodes. Numbers after the improvement rounds for preview.6:
+included; ours is the better of two encodes. Numbers for preview.7:
 
 | Format, against | Size | Time | ΔPSNR | ΔSSIM | Notes |
 |---|---:|---:|---:|---:|---|
-| Lossy WebP q80, cwebp `-q 80` | 0.971 | 0.96 | +1.13 | +0.0000 | +1.16 dB at cwebp's file size |
+| Lossy WebP q80, cwebp `-q 80` | 0.971 | 0.95 | +1.13 | +0.0000 | +1.16 dB at cwebp's file size |
 | JPEG q80, cjpeg `-quality 80` | 0.913 | 0.29 | +0.00 | +0.0000 | decoding matches djpeg byte for byte |
 | Lossless WebP, cwebp `-lossless` | 0.994 | 0.61 | lossless | | smaller than cwebp on most categories; textures_pk02 4.7% larger |
 | PNG, oxipng `-o 2` | 1.092 | 0.06 | lossless | | oxipng searches far longer; `Optimize` closes most of it |
@@ -93,7 +93,10 @@ Tried for lossy WebP and left out: trellis quantisation (+0.1 dB PSNR but 0.1 to
 texture, for 20 to 35% more time), the alpha chunk's prediction filters (alpha 17 to 31% larger than with the lossless
 coder's own predictor), alpha-weighted distortion (-0.3 to -0.6 dB), per-segment loop filter levels (at most
 +0.01 dB) and a larger luma rounding bias (more SSIM, less PSNR, quality scale moved 2 to 3%). For the palette
-quantiser: an error-feedback re-cut and smoothness weighting (both worse than more k-means rounds).
+quantiser: an error-feedback re-cut and smoothness weighting (both worse than more k-means rounds). For lossy WebP
+speed: ranking modes by SATD (Hadamard) instead of squared error (no better choices, 6 to 24% slower), trying fewer
+16 x 16, chroma or subblock candidates (6 to 27% faster but 0.02 to 0.13 dB lower) and skipping the subblock search
+on near-exact macroblocks (0.2 dB lower); only exact ones are skipped.
 
 ## 2026-11-09: lossy PNG
 
