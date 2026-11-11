@@ -72,13 +72,13 @@ and cjpeg variants of 14 CID22 photos and odd-sized crops, the WebP corpus, the 
 textures, cut-outs; at most 4 megapixels) and the CID22 validation photos, on one core. Made by a corpus runner kept
 outside the repository; the reference tools ran in the Linux gate image. Size and time are ours over theirs (geometric
 mean); PSNR and SSIM are ours less theirs, over white. Their time is the whole process, start-up and reading the input
-included; ours is the better of two encodes. Numbers after the round of four parallel improvements (preview.6):
+included; ours is the better of two encodes. Numbers after the improvement rounds for preview.6:
 
 | Format, against | Size | Time | ΔPSNR | ΔSSIM | Notes |
 |---|---:|---:|---:|---:|---|
-| Lossy WebP q80, cwebp `-q 80` | 0.974 | 0.98 | +1.07 | -0.0001 | +0.84 dB at cwebp's file size |
-| JPEG q80, cjpeg `-quality 80` | 0.913 | 0.28 | +0.00 | +0.0000 | |
-| Lossless WebP, cwebp `-lossless` | 1.004 | 0.61 | lossless | | icons 1.6% and cut-outs 3.3 to 3.5% larger |
+| Lossy WebP q80, cwebp `-q 80` | 0.971 | 1.03 | +1.12 | +0.0000 | +1.15 dB at cwebp's file size |
+| JPEG q80, cjpeg `-quality 80` | 0.913 | 0.29 | +0.00 | +0.0000 | decoding matches djpeg byte for byte |
+| Lossless WebP, cwebp `-lossless` | 0.994 | 0.62 | lossless | | smaller than cwebp on most categories; textures_pk02 4.7% larger |
 | PNG, oxipng `-o 2` | 1.092 | 0.06 | lossless | | oxipng searches far longer; `Optimize` closes most of it |
 | PNG, libvips `pngsave` | 0.813 | 0.14 | lossless | | |
 | PNG 256 colours, pngquant 256 | 1.013 | 0.46 | +0.84 | -0.0028 | photos' SSIM 0.005 to 0.011 behind (dithering) |
