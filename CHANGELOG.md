@@ -5,7 +5,7 @@
 Lossy WebP:
 
 - Mode choices weigh how much of each block's texture they keep, not only squared error: at equal file size 0.04 to 0.1 dB higher PSNR and 0.03 to 0.09% higher luma SSIM in every category, for up to 4% more time. Files are up to 1% larger at the same quality.
-- Whether a flat graphic is worth trying lossless is decided from a quarter of its rows first: screenshots that stay lossy encode 10 to 28% faster, with the same files.
+- Whether a flat graphic is worth trying lossless is decided from an eighth of its rows first: screenshots encode 10 to 30% faster, with the same files.
 - Flat areas no longer take on a slight tint from what they are predicted from: the chroma DC errors of flat, opaque blocks are carried to their neighbours until they are coded. A cut-out with large flat grey areas is 1.1 to 2 dB closer to the source at equal size at qualities 50 to 80, icons 0.09 to 0.13 dB (luma SSIM 0.01% lower, as the colour costs a few bytes); photos are unchanged.
 - Decoding is 24% faster on one core (a 12-megapixel photo: 279 to 211 ms; 156 to 134 ms on 16 cores), with the same pixels.
 
@@ -13,6 +13,7 @@ Lossless WebP:
 
 - Faster on small images: 256 x 256 textures encode 45% faster and 64 x 64 icons 22 to 36% faster on one core; photos 9%. Large cut-outs are as before.
 - The copy search passes over runs of one colour, and code headers are priced more closely when tiles are grouped: icons, textures and cut-outs 0.2 to 1% smaller.
+- A copy of 16 pixels or more from the left or the rows just above is taken without searching further back: icons, screenshots, cut-outs and the alpha of lossy cut-outs encode 2 to 18% faster, sizes within 0.25%.
 - Smaller files: icons and cut-outs 2.7 to 4.3%, game screenshots 1.5%, photos 0.2%, and the alpha of lossy cut-outs 3 to 3.7%: against cwebp, 512-pixel icons and cut-outs are now 1.6 and 2.4% smaller, small icons and plant cut-outs within 0.6%. Tiles of opaque and soft alpha get their own codes, the colour cache is kept only where it beats the groups alone, and copies are priced from a better first parse; encoding takes 5 to 12% longer (64-pixel icons 25%, 0.5 ms).
 - Images of 17 to 256 colours that clearly suit a colour table are coded only that way up to effort 4: up to twice as fast (a 129-colour 1784 x 1862 cut-out 646 to 366 ms, game textures 42% faster), and at most 0.2% larger.
 
