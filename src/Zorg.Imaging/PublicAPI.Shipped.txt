@@ -1,1 +1,488 @@
 #nullable enable
+const Zorg.Imaging.ColorSpace.MaxIccProfileBytes = 4194304 -> int
+const Zorg.Imaging.GifEncoderOptions.DefaultAlphaThreshold = 128 -> int
+const Zorg.Imaging.GifEncoderOptions.DefaultMaxColors = 256 -> int
+const Zorg.Imaging.Image.MaxSigma = 1000 -> double
+const Zorg.Imaging.ImageFormats.MaxSignatureLength = 64 -> int
+const Zorg.Imaging.ImageLimits.DefaultMaxFrames = 10000 -> int
+const Zorg.Imaging.ImageLimits.DefaultMaxHeaderBytes = 1048576 -> int
+const Zorg.Imaging.ImageLimits.DefaultMaxPixels = 268402689 -> long
+const Zorg.Imaging.JpegEncoderOptions.DefaultQuality = 80 -> int
+const Zorg.Imaging.PngEncoderOptions.DefaultCompressionLevel = 6 -> int
+const Zorg.Imaging.WebpEncoderOptions.DefaultEffort = 4 -> int
+const Zorg.Imaging.WebpEncoderOptions.DefaultQuality = 80 -> int
+override Zorg.Imaging.Bgra32.Equals(object? obj) -> bool
+override Zorg.Imaging.Bgra32.GetHashCode() -> int
+override Zorg.Imaging.Bgra32.ToString() -> string!
+override Zorg.Imaging.ColorSpace.Equals(object? obj) -> bool
+override Zorg.Imaging.ColorSpace.GetHashCode() -> int
+override Zorg.Imaging.ColorSpace.ToString() -> string!
+override Zorg.Imaging.GeoLocation.ToString() -> string!
+override Zorg.Imaging.IdentifyResult.ToString() -> string!
+override Zorg.Imaging.Image.ToString() -> string!
+override Zorg.Imaging.ImageFormat.ToString() -> string!
+override Zorg.Imaging.ImageInfo.ToString() -> string!
+override Zorg.Imaging.ImagePipeline.ToString() -> string!
+override Zorg.Imaging.L16.Equals(object? obj) -> bool
+override Zorg.Imaging.L16.GetHashCode() -> int
+override Zorg.Imaging.L16.ToString() -> string!
+override Zorg.Imaging.L8.Equals(object? obj) -> bool
+override Zorg.Imaging.L8.GetHashCode() -> int
+override Zorg.Imaging.L8.ToString() -> string!
+override Zorg.Imaging.MetadataOptions.ToString() -> string!
+override Zorg.Imaging.Resampler.ToString() -> string!
+override Zorg.Imaging.Rgb24.Equals(object? obj) -> bool
+override Zorg.Imaging.Rgb24.GetHashCode() -> int
+override Zorg.Imaging.Rgb24.ToString() -> string!
+override Zorg.Imaging.Rgb48.Equals(object? obj) -> bool
+override Zorg.Imaging.Rgb48.GetHashCode() -> int
+override Zorg.Imaging.Rgb48.ToString() -> string!
+override Zorg.Imaging.Rgba32.Equals(object? obj) -> bool
+override Zorg.Imaging.Rgba32.GetHashCode() -> int
+override Zorg.Imaging.Rgba32.ToString() -> string!
+override Zorg.Imaging.Rgba64.Equals(object? obj) -> bool
+override Zorg.Imaging.Rgba64.GetHashCode() -> int
+override Zorg.Imaging.Rgba64.ToString() -> string!
+static Zorg.Imaging.AnimationReader.Open(byte[]! data, Zorg.Imaging.DecodeOptions? options = null) -> Zorg.Imaging.AnimationReader!
+static Zorg.Imaging.AnimationReader.OpenAsync(System.IO.Stream! stream, Zorg.Imaging.DecodeOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.AnimationReader!>
+static Zorg.Imaging.AnimationWriter.CreateGif(System.IO.Stream! stream, int loopCount = 0, Zorg.Imaging.GifEncoderOptions? options = null) -> Zorg.Imaging.AnimationWriter!
+static Zorg.Imaging.AnimationWriter.CreateWebp(System.IO.Stream! stream, int loopCount = 0, Zorg.Imaging.WebpEncoderOptions? options = null) -> Zorg.Imaging.AnimationWriter!
+static Zorg.Imaging.Bgra32.operator !=(Zorg.Imaging.Bgra32 left, Zorg.Imaging.Bgra32 right) -> bool
+static Zorg.Imaging.Bgra32.operator ==(Zorg.Imaging.Bgra32 left, Zorg.Imaging.Bgra32 right) -> bool
+static Zorg.Imaging.ColorSpace.DisplayP3.get -> Zorg.Imaging.ColorSpace!
+static Zorg.Imaging.ColorSpace.FromCicp(int primaries, int transfer) -> Zorg.Imaging.ColorSpace!
+static Zorg.Imaging.ColorSpace.FromIccProfile(System.ReadOnlySpan<byte> profile) -> Zorg.Imaging.ColorSpace!
+static Zorg.Imaging.ColorSpace.LinearSrgb.get -> Zorg.Imaging.ColorSpace!
+static Zorg.Imaging.ColorSpace.operator !=(Zorg.Imaging.ColorSpace? left, Zorg.Imaging.ColorSpace? right) -> bool
+static Zorg.Imaging.ColorSpace.operator ==(Zorg.Imaging.ColorSpace? left, Zorg.Imaging.ColorSpace? right) -> bool
+static Zorg.Imaging.ColorSpace.Rec2020.get -> Zorg.Imaging.ColorSpace!
+static Zorg.Imaging.ColorSpace.Rec2020Hlg.get -> Zorg.Imaging.ColorSpace!
+static Zorg.Imaging.ColorSpace.Rec2020Pq.get -> Zorg.Imaging.ColorSpace!
+static Zorg.Imaging.ColorSpace.Srgb.get -> Zorg.Imaging.ColorSpace!
+static Zorg.Imaging.DecodeOptions.Default.get -> Zorg.Imaging.DecodeOptions!
+static Zorg.Imaging.GifEncoderOptions.Default.get -> Zorg.Imaging.GifEncoderOptions!
+static Zorg.Imaging.IdentifyOptions.Default.get -> Zorg.Imaging.IdentifyOptions!
+static Zorg.Imaging.Image.Decode(byte[]! data, Zorg.Imaging.DecodeOptions? options = null) -> Zorg.Imaging.Image!
+static Zorg.Imaging.Image.DecodeAsync(System.IO.Stream! stream, Zorg.Imaging.DecodeOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.Image!>
+static Zorg.Imaging.Image.Identify(byte[]! data, Zorg.Imaging.IdentifyOptions? options = null) -> Zorg.Imaging.IdentifyResult!
+static Zorg.Imaging.Image.IdentifyAsync(System.IO.Stream! stream, Zorg.Imaging.IdentifyOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.IdentifyResult!>
+static Zorg.Imaging.ImageDefaults.MaxDegreeOfParallelism.get -> int
+static Zorg.Imaging.ImageDefaults.MaxDegreeOfParallelism.set -> void
+static Zorg.Imaging.ImageFormat.Avif.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Bmp.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Gif.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Heif.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Ico.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Jpeg.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.JpegXl.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Png.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Psd.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Qoi.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Tiff.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormat.Webp.get -> Zorg.Imaging.ImageFormat!
+static Zorg.Imaging.ImageFormats.Detect(System.ReadOnlySpan<byte> head) -> Zorg.Imaging.ImageFormat?
+static Zorg.Imaging.ImageFormats.DetectAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.ImageFormat?>
+static Zorg.Imaging.ImageFormats.DetectFile(string! path) -> Zorg.Imaging.ImageFormat?
+static Zorg.Imaging.ImageFormats.IsSupported(System.ReadOnlySpan<byte> head) -> bool
+static Zorg.Imaging.ImageFormats.Known.get -> System.Collections.Generic.IReadOnlyList<Zorg.Imaging.ImageFormat!>!
+static Zorg.Imaging.ImageFormats.PeekAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.FormatPeek!>
+static Zorg.Imaging.ImageLimits.Default.get -> Zorg.Imaging.ImageLimits!
+static Zorg.Imaging.ImagePipeline.From(Zorg.Imaging.Image! image) -> Zorg.Imaging.ImagePipeline!
+static Zorg.Imaging.ImagePipeline.Load(byte[]! data) -> Zorg.Imaging.ImagePipeline!
+static Zorg.Imaging.ImagePipeline.Load(string! path) -> Zorg.Imaging.ImagePipeline!
+static Zorg.Imaging.ImagePipeline.Load(System.IO.Stream! stream) -> Zorg.Imaging.ImagePipeline!
+static Zorg.Imaging.JpegEncoderOptions.Default.get -> Zorg.Imaging.JpegEncoderOptions!
+static Zorg.Imaging.L16.operator !=(Zorg.Imaging.L16 left, Zorg.Imaging.L16 right) -> bool
+static Zorg.Imaging.L16.operator ==(Zorg.Imaging.L16 left, Zorg.Imaging.L16 right) -> bool
+static Zorg.Imaging.L8.operator !=(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
+static Zorg.Imaging.L8.operator ==(Zorg.Imaging.L8 left, Zorg.Imaging.L8 right) -> bool
+static Zorg.Imaging.MetadataOptions.CopyrightOnly.get -> Zorg.Imaging.MetadataOptions!
+static Zorg.Imaging.MetadataOptions.Keep.get -> Zorg.Imaging.MetadataOptions!
+static Zorg.Imaging.MetadataOptions.KeepNonPersonal.get -> Zorg.Imaging.MetadataOptions!
+static Zorg.Imaging.MetadataOptions.Strip.get -> Zorg.Imaging.MetadataOptions!
+static Zorg.Imaging.PngEncoderOptions.Default.get -> Zorg.Imaging.PngEncoderOptions!
+static Zorg.Imaging.Resampler.Bilinear.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Resampler.CatmullRom.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Resampler.Lanczos3.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Resampler.Mitchell.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Resampler.Nearest.get -> Zorg.Imaging.Resampler!
+static Zorg.Imaging.Rgb24.operator !=(Zorg.Imaging.Rgb24 left, Zorg.Imaging.Rgb24 right) -> bool
+static Zorg.Imaging.Rgb24.operator ==(Zorg.Imaging.Rgb24 left, Zorg.Imaging.Rgb24 right) -> bool
+static Zorg.Imaging.Rgb48.operator !=(Zorg.Imaging.Rgb48 left, Zorg.Imaging.Rgb48 right) -> bool
+static Zorg.Imaging.Rgb48.operator ==(Zorg.Imaging.Rgb48 left, Zorg.Imaging.Rgb48 right) -> bool
+static Zorg.Imaging.Rgba32.operator !=(Zorg.Imaging.Rgba32 left, Zorg.Imaging.Rgba32 right) -> bool
+static Zorg.Imaging.Rgba32.operator ==(Zorg.Imaging.Rgba32 left, Zorg.Imaging.Rgba32 right) -> bool
+static Zorg.Imaging.Rgba64.operator !=(Zorg.Imaging.Rgba64 left, Zorg.Imaging.Rgba64 right) -> bool
+static Zorg.Imaging.Rgba64.operator ==(Zorg.Imaging.Rgba64 left, Zorg.Imaging.Rgba64 right) -> bool
+static Zorg.Imaging.WebpEncoderOptions.Default.get -> Zorg.Imaging.WebpEncoderOptions!
+Zorg.Imaging.AnimationFrame
+Zorg.Imaging.AnimationFrame.AnimationFrame(Zorg.Imaging.Image! image, System.TimeSpan duration) -> void
+Zorg.Imaging.AnimationFrame.Dispose() -> void
+Zorg.Imaging.AnimationFrame.Duration.get -> System.TimeSpan
+Zorg.Imaging.AnimationFrame.Image.get -> Zorg.Imaging.Image!
+Zorg.Imaging.AnimationReader
+Zorg.Imaging.AnimationReader.Dispose() -> void
+Zorg.Imaging.AnimationReader.Format.get -> Zorg.Imaging.ImageFormat!
+Zorg.Imaging.AnimationReader.Height.get -> int
+Zorg.Imaging.AnimationReader.IsAnimated.get -> bool
+Zorg.Imaging.AnimationReader.LoopCount.get -> int
+Zorg.Imaging.AnimationReader.ReadFrame() -> Zorg.Imaging.AnimationFrame?
+Zorg.Imaging.AnimationReader.ReadFrameAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.AnimationFrame?>
+Zorg.Imaging.AnimationReader.Width.get -> int
+Zorg.Imaging.AnimationWriter
+Zorg.Imaging.AnimationWriter.Complete() -> void
+Zorg.Imaging.AnimationWriter.CompleteAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.AnimationWriter.Height.get -> int
+Zorg.Imaging.AnimationWriter.Width.get -> int
+Zorg.Imaging.AnimationWriter.WriteFrame(Zorg.Imaging.Image! image, System.TimeSpan duration) -> void
+Zorg.Imaging.AnimationWriter.WriteFrameAsync(Zorg.Imaging.Image! image, System.TimeSpan duration, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.Bgra32
+Zorg.Imaging.Bgra32.A.get -> byte
+Zorg.Imaging.Bgra32.A.set -> void
+Zorg.Imaging.Bgra32.B.get -> byte
+Zorg.Imaging.Bgra32.B.set -> void
+Zorg.Imaging.Bgra32.Bgra32() -> void
+Zorg.Imaging.Bgra32.Bgra32(byte b, byte g, byte r, byte a = 255) -> void
+Zorg.Imaging.Bgra32.Equals(Zorg.Imaging.Bgra32 other) -> bool
+Zorg.Imaging.Bgra32.G.get -> byte
+Zorg.Imaging.Bgra32.G.set -> void
+Zorg.Imaging.Bgra32.R.get -> byte
+Zorg.Imaging.Bgra32.R.set -> void
+Zorg.Imaging.ColorSpace
+Zorg.Imaging.ColorSpace.CicpPrimaries.get -> int?
+Zorg.Imaging.ColorSpace.CicpTransfer.get -> int?
+Zorg.Imaging.ColorSpace.Equals(Zorg.Imaging.ColorSpace? other) -> bool
+Zorg.Imaging.ColorSpace.IccProfile.get -> System.ReadOnlyMemory<byte>
+Zorg.Imaging.ColorSpace.IsHdr.get -> bool
+Zorg.Imaging.ColorSpace.IsSrgb.get -> bool
+Zorg.Imaging.ColorSpace.Name.get -> string!
+Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.ColorSpaceHandling.Keep = 2 -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.ColorSpaceHandling.Srgb = 1 -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.ColorSpaceHandling.SrgbWhenLossless = 0 -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.DecodeOptions
+Zorg.Imaging.DecodeOptions.ApplyOrientation.get -> bool
+Zorg.Imaging.DecodeOptions.ApplyOrientation.init -> void
+Zorg.Imaging.DecodeOptions.DecodeOptions() -> void
+Zorg.Imaging.DecodeOptions.Limits.get -> Zorg.Imaging.ImageLimits!
+Zorg.Imaging.DecodeOptions.Limits.init -> void
+Zorg.Imaging.DecodeOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.DecodeOptions.MaxDegreeOfParallelism.init -> void
+Zorg.Imaging.DecodeOptions.PixelFormat.get -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.DecodeOptions.PixelFormat.init -> void
+Zorg.Imaging.ExifGroup
+Zorg.Imaging.ExifGroup.Camera = 2 -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.ExifGroup.Dates = 4 -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.ExifGroup.Location = 1 -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.ExifGroup.None = 0 -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.FormatPeek
+Zorg.Imaging.FormatPeek.Format.get -> Zorg.Imaging.ImageFormat?
+Zorg.Imaging.FormatPeek.Stream.get -> System.IO.Stream!
+Zorg.Imaging.GeoLocation
+Zorg.Imaging.GeoLocation.Altitude.get -> double?
+Zorg.Imaging.GeoLocation.GeoLocation(double latitude, double longitude, double? altitude) -> void
+Zorg.Imaging.GeoLocation.Latitude.get -> double
+Zorg.Imaging.GeoLocation.Longitude.get -> double
+Zorg.Imaging.GifEncoderOptions
+Zorg.Imaging.GifEncoderOptions.AlphaDithering.get -> double
+Zorg.Imaging.GifEncoderOptions.AlphaDithering.init -> void
+Zorg.Imaging.GifEncoderOptions.AlphaThreshold.get -> int
+Zorg.Imaging.GifEncoderOptions.AlphaThreshold.init -> void
+Zorg.Imaging.GifEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.GifEncoderOptions.ColorSpaceHandling.init -> void
+Zorg.Imaging.GifEncoderOptions.Dithering.get -> double
+Zorg.Imaging.GifEncoderOptions.Dithering.init -> void
+Zorg.Imaging.GifEncoderOptions.GifEncoderOptions() -> void
+Zorg.Imaging.GifEncoderOptions.Matte.get -> Zorg.Imaging.Rgba32?
+Zorg.Imaging.GifEncoderOptions.Matte.init -> void
+Zorg.Imaging.GifEncoderOptions.MaxColors.get -> int
+Zorg.Imaging.GifEncoderOptions.MaxColors.init -> void
+Zorg.Imaging.GifEncoderOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.GifEncoderOptions.MaxDegreeOfParallelism.init -> void
+Zorg.Imaging.IdentifyOptions
+Zorg.Imaging.IdentifyOptions.CountFrames.get -> bool
+Zorg.Imaging.IdentifyOptions.CountFrames.init -> void
+Zorg.Imaging.IdentifyOptions.IdentifyOptions() -> void
+Zorg.Imaging.IdentifyOptions.Limits.get -> Zorg.Imaging.ImageLimits!
+Zorg.Imaging.IdentifyOptions.Limits.init -> void
+Zorg.Imaging.IdentifyOptions.ReadColorSpace.get -> bool
+Zorg.Imaging.IdentifyOptions.ReadColorSpace.init -> void
+Zorg.Imaging.IdentifyResult
+Zorg.Imaging.IdentifyResult.Format.get -> Zorg.Imaging.ImageFormat?
+Zorg.Imaging.IdentifyResult.Info.get -> Zorg.Imaging.ImageInfo?
+Zorg.Imaging.IdentifyResult.Message.get -> string?
+Zorg.Imaging.IdentifyResult.Status.get -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyResult.Succeeded.get -> bool
+Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.Corrupt = 5 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.ExceedsLimits = 6 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.None = 0 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.NotAnImage = 2 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.Ok = 1 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.Truncated = 4 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.IdentifyStatus.UnsupportedFormat = 3 -> Zorg.Imaging.IdentifyStatus
+Zorg.Imaging.Image
+Zorg.Imaging.Image.Blur(double sigma) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.BytesPerPixel.get -> int
+Zorg.Imaging.Image.Clone() -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.ColorSpace.get -> Zorg.Imaging.ColorSpace!
+Zorg.Imaging.Image.ColorSpace.set -> void
+Zorg.Imaging.Image.Crop(int x, int y, int width, int height) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Dispose() -> void
+Zorg.Imaging.Image.DrawImage(Zorg.Imaging.Image! overlay, int x, int y, double opacity = 1) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Fill(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Fit(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Flatten(Zorg.Imaging.Rgba32 background) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.FlipHorizontal() -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.FlipVertical() -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.GetPixelBytes() -> System.Span<byte>
+Zorg.Imaging.Image.GetRow<T>(int y) -> System.Span<T>
+Zorg.Imaging.Image.GetRowBytes(int y) -> System.Span<byte>
+Zorg.Imaging.Image.Height.get -> int
+Zorg.Imaging.Image.Image(int width, int height, Zorg.Imaging.PixelFormat pixelFormat) -> void
+Zorg.Imaging.Image.Metadata.get -> Zorg.Imaging.ImageMetadata?
+Zorg.Imaging.Image.Pad(int width, int height, Zorg.Imaging.Rgba32 background, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.PixelFormat.get -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.Image.Resize(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Rotate(int degrees) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.SaveAsGif(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null) -> void
+Zorg.Imaging.Image.SaveAsGifAsync(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.Image.SaveAsJpeg(System.IO.Stream! stream, Zorg.Imaging.JpegEncoderOptions? options = null) -> void
+Zorg.Imaging.Image.SaveAsJpegAsync(System.IO.Stream! stream, Zorg.Imaging.JpegEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.Image.SaveAsPng(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null) -> void
+Zorg.Imaging.Image.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.Image.SaveAsWebp(System.IO.Stream! stream, Zorg.Imaging.WebpEncoderOptions? options = null) -> void
+Zorg.Imaging.Image.SaveAsWebpAsync(System.IO.Stream! stream, Zorg.Imaging.WebpEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.Image.Sharpen(double sigma = 1, double amount = 1) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Stride.get -> int
+Zorg.Imaging.Image.ToBlurHash(int componentsX = 4, int componentsY = 3) -> string!
+Zorg.Imaging.Image.ToSrgb() -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Trim(int threshold = 10) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.Width.get -> int
+Zorg.Imaging.ImageDefaults
+Zorg.Imaging.ImageException
+Zorg.Imaging.ImageException.ImageException() -> void
+Zorg.Imaging.ImageException.ImageException(string! message) -> void
+Zorg.Imaging.ImageException.ImageException(string! message, System.Exception! innerException) -> void
+Zorg.Imaging.ImageFormat
+Zorg.Imaging.ImageFormat.FileExtensions.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Imaging.ImageFormat.IsSupported.get -> bool
+Zorg.Imaging.ImageFormat.MimeType.get -> string!
+Zorg.Imaging.ImageFormat.Name.get -> string!
+Zorg.Imaging.ImageFormatException
+Zorg.Imaging.ImageFormatException.ImageFormatException() -> void
+Zorg.Imaging.ImageFormatException.ImageFormatException(string! message) -> void
+Zorg.Imaging.ImageFormatException.ImageFormatException(string! message, System.Exception! innerException) -> void
+Zorg.Imaging.ImageFormats
+Zorg.Imaging.ImageInfo
+Zorg.Imaging.ImageInfo.ColorSpace.get -> Zorg.Imaging.ColorSpace?
+Zorg.Imaging.ImageInfo.DisplayHeight.get -> int
+Zorg.Imaging.ImageInfo.DisplayWidth.get -> int
+Zorg.Imaging.ImageInfo.Format.get -> Zorg.Imaging.ImageFormat!
+Zorg.Imaging.ImageInfo.FrameCount.get -> int?
+Zorg.Imaging.ImageInfo.HasAlpha.get -> bool
+Zorg.Imaging.ImageInfo.HasExif.get -> bool
+Zorg.Imaging.ImageInfo.HasIccProfile.get -> bool
+Zorg.Imaging.ImageInfo.Height.get -> int
+Zorg.Imaging.ImageInfo.IsAnimated.get -> bool
+Zorg.Imaging.ImageInfo.Orientation.get -> int
+Zorg.Imaging.ImageInfo.Width.get -> int
+Zorg.Imaging.ImageLimitException
+Zorg.Imaging.ImageLimitException.ImageLimitException() -> void
+Zorg.Imaging.ImageLimitException.ImageLimitException(string! message) -> void
+Zorg.Imaging.ImageLimitException.ImageLimitException(string! message, System.Exception! innerException) -> void
+Zorg.Imaging.ImageLimits
+Zorg.Imaging.ImageLimits.ImageLimits() -> void
+Zorg.Imaging.ImageLimits.MaxFrames.get -> int
+Zorg.Imaging.ImageLimits.MaxFrames.init -> void
+Zorg.Imaging.ImageLimits.MaxHeaderBytes.get -> int
+Zorg.Imaging.ImageLimits.MaxHeaderBytes.init -> void
+Zorg.Imaging.ImageLimits.MaxPixels.get -> long
+Zorg.Imaging.ImageLimits.MaxPixels.init -> void
+Zorg.Imaging.ImageMetadata
+Zorg.Imaging.ImageMetadata.Artist.get -> string?
+Zorg.Imaging.ImageMetadata.CameraMake.get -> string?
+Zorg.Imaging.ImageMetadata.CameraModel.get -> string?
+Zorg.Imaging.ImageMetadata.Copyright.get -> string?
+Zorg.Imaging.ImageMetadata.DateTaken.get -> System.DateTime?
+Zorg.Imaging.ImageMetadata.DateTakenOffset.get -> System.TimeSpan?
+Zorg.Imaging.ImageMetadata.Description.get -> string?
+Zorg.Imaging.ImageMetadata.Exif.get -> System.ReadOnlyMemory<byte>
+Zorg.Imaging.ImageMetadata.Iptc.get -> System.ReadOnlyMemory<byte>
+Zorg.Imaging.ImageMetadata.Keywords.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Zorg.Imaging.ImageMetadata.LensModel.get -> string?
+Zorg.Imaging.ImageMetadata.Location.get -> Zorg.Imaging.GeoLocation?
+Zorg.Imaging.ImageMetadata.Orientation.get -> int
+Zorg.Imaging.ImageMetadata.Title.get -> string?
+Zorg.Imaging.ImageMetadata.Xmp.get -> System.ReadOnlyMemory<byte>
+Zorg.Imaging.ImagePipeline
+Zorg.Imaging.ImagePipeline.Blur(double sigma) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Crop(int x, int y, int width, int height) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.DrawImage(Zorg.Imaging.Image! overlay, int x, int y, double opacity = 1) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Fill(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Fit(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Flatten(Zorg.Imaging.Rgba32 background) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.FlipHorizontal() -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.FlipVertical() -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Pad(int width, int height, Zorg.Imaging.Rgba32 background, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Resize(int width, int height, Zorg.Imaging.Resampler? resampler = null) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Rotate(int degrees) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.SaveAsAsync(System.IO.Stream! stream, Zorg.Imaging.ImageFormat! format, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.SaveAsGifAsync(System.IO.Stream! stream, Zorg.Imaging.GifEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.SaveAsJpegAsync(System.IO.Stream! stream, Zorg.Imaging.JpegEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.SaveAsPngAsync(System.IO.Stream! stream, Zorg.Imaging.PngEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.SaveAsWebpAsync(System.IO.Stream! stream, Zorg.Imaging.WebpEncoderOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+Zorg.Imaging.ImagePipeline.Sharpen(double sigma = 1, double amount = 1) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.ToImageAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<Zorg.Imaging.Image!>
+Zorg.Imaging.ImagePipeline.ToSrgb() -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.Trim(int threshold = 10) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.WithDecodeOptions(Zorg.Imaging.DecodeOptions! options) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.ImagePipeline.WithMaxDegreeOfParallelism(int maxDegreeOfParallelism) -> Zorg.Imaging.ImagePipeline!
+Zorg.Imaging.JpegChromaSubsampling
+Zorg.Imaging.JpegChromaSubsampling.Yuv420 = 0 -> Zorg.Imaging.JpegChromaSubsampling
+Zorg.Imaging.JpegChromaSubsampling.Yuv444 = 1 -> Zorg.Imaging.JpegChromaSubsampling
+Zorg.Imaging.JpegEncoderOptions
+Zorg.Imaging.JpegEncoderOptions.Background.get -> Zorg.Imaging.Rgba32
+Zorg.Imaging.JpegEncoderOptions.Background.init -> void
+Zorg.Imaging.JpegEncoderOptions.ChromaSubsampling.get -> Zorg.Imaging.JpegChromaSubsampling
+Zorg.Imaging.JpegEncoderOptions.ChromaSubsampling.init -> void
+Zorg.Imaging.JpegEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.JpegEncoderOptions.ColorSpaceHandling.init -> void
+Zorg.Imaging.JpegEncoderOptions.JpegEncoderOptions() -> void
+Zorg.Imaging.JpegEncoderOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.JpegEncoderOptions.MaxDegreeOfParallelism.init -> void
+Zorg.Imaging.JpegEncoderOptions.Metadata.get -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.JpegEncoderOptions.Metadata.init -> void
+Zorg.Imaging.JpegEncoderOptions.Progressive.get -> bool
+Zorg.Imaging.JpegEncoderOptions.Progressive.init -> void
+Zorg.Imaging.JpegEncoderOptions.Quality.get -> int
+Zorg.Imaging.JpegEncoderOptions.Quality.init -> void
+Zorg.Imaging.L16
+Zorg.Imaging.L16.Equals(Zorg.Imaging.L16 other) -> bool
+Zorg.Imaging.L16.L.get -> ushort
+Zorg.Imaging.L16.L.set -> void
+Zorg.Imaging.L16.L16() -> void
+Zorg.Imaging.L16.L16(ushort l) -> void
+Zorg.Imaging.L8
+Zorg.Imaging.L8.Equals(Zorg.Imaging.L8 other) -> bool
+Zorg.Imaging.L8.L.get -> byte
+Zorg.Imaging.L8.L.set -> void
+Zorg.Imaging.L8.L8() -> void
+Zorg.Imaging.L8.L8(byte l) -> void
+Zorg.Imaging.MetadataOptions
+Zorg.Imaging.MetadataOptions.Excluded.get -> Zorg.Imaging.ExifGroup
+Zorg.Imaging.MetadataOptions.Without(Zorg.Imaging.ExifGroup groups) -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.Bgra32 = 2 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.L16 = 5 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.L8 = 4 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.None = 0 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.Rgb24 = 3 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.Rgb48 = 6 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.Rgba32 = 1 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PixelFormat.Rgba64 = 7 -> Zorg.Imaging.PixelFormat
+Zorg.Imaging.PngEncoderOptions
+Zorg.Imaging.PngEncoderOptions.CleanTransparentPixels.get -> bool
+Zorg.Imaging.PngEncoderOptions.CleanTransparentPixels.init -> void
+Zorg.Imaging.PngEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.PngEncoderOptions.ColorSpaceHandling.init -> void
+Zorg.Imaging.PngEncoderOptions.CompressionLevel.get -> int
+Zorg.Imaging.PngEncoderOptions.CompressionLevel.init -> void
+Zorg.Imaging.PngEncoderOptions.Dithering.get -> double
+Zorg.Imaging.PngEncoderOptions.Dithering.init -> void
+Zorg.Imaging.PngEncoderOptions.Filter.get -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngEncoderOptions.Filter.init -> void
+Zorg.Imaging.PngEncoderOptions.MaxColors.get -> int
+Zorg.Imaging.PngEncoderOptions.MaxColors.init -> void
+Zorg.Imaging.PngEncoderOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.PngEncoderOptions.MaxDegreeOfParallelism.init -> void
+Zorg.Imaging.PngEncoderOptions.Metadata.get -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.PngEncoderOptions.Metadata.init -> void
+Zorg.Imaging.PngEncoderOptions.Optimize.get -> bool
+Zorg.Imaging.PngEncoderOptions.Optimize.init -> void
+Zorg.Imaging.PngEncoderOptions.PngEncoderOptions() -> void
+Zorg.Imaging.PngEncoderOptions.ReduceColorType.get -> bool
+Zorg.Imaging.PngEncoderOptions.ReduceColorType.init -> void
+Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Adaptive = 0 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Average = 4 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.BigramEntropy = 9 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Bigrams = 8 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Entropy = 7 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.MinimumSum = 6 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.None = 1 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Paeth = 5 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Sub = 2 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.PngFilter.Up = 3 -> Zorg.Imaging.PngFilter
+Zorg.Imaging.Resampler
+Zorg.Imaging.Resampler.Name.get -> string!
+Zorg.Imaging.Resampler.Radius.get -> double
+Zorg.Imaging.Rgb24
+Zorg.Imaging.Rgb24.B.get -> byte
+Zorg.Imaging.Rgb24.B.set -> void
+Zorg.Imaging.Rgb24.Equals(Zorg.Imaging.Rgb24 other) -> bool
+Zorg.Imaging.Rgb24.G.get -> byte
+Zorg.Imaging.Rgb24.G.set -> void
+Zorg.Imaging.Rgb24.R.get -> byte
+Zorg.Imaging.Rgb24.R.set -> void
+Zorg.Imaging.Rgb24.Rgb24() -> void
+Zorg.Imaging.Rgb24.Rgb24(byte r, byte g, byte b) -> void
+Zorg.Imaging.Rgb48
+Zorg.Imaging.Rgb48.B.get -> ushort
+Zorg.Imaging.Rgb48.B.set -> void
+Zorg.Imaging.Rgb48.Equals(Zorg.Imaging.Rgb48 other) -> bool
+Zorg.Imaging.Rgb48.G.get -> ushort
+Zorg.Imaging.Rgb48.G.set -> void
+Zorg.Imaging.Rgb48.R.get -> ushort
+Zorg.Imaging.Rgb48.R.set -> void
+Zorg.Imaging.Rgb48.Rgb48() -> void
+Zorg.Imaging.Rgb48.Rgb48(ushort r, ushort g, ushort b) -> void
+Zorg.Imaging.Rgba32
+Zorg.Imaging.Rgba32.A.get -> byte
+Zorg.Imaging.Rgba32.A.set -> void
+Zorg.Imaging.Rgba32.B.get -> byte
+Zorg.Imaging.Rgba32.B.set -> void
+Zorg.Imaging.Rgba32.Equals(Zorg.Imaging.Rgba32 other) -> bool
+Zorg.Imaging.Rgba32.G.get -> byte
+Zorg.Imaging.Rgba32.G.set -> void
+Zorg.Imaging.Rgba32.R.get -> byte
+Zorg.Imaging.Rgba32.R.set -> void
+Zorg.Imaging.Rgba32.Rgba32() -> void
+Zorg.Imaging.Rgba32.Rgba32(byte r, byte g, byte b, byte a = 255) -> void
+Zorg.Imaging.Rgba64
+Zorg.Imaging.Rgba64.A.get -> ushort
+Zorg.Imaging.Rgba64.A.set -> void
+Zorg.Imaging.Rgba64.B.get -> ushort
+Zorg.Imaging.Rgba64.B.set -> void
+Zorg.Imaging.Rgba64.Equals(Zorg.Imaging.Rgba64 other) -> bool
+Zorg.Imaging.Rgba64.G.get -> ushort
+Zorg.Imaging.Rgba64.G.set -> void
+Zorg.Imaging.Rgba64.R.get -> ushort
+Zorg.Imaging.Rgba64.R.set -> void
+Zorg.Imaging.Rgba64.Rgba64() -> void
+Zorg.Imaging.Rgba64.Rgba64(ushort r, ushort g, ushort b, ushort a = 65535) -> void
+Zorg.Imaging.UnsupportedImageFormatException
+Zorg.Imaging.UnsupportedImageFormatException.Format.get -> Zorg.Imaging.ImageFormat?
+Zorg.Imaging.UnsupportedImageFormatException.UnsupportedImageFormatException() -> void
+Zorg.Imaging.UnsupportedImageFormatException.UnsupportedImageFormatException(string! message) -> void
+Zorg.Imaging.UnsupportedImageFormatException.UnsupportedImageFormatException(string! message, System.Exception! innerException) -> void
+Zorg.Imaging.UnsupportedImageFormatException.UnsupportedImageFormatException(string! message, Zorg.Imaging.ImageFormat? format) -> void
+Zorg.Imaging.WebpEncoderOptions
+Zorg.Imaging.WebpEncoderOptions.ColorSpaceHandling.get -> Zorg.Imaging.ColorSpaceHandling
+Zorg.Imaging.WebpEncoderOptions.ColorSpaceHandling.init -> void
+Zorg.Imaging.WebpEncoderOptions.Effort.get -> int
+Zorg.Imaging.WebpEncoderOptions.Effort.init -> void
+Zorg.Imaging.WebpEncoderOptions.Exact.get -> bool
+Zorg.Imaging.WebpEncoderOptions.Exact.init -> void
+Zorg.Imaging.WebpEncoderOptions.Lossless.get -> bool
+Zorg.Imaging.WebpEncoderOptions.Lossless.init -> void
+Zorg.Imaging.WebpEncoderOptions.MaxDegreeOfParallelism.get -> int
+Zorg.Imaging.WebpEncoderOptions.MaxDegreeOfParallelism.init -> void
+Zorg.Imaging.WebpEncoderOptions.Metadata.get -> Zorg.Imaging.MetadataOptions!
+Zorg.Imaging.WebpEncoderOptions.Metadata.init -> void
+Zorg.Imaging.WebpEncoderOptions.NearLossless.get -> bool
+Zorg.Imaging.WebpEncoderOptions.NearLossless.init -> void
+Zorg.Imaging.WebpEncoderOptions.Quality.get -> int
+Zorg.Imaging.WebpEncoderOptions.Quality.init -> void
+Zorg.Imaging.WebpEncoderOptions.WebpEncoderOptions() -> void

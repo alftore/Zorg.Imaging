@@ -1,13 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
 
-The library is the same as 0.1.0-preview.7. The repository is getting ready to go public:
+The first release outside preview. The library is the same as 0.1.0-preview.7, which wasn't published on nuget.org, so this release also has everything in preview.7's notes below. What's new is around it:
 
-- `docs/limits.md` lists the formats and features that aren't supported yet, and the default input limits.
-- Issue forms for bug reports and feature requests; pull requests are for collaborators only (see CONTRIBUTING.md).
-- SECURITY.md says how fast reports are answered, how releases are protected and how to verify a package.
-- Rulesets for `main` and release tags in `.github/rulesets`.
+- The repository is public. Issues are welcome through the issue forms. Pull requests are open to collaborators only, as [CONTRIBUTING.md](CONTRIBUTING.md) explains.
+- [docs/limits.md](docs/limits.md) lists what isn't supported yet and the default input limits.
+- Packages are published from GitHub Actions with NuGet trusted publishing, and each release has a build provenance attestation. [SECURITY.md](SECURITY.md) says how to verify one.
 
 ## 0.1.0-preview.7
 
