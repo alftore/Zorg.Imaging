@@ -62,6 +62,10 @@ while [ "$n" -lt "${ZORG_GATE_REPEAT:-1}" ]; do
   run_tests tests/Zorg.Imaging.Tests 900 /tmp/unit.log
 done
 
+# The system codecs: on Linux they report themselves unavailable, and their HEIF box reader is fuzzed here too.
+step "System codec tests"
+run_tests tests/Zorg.Imaging.SystemCodecs.Tests 600 /tmp/systemcodecs.log
+
 # PngSuite, the libwebp conformance vectors and the EXIF orientation photos; a missing corpus fails here.
 step "Compliance tests"
 export ZORG_REQUIRE_CORPORA=1

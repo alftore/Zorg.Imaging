@@ -41,14 +41,46 @@ jobs:
       - name: Test
         run: dotnet test --project tests/Zorg.Imaging.Tests -c Release --no-build
 
+      - name: Test the system codecs
+        run: dotnet test --project tests/Zorg.Imaging.SystemCodecs.Tests -c Release --no-build
+
       - name: Pack
         shell: bash
-        run: dotnet pack src/Zorg.Imaging/Zorg.Imaging.csproj -c Release --no-build -p:PackageOutputPath="$RUNNER_TEMP/packages"
+        run: |
+          for project in src/*/*.csproj; do
+            dotnet pack "$project" -c Release --no-build -p:PackageOutputPath="$RUNNER_TEMP/packages"
+          done
 
       # Design decision D3: the library stays under 3 MB.
       - name: Size limit
         shell: bash
         run: scripts/check-size.sh src/Zorg.Imaging/bin/Release/net10.0/Zorg.Imaging.dll 3072 "Zorg.Imaging.dll"
+
+  # The system codecs call ImageIO on macOS: real AVIF and HEIC samples (fetched, never committed) decode here. Windows
+  # runs the same tests in the build job, where the runner has no HEIF codecs and they report themselves unavailable.
+  macos:
+    name: System codecs (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build tests/Zorg.Imaging.SystemCodecs.Tests -c Release
+
+      - name: Fetch AVIF and HEIC samples
+        run: sh scripts/fetch-heif-samples.sh
+
+      - name: Test
+        env:
+          ZORG_REQUIRE_HEIF_SAMPLES: '1'
+        run: dotnet test --project tests/Zorg.Imaging.SystemCodecs.Tests -c Release --no-build
 
   oracles:
     name: Oracle tests (Alpine gate, Docker)
