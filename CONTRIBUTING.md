@@ -57,6 +57,9 @@ scripts/fetch-corpora.sh
 dotnet test --project tests/Zorg.Imaging.ComplianceTests
 ```
 
+AVIF and HEIC samples for `Zorg.Imaging.SystemCodecs` come the same way, from `scripts/fetch-heif-samples.sh` into
+`.cache/corpora/heif`; see [docs/codecs.md](docs/codecs.md#sample-files) for where else to find some.
+
 ## Fuzzing
 
 Every decoder has mutation tests (`*MutationTests`): every truncation, every byte set to edge values, corrupted length

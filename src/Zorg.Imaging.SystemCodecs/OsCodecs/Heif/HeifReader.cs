@@ -205,14 +205,21 @@ internal static class HeifReader
             }
         }
 
-        int orientation = Orientation(
-            Find(properties, associations, primary, "irot")?.Value ?? 0,
-            Find(properties, associations, primary, "imir")?.Value ?? -1);
+        if ((long)width * height > limits.MaxPixels)
+        {
+            throw new ImageLimitException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"The HEIF image is {width}x{height} pixels before cropping, more than the limit (ImageLimits.MaxPixels)."));
+        }
+
+        int rotation = Find(properties, associations, primary, "irot")?.Value ?? 0;
+        int mirror = Find(properties, associations, primary, "imir")?.Value ?? -1;
+        Crop crop = Find(properties, associations, primary, "clap") is { } clap ? CleanAperture(clap, width, height) : new Crop(0, 0, width, height);
         Property? pixi = Find(properties, associations, primary, "pixi");
         Property? colour = Find(properties, associations, primary, "colr");
         bool alpha = HasAlpha(primary, references, properties, associations);
         bool exif = HasExif(primary, references, itemTypes);
-        return new HeifHeader(format, width, height, orientation, alpha, pixi?.Value ?? 8, colour?.Colour, tiles, exif);
+        return new HeifHeader(format, width, height, crop, rotation, mirror, alpha, pixi?.Value ?? 8, colour?.Colour, tiles, exif);
     }
 
     private static void ReadItemInfo(ReadOnlySpan<byte> iinf, Dictionary<uint, uint> itemTypes)
@@ -353,6 +360,18 @@ internal static class HeifReader
             return new Property(type);
         }
 
+        if (type == Fourcc("clap"))
+        {
+            ReadOnlySpan<byte> clap = Need(body, 32, "clap");
+            int[] values = new int[8];
+            for (int i = 0; i < 8; i++)
+            {
+                values[i] = (int)clap.ReadU32(i * 4);
+            }
+
+            return new Property(type) { Aperture = values };
+        }
+
         if (type == Fourcc("auxC"))
         {
             ReadOnlySpan<byte> auxC = FullBoxBody(body, "auxC", out _);
@@ -481,6 +500,43 @@ internal static class HeifReader
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The rectangle a <c>clap</c> box keeps (ISO/IEC 14496-12): a size centred on the image, moved by the offsets.
+    /// Every value must come out a whole number of pixels inside the image, as MIAF requires.
+    /// </summary>
+    private static Crop CleanAperture(Property clap, int width, int height)
+    {
+        int[] v = clap.Aperture!;
+        uint widthN = (uint)v[0], widthD = (uint)v[1], heightN = (uint)v[2], heightD = (uint)v[3];
+        int horizontalN = v[4], verticalN = v[6];
+        uint horizontalD = (uint)v[5], verticalD = (uint)v[7];
+        if (widthD == 0 || heightD == 0 || horizontalD == 0 || verticalD == 0
+            || widthN % widthD != 0 || heightN % heightD != 0)
+        {
+            throw Corrupt("has a clean aperture (clap) that isn't a whole number of pixels");
+        }
+
+        long cropWidth = widthN / widthD;
+        long cropHeight = heightN / heightD;
+
+        // left = (width - cropWidth) / 2 + horizontal offset, kept exact as halves.
+        long leftTwice = (width - cropWidth) + (2L * horizontalN / horizontalD);
+        long topTwice = (height - cropHeight) + (2L * verticalN / verticalD);
+        if ((2L * horizontalN) % horizontalD != 0 || (2L * verticalN) % verticalD != 0 || leftTwice % 2 != 0 || topTwice % 2 != 0)
+        {
+            throw Corrupt("has a clean aperture (clap) that isn't a whole number of pixels");
+        }
+
+        long left = leftTwice / 2;
+        long top = topTwice / 2;
+        if (cropWidth < 1 || cropHeight < 1 || left < 0 || top < 0 || left + cropWidth > width || top + cropHeight > height)
+        {
+            throw Corrupt("has a clean aperture (clap) outside the image");
+        }
+
+        return new Crop((int)left, (int)top, (int)cropWidth, (int)cropHeight);
     }
 
     /// <summary>
@@ -650,17 +706,38 @@ internal static class HeifReader
         public bool Alpha { get; init; }
 
         public ColorSpace? Colour { get; init; }
+
+        // clap: width N/D, height N/D, horizontal offset N/D, vertical offset N/D (offsets signed).
+        public int[]? Aperture { get; init; }
     }
 }
 
 /// <summary>What an AVIF or HEIC file says about its primary image.</summary>
 /// <param name="Format">AVIF or HEIF (HEIC).</param>
-/// <param name="Width">The stored width.</param>
-/// <param name="Height">The stored height.</param>
-/// <param name="Orientation">The EXIF orientation equal to the file's <c>irot</c> and <c>imir</c>.</param>
+/// <param name="Width">The stored width, as coded.</param>
+/// <param name="Height">The stored height, as coded.</param>
+/// <param name="Crop">The part the <c>clap</c> box keeps, or the whole image.</param>
+/// <param name="Rotation">The <c>irot</c> turn, anticlockwise in 90° steps, 0 to 3.</param>
+/// <param name="Mirror">The <c>imir</c> axis: 0 mirrors left to right, 1 top to bottom, -1 none.</param>
 /// <param name="HasAlpha">Whether an alpha plane goes with it.</param>
 /// <param name="BitDepth">The deepest channel, 8 to 16.</param>
 /// <param name="ColorSpace">The colour space from <c>colr</c>, or <see langword="null"/>.</param>
 /// <param name="Tiles">How many tiles a grid image has, or 0 for a single image.</param>
 /// <param name="HasExif">Whether an EXIF item describes it.</param>
-internal sealed record HeifHeader(ImageFormat Format, int Width, int Height, int Orientation, bool HasAlpha, int BitDepth, ColorSpace? ColorSpace, int Tiles, bool HasExif);
+internal sealed record HeifHeader(ImageFormat Format, int Width, int Height, Crop Crop, int Rotation, int Mirror, bool HasAlpha, int BitDepth, ColorSpace? ColorSpace, int Tiles, bool HasExif)
+{
+    /// <summary>The EXIF orientation equal to <see cref="Rotation"/> then <see cref="Mirror"/>.</summary>
+    public int Orientation => HeifReader.Orientation(Rotation, Mirror);
+
+    /// <summary>Whether the image is shown cropped, turned or mirrored.</summary>
+    public bool IsTransformed => Rotation != 0 || Mirror >= 0 || Crop.Width != Width || Crop.Height != Height;
+
+    /// <summary>The width as shown: cropped, then turned.</summary>
+    public int DisplayWidth => Rotation % 2 == 1 ? Crop.Height : Crop.Width;
+
+    /// <summary>The height as shown: cropped, then turned.</summary>
+    public int DisplayHeight => Rotation % 2 == 1 ? Crop.Width : Crop.Height;
+}
+
+/// <summary>A rectangle of the stored image.</summary>
+internal readonly record struct Crop(int X, int Y, int Width, int Height);

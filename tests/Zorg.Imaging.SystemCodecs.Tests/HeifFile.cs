@@ -94,6 +94,9 @@ public sealed class HeifFile
 
     public static byte[] Imir(int axis) => Box("imir", [(byte)axis]);
 
+    public static byte[] Clap(int width, int height, int horizontalOffset, int verticalOffset) =>
+        Box("clap", U32((uint)width), U32(1), U32((uint)height), U32(1), U32((uint)horizontalOffset), U32(1), U32((uint)verticalOffset), U32(1));
+
     public static byte[] Pixi(params byte[] bits) => FullBox("pixi", 0, 0, [(byte)bits.Length, .. bits]);
 
     public static byte[] Nclx(int primaries, int transfer, int matrix) =>

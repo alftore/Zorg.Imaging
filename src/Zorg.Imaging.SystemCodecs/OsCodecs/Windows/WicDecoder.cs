@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Zorg.Imaging.OsCodecs.Heif;
 
 namespace Zorg.Imaging.OsCodecs.Windows;
 
@@ -33,6 +34,7 @@ internal sealed unsafe class WicDecoder : SystemDecoder
     private const int BadImage = unchecked((int)0x88982F60);
     private const int BadHeader = unchecked((int)0x88982F61);
     private const int UnsupportedOperation = unchecked((int)0x88982F81);
+    private const int UnsupportedPixelFormat = unchecked((int)0x88982F80);
     private const int CodecNotFound = unchecked((int)0xC00D5212); // MF_E_TOPO_CODEC_NOT_FOUND
     private const int InvalidFileFormat = unchecked((int)0xC00D36BE); // MF_E_INVALID_FILE_FORMAT
 
@@ -44,6 +46,8 @@ internal sealed unsafe class WicDecoder : SystemDecoder
     private static readonly Guid Rgba32 = new(0xf5c7ad2d, 0x6a8d, 0x43dd, 0xa7, 0xa8, 0xa2, 0x99, 0x35, 0x26, 0x1a, 0xe9);
     private static readonly Guid Bgra32 = new(0x6fddc324, 0x4e03, 0x4bfe, 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x0f);
     private static readonly Guid Rgba64 = new(0x6fddc324, 0x4e03, 0x4bfe, 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x16);
+    private static readonly Guid Alpha8 = new(0xe6cd0116, 0xeeba, 0x4161, 0xaa, 0x85, 0x27, 0xdd, 0x9f, 0xb3, 0xa8, 0x95);
+    private static readonly Guid SourceTransformInterface = new(0x3b16811b, 0x6a43, 0x4ec9, 0xb7, 0x13, 0x3d, 0x5a, 0x0c, 0x13, 0xb9, 0x40);
 
     private readonly Lazy<bool> _heifExtension = new(FindHeifExtension);
 
@@ -52,7 +56,7 @@ internal sealed unsafe class WicDecoder : SystemDecoder
     public override CodecAvailability Availability(ImageFormat format) =>
         _heifExtension.Value ? CodecAvailability.Available : CodecAvailability.Unavailable(Missing(format));
 
-    public override Image Decode(ReadOnlyMemory<byte> data, ImageInfo header, CodecContext context)
+    public override Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context)
     {
         PixelFormat target = Target(context);
         Guid wicFormat = target switch
@@ -83,11 +87,12 @@ internal sealed unsafe class WicDecoder : SystemDecoder
             uint width;
             uint height;
             Check(((delegate* unmanaged[Stdcall]<void*, uint*, uint*, int>)Vtable(frame)[3])(frame, &width, &height), "reading the size", header.Format); // IWICBitmapSource::GetSize
-            if (width != (uint)header.Width || height != (uint)header.Height)
+            // WIC applies HEIF's crop, turn and mirror itself, so this is normally the size as shown.
+            if ((width != (uint)header.DisplayWidth || height != (uint)header.DisplayHeight) && (width != (uint)header.Width || height != (uint)header.Height))
             {
                 throw new ImageFormatException(string.Create(
                     CultureInfo.InvariantCulture,
-                    $"The {header.Format.Name} file's image is {width}x{height} pixels, but its boxes say {header.Width}x{header.Height}."));
+                    $"The {header.Format.Name} file's image is {width}x{height} pixels, but its boxes say {header.Width}x{header.Height}, shown as {header.DisplayWidth}x{header.DisplayHeight}."));
             }
 
             context.CancellationToken.ThrowIfCancellationRequested();
@@ -95,7 +100,7 @@ internal sealed unsafe class WicDecoder : SystemDecoder
             Guid wanted = wicFormat;
             Check(((delegate* unmanaged[Stdcall]<void*, void*, Guid*, int, void*, double, int, int>)Vtable(converter)[8])(converter, frame, &wanted, DitherNone, null, 0, PaletteCustom), "converting the pixels", header.Format); // IWICFormatConverter::Initialize
 
-            image = new Image(header.Width, header.Height, target);
+            image = new Image((int)width, (int)height, target);
             int stride = image.Width * (target == PixelFormat.Rgba64 ? 8 : 4);
             Span<byte> pixels = image.GetPixelBytes();
             fixed (byte* destination = pixels)
@@ -104,10 +109,16 @@ internal sealed unsafe class WicDecoder : SystemDecoder
                 Check(((delegate* unmanaged[Stdcall]<void*, void*, uint, uint, byte*, int>)Vtable(converter)[7])(converter, null, (uint)stride, (uint)pixels.Length, destination), "decoding the pixels", header.Format);
             }
 
+            if (header.HasAlpha)
+            {
+                // The HEIF decoder gives the colour and the alpha plane separately: the frame's pixels are opaque.
+                AddAlpha(frame, image, header.Format);
+            }
+
             image.ColorSpace = header.ColorSpace ?? ColorSpace.Srgb;
             Image result = image;
             image = null;
-            return result;
+            return AsShown(result, header, systemApplied: true);
         }
         finally
         {
@@ -117,6 +128,60 @@ internal sealed unsafe class WicDecoder : SystemDecoder
             Release(decoder);
             Release(stream);
             Release(factory);
+        }
+    }
+
+    // IWICBitmapSourceTransform::CopyPixels with GUID_WICPixelFormat8bppAlpha gives the alpha plane, the same way up as
+    // the colour; it goes into the image's alpha channel unchanged (the colour isn't premultiplied).
+    private static void AddAlpha(void* frame, Image image, ImageFormat format)
+    {
+        void* transform = null;
+        try
+        {
+            Guid interfaceId = SourceTransformInterface;
+            Check(((delegate* unmanaged[Stdcall]<void*, Guid*, void**, int>)Vtable(frame)[0])(frame, &interfaceId, &transform), "reading the alpha plane", format); // IUnknown::QueryInterface
+            int width = image.Width;
+            int height = image.Height;
+            byte[] alpha = new byte[width * height];
+            Guid alphaFormat = Alpha8;
+            int result;
+            fixed (byte* plane = alpha)
+            {
+                result = ((delegate* unmanaged[Stdcall]<void*, void*, uint, uint, Guid*, int, uint, uint, byte*, int>)Vtable(transform)[3])(
+                    transform, null, (uint)width, (uint)height, &alphaFormat, 0, (uint)width, (uint)alpha.Length, plane);
+            }
+
+            if (result == UnsupportedPixelFormat)
+            {
+                // Better no image than one that has silently lost its transparency.
+                throw new UnsupportedImageFormatException(
+                    "Windows can't read this " + format.Name + " file's alpha plane, so it can't be decoded without losing its transparency.",
+                    format);
+            }
+
+            Check(result, "reading the alpha plane", format);
+
+            Span<byte> pixels = image.GetPixelBytes();
+            if (image.PixelFormat == PixelFormat.Rgba64)
+            {
+                for (int i = 0; i < alpha.Length; i++)
+                {
+                    ushort value = (ushort)(alpha[i] * 257);
+                    pixels[(i * 8) + 6] = (byte)value;
+                    pixels[(i * 8) + 7] = (byte)(value >> 8);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < alpha.Length; i++)
+                {
+                    pixels[(i * 4) + 3] = alpha[i];
+                }
+            }
+        }
+        finally
+        {
+            Release(transform);
         }
     }
 

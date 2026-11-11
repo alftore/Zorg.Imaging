@@ -37,8 +37,31 @@ ImageDefaults.Codecs = SystemCodecs.All; // SystemCodecs.Heif and SystemCodecs.A
 - **macOS:** ImageIO; HEIC from 10.13, AVIF from 13. The pixels keep the file's colour space.
 - **Elsewhere,** and on Windows Server, the codecs report themselves unavailable.
 
-It reads the file's boxes in managed code first (the primary image's size, rotation, alpha, bit depth, colour and the
-number of tiles), so the limits apply before the system decoder runs. It decodes at full size, and the first image only.
+It reads the file's boxes in managed code first (the primary image's size, crop, rotation, mirror, alpha, bit depth,
+colour and the number of tiles), so the limits apply before the system decoder runs: both the stored size and the size as
+shown. HEIF's crop (`clap`), turn (`irot`) and mirror (`imir`) are part of the image, so `Identify` reports the size as
+shown with orientation 1, and decoding returns the picture that way (WIC applies them itself; on macOS the codec applies
+what ImageIO leaves). It decodes at full size, and the first image only.
+
+Alpha comes from the file's alpha plane. If the system can't read that plane (Windows can't for some small AVIF test
+files), decoding fails with `UnsupportedImageFormatException` rather than returning an opaque picture.
+
+### Sample files
+
+None are in the repository. `scripts/fetch-heif-samples.sh` fetches a few into `.cache/corpora/heif` (gitignored),
+checked against pinned SHA-256s, and the tests in `tests/Zorg.Imaging.SystemCodecs.Tests` decode them when they're there:
+
+- [libavif's test images](https://github.com/AOMediaCodec/libavif/tree/main/tests/data): many AVIF variants (grids,
+  alpha, transforms, ICC, 10-bit), mostly under libavif's BSD-2-Clause licence; its
+  [README](https://github.com/AOMediaCodec/libavif/blob/main/tests/data/README.md) gives each file's licence.
+- [libheif's examples](https://github.com/strukturag/libheif/tree/master/examples): one HEIC and one AVIF photo, MIT.
+- [Link-U's AVIF samples](https://github.com/link-u/avif-sample-images): a larger AVIF set, mostly CC BY-SA 4.0.
+- [Nokia's HEIF conformance files](https://github.com/nokiatech/heif_conformance): the reference HEIF set; check its
+  licence before using it.
+- A phone: iPhones and many Android phones save photos as HEIC.
+
+`ZORG_HEIF_SAMPLES` points the tests at another folder, and `ZORG_REQUIRE_HEIF_SAMPLES=1` turns a missing file into a
+failure (the macOS CI job sets it).
 
 ## What the library does around a codec
 

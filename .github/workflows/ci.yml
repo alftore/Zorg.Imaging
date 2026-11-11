@@ -56,8 +56,8 @@ jobs:
         shell: bash
         run: scripts/check-size.sh src/Zorg.Imaging/bin/Release/net10.0/Zorg.Imaging.dll 3072 "Zorg.Imaging.dll"
 
-  # The system codecs call ImageIO on macOS. Without HEIC or AVIF test files yet, this checks the bindings load and
-  # every call fails cleanly; Windows runs the same tests in the build job.
+  # The system codecs call ImageIO on macOS: real AVIF and HEIC samples (fetched, never committed) decode here. Windows
+  # runs the same tests in the build job, where the runner has no HEIF codecs and they report themselves unavailable.
   macos:
     name: System codecs (macOS)
     runs-on: macos-latest
@@ -74,7 +74,12 @@ jobs:
       - name: Build
         run: dotnet build tests/Zorg.Imaging.SystemCodecs.Tests -c Release
 
+      - name: Fetch AVIF and HEIC samples
+        run: sh scripts/fetch-heif-samples.sh
+
       - name: Test
+        env:
+          ZORG_REQUIRE_HEIF_SAMPLES: '1'
         run: dotnet test --project tests/Zorg.Imaging.SystemCodecs.Tests -c Release --no-build
 
   oracles:

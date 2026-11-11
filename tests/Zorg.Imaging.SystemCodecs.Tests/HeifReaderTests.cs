@@ -74,6 +74,35 @@ public sealed class HeifReaderTests
     }
 
     [Fact]
+    public void A_clean_aperture_crops_before_the_turn()
+    {
+        // As libavif's clap_irot_imir sample: 12x34 stored, 8x10 kept 2 right of and 6 above the centre, turned 90°.
+        HeifHeader header = HeifReader.Read(HeifFile.Heic(12, 34).Property(1, HeifFile.Clap(8, 10, 2, -6)).Property(1, HeifFile.Irot(1)).Build(), Limits);
+        Assert.Equal(new Crop(4, 6, 8, 10), header.Crop);
+        Assert.Equal((10, 8), (header.DisplayWidth, header.DisplayHeight));
+        Assert.True(header.IsTransformed);
+        Assert.False(HeifReader.Read(HeifFile.Heic(12, 34).Build(), Limits).IsTransformed);
+    }
+
+    [Theory]
+    [InlineData(13, 10, 0, 0)]
+    [InlineData(8, 10, 3, 0)]
+    [InlineData(8, 10, 0, 13)]
+    [InlineData(0, 10, 0, 0)]
+    public void A_clean_aperture_outside_the_image_or_off_the_pixel_grid_is_damage(int width, int height, int horizontal, int vertical)
+    {
+        byte[] file = HeifFile.Heic(12, 34).Property(1, HeifFile.Clap(width, height, horizontal, vertical)).Build();
+        Assert.Throws<ImageFormatException>(() => HeifReader.Read(file, Limits));
+    }
+
+    [Fact]
+    public void The_stored_size_counts_against_the_limit_even_when_cropped()
+    {
+        byte[] file = HeifFile.Heic(2000, 2000).Property(1, HeifFile.Clap(10, 10, 0, 0)).Build();
+        Assert.Throws<ImageLimitException>(() => HeifReader.Read(file, new ImageLimits { MaxPixels = 1_000_000 }));
+    }
+
+    [Fact]
     public void Alpha_EXIF_bit_depth_and_colour_are_read()
     {
         byte[] file = HeifFile.Heic(40, 30)

@@ -18,9 +18,11 @@ internal sealed class SystemCodec(ImageFormat format, SystemDecoder decoder) : I
     {
         ArgumentNullException.ThrowIfNull(context);
         HeifHeader header = HeifReader.Read(head, context.Limits);
-        return new ImageInfo(format, header.Width, header.Height)
+
+        // HEIF's crop, turn and mirror are part of the image (MIAF), not a hint: the size is the shown one, and the
+        // decoders return the image as shown, so there's no orientation left for Zorg.Imaging to apply.
+        return new ImageInfo(format, header.DisplayWidth, header.DisplayHeight)
         {
-            Orientation = header.Orientation,
             HasAlpha = header.HasAlpha,
             ColorSpace = header.ColorSpace,
             HasIccProfile = header.ColorSpace is not null,
@@ -33,6 +35,7 @@ internal sealed class SystemCodec(ImageFormat format, SystemDecoder decoder) : I
         ArgumentNullException.ThrowIfNull(header);
         ArgumentNullException.ThrowIfNull(context);
         context.CancellationToken.ThrowIfCancellationRequested();
-        return decoder.Decode(data, header, context);
+        HeifHeader heif = HeifReader.Read(data.Span[..Math.Min(data.Length, context.Limits.MaxHeaderBytes)], context.Limits);
+        return decoder.Decode(data, heif, context);
     }
 }

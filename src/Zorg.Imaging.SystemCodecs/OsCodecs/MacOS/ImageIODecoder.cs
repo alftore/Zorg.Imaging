@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Zorg.Imaging.OsCodecs.Heif;
 
 namespace Zorg.Imaging.OsCodecs.MacOS;
 
@@ -30,7 +31,7 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             : CodecAvailability.Unavailable(format == ImageFormat.Avif ? "AVIF decoding through ImageIO needs macOS 13 or later." : "This system's ImageIO can't decode HEIC.");
     }
 
-    public override Image Decode(ReadOnlyMemory<byte> data, ImageInfo header, CodecContext context)
+    public override Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context)
     {
         PixelFormat target = Target(context);
         bool sixteen = target == PixelFormat.Rgba64;
@@ -67,12 +68,16 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
 
             nint width = Native.CGImageGetWidth(cgImage);
             nint height = Native.CGImageGetHeight(cgImage);
-            if (width != header.Width || height != header.Height)
+            bool shown = width == header.DisplayWidth && height == header.DisplayHeight;
+            if (!shown && (width != header.Width || height != header.Height))
             {
                 throw new ImageFormatException(string.Create(
                     CultureInfo.InvariantCulture,
-                    $"The {header.Format.Name} file's image is {width}x{height} pixels, but its boxes say {header.Width}x{header.Height}."));
+                    $"The {header.Format.Name} file's image is {width}x{height} pixels, but its boxes say {header.Width}x{header.Height}, shown as {header.DisplayWidth}x{header.DisplayHeight}."));
             }
+
+            // ImageIO reports the turn and mirror it left undone as an EXIF orientation; 1 means none left.
+            bool applied = Native.OrientationOf(source) == 1;
 
             context.CancellationToken.ThrowIfCancellationRequested();
 
@@ -81,19 +86,19 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             bool keep = own is not null && Native.CGColorSpaceGetModel(own) == ColorSpaceModelRgb;
             space = keep ? Native.CGColorSpaceRetain(own) : Native.CGColorSpaceCreateWithName(Native.Constant("CoreGraphics", "kCGColorSpaceSRGB"));
 
-            image = new Image(header.Width, header.Height, sixteen ? PixelFormat.Rgba64 : PixelFormat.Rgba32);
-            int bytesPerRow = header.Width * (sixteen ? 8 : 4);
+            image = new Image((int)width, (int)height, sixteen ? PixelFormat.Rgba64 : PixelFormat.Rgba32);
+            int bytesPerRow = (int)width * (sixteen ? 8 : 4);
             Span<byte> pixels = image.GetPixelBytes();
             fixed (byte* destination = pixels)
             {
                 uint info = AlphaPremultipliedLast | (sixteen ? ByteOrder16Little : ByteOrder32Big);
-                bitmap = Native.CGBitmapContextCreate(destination, header.Width, header.Height, sixteen ? 16 : 8, bytesPerRow, space, info);
+                bitmap = Native.CGBitmapContextCreate(destination, width, height, sixteen ? 16 : 8, bytesPerRow, space, info);
                 if (bitmap is null)
                 {
                     throw Failed("making a bitmap", header.Format);
                 }
 
-                Native.CGContextDrawImage(bitmap, new Rect(0, 0, header.Width, header.Height), cgImage);
+                Native.CGContextDrawImage(bitmap, new Rect(0, 0, width, height), cgImage);
             }
 
             if (sixteen)
@@ -113,7 +118,7 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             image.ColorSpace = keep ? header.ColorSpace ?? IccOf(space) ?? ColorSpace.Srgb : ColorSpace.Srgb;
             Image result = image;
             image = null;
-            return result;
+            return AsShown(result, header, applied);
         }
         finally
         {
@@ -228,6 +233,7 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
         private const string CoreGraphics = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
         private const string ImageIO = "/System/Library/Frameworks/ImageIO.framework/ImageIO";
         private const int StringEncodingUtf8 = 0x08000100;
+        private const int NumberIntType = 9;
 
         private static readonly Lazy<nint> NoCache = new(MakeNoCacheOptions);
 
@@ -266,6 +272,27 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             finally
             {
                 Release(array);
+            }
+        }
+
+        /// <summary>The EXIF orientation ImageIO reports for the first image, 1 when it reports none.</summary>
+        public static int OrientationOf(void* source)
+        {
+            void* properties = CGImageSourceCopyPropertiesAtIndex(source, 0, null);
+            if (properties is null)
+            {
+                return 1;
+            }
+
+            try
+            {
+                void* number = CFDictionaryGetValue(properties, Constant("ImageIO", "kCGImagePropertyOrientation"));
+                int value = 1;
+                return number is not null && CFNumberGetValue(number, NumberIntType, &value) && value is >= 1 and <= 8 ? value : 1;
+            }
+            finally
+            {
+                Release(properties);
             }
         }
 
@@ -311,6 +338,16 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
         [LibraryImport(CoreFoundation)]
         [return: MarshalAs(UnmanagedType.U1)]
         public static partial bool CFStringGetCString(void* text, byte* buffer, nint size, int encoding);
+
+        [LibraryImport(CoreFoundation)]
+        public static partial void* CFDictionaryGetValue(void* dictionary, void* key);
+
+        [LibraryImport(CoreFoundation)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static partial bool CFNumberGetValue(void* number, int type, void* value);
+
+        [LibraryImport(ImageIO)]
+        public static partial void* CGImageSourceCopyPropertiesAtIndex(void* source, nint index, void* options);
 
         [LibraryImport(ImageIO)]
         public static partial void* CGImageSourceCopyTypeIdentifiers();

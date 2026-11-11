@@ -6,7 +6,7 @@ Added:
 
 - Codecs from other packages, for formats the library recognises but doesn't decode (AVIF, HEIC, JPEG XL): subclass `ImageCodec`, and add it through `DecodeOptions.Codecs`, `IdentifyOptions.Codecs` or, once at start-up, `ImageDefaults.Codecs`. The library checks the header against the limits before the codec decodes, checks the result, applies the orientation, and reports a codec's own failures as `ImageCodecException` (`IdentifyStatus.CodecFailed`). See [docs/codecs.md](docs/codecs.md).
 - `ImageLimits.MaxFileBytes` (256 MiB by default), for codecs that need the whole file.
-- A new package, `Zorg.Imaging.SystemCodecs`: AVIF and HEIC decoding through the operating system (Windows Imaging Component on Windows, ImageIO on macOS), for desktop apps. It reads the file's boxes itself and checks them against the limits before the system decoder sees the file. Not yet tested on real AVIF or HEIC files.
+- A new package, `Zorg.Imaging.SystemCodecs`: AVIF and HEIC decoding through the operating system (Windows Imaging Component on Windows, ImageIO on macOS), for desktop apps. It reads the file's boxes itself and checks them against the limits before the system decoder sees the file, returns the picture cropped, turned and mirrored as the file says, and keeps its alpha and colour space. Tested on real AVIF files on Windows; HEIC and macOS run in CI.
 - `ImageInfo` has a public constructor, and its `Orientation`, `HasAlpha`, `HasIccProfile`, `ColorSpace` and `HasExif` can be set when it's created.
 
 Other:
