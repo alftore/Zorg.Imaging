@@ -88,6 +88,11 @@ public sealed partial class Image
             return await codec.Decode(reader, options, sync, cancellationToken).ConfigureAwait(false);
         }
 
+        if (format is not null && PluginCodecs.Find(options.Codecs, format) is { } plugin)
+        {
+            return await PluginCodecs.DecodeAsync(plugin, reader, options, cancellationToken).ConfigureAwait(false);
+        }
+
         throw format is null
             ? new UnsupportedImageFormatException("The data isn't in an image format Zorg.Imaging recognises.")
             : new UnsupportedImageFormatException(

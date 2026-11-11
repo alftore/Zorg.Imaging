@@ -91,6 +91,21 @@ internal sealed class HeaderReader
         return PeekStreamAsync(_stream, destination, cancellationToken);
     }
 
+    /// <summary>The start of the data, up to the header budget, for a codec that reads its header from one buffer.</summary>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The bytes; fewer than the budget only when the data is shorter.</returns>
+    public async ValueTask<ReadOnlyMemory<byte>> PeekHeadAsync(CancellationToken cancellationToken)
+    {
+        if (_stream is null)
+        {
+            return _memory.Slice((int)Position, (int)Math.Min(_budget - _charged, _memory.Length - Position));
+        }
+
+        byte[] head = new byte[_budget - _charged];
+        int count = await PeekAsync(head, cancellationToken).ConfigureAwait(false);
+        return head.AsMemory(0, count);
+    }
+
     /// <summary>Reads exactly <paramref name="destination"/>.Length bytes.</summary>
     /// <param name="destination">Where to read to.</param>
     /// <param name="cancellationToken">Cancels the read.</param>

@@ -38,4 +38,9 @@ public enum IdentifyStatus
     /// <see cref="ImageLimits.MaxHeaderBytes"/>.
     /// </summary>
     ExceedsLimits,
+
+    /// <summary>
+    /// A codec added by another package failed in a way that isn't the file's fault (<see cref="ImageCodecException"/>).
+    /// </summary>
+    CodecFailed,
 }
