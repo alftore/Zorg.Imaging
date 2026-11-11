@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The package readme on nuget.org has a short example, the comparison with the C tools and links to the documentation.
+
 ## 0.1.0
 
 The first release outside preview. The library is the same as 0.1.0-preview.7, which wasn't published on nuget.org, so this release also has everything in preview.7's notes below. What's new is around it:
