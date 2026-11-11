@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.1.0-preview.7
 
 Lossy WebP encoding is faster with the same quality: 0.95 times cwebp's time on one core over 167 test images (0.99 in preview.6), 1.16 dB closer to the source at cwebp's file size.
