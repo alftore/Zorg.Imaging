@@ -694,15 +694,28 @@ internal sealed class Vp8Decoder
 
             default:
             {
+                // TM: each pixel is above + left - corner, clamped, done a row at a time in 16-bit lanes.
                 ReadOnlySpan<byte> above = plane.Row(y0 - 1).Slice(x0, size);
                 int corner = plane.At(x0 - 1, y0 - 1);
+                Vector128<byte> top = size == 16 ? Vector128.Create<byte>(above) : Vector128.Create(MemoryMarshal.Read<ulong>(above), 0UL).AsByte();
+                Vector128<short> low = Vector128.WidenLower(top).AsInt16();
+                Vector128<short> high = Vector128.WidenUpper(top).AsInt16();
+                Vector128<short> zero = Vector128<short>.Zero;
+                Vector128<short> most = Vector128.Create((short)255);
                 for (int y = 0; y < size; y++)
                 {
-                    int left = plane.At(x0 - 1, y0 + y) - corner;
-                    Span<byte> row = plane.Row(y0 + y).Slice(x0, size);
-                    for (int x = 0; x < size; x++)
+                    var left = Vector128.Create((short)(plane.At(x0 - 1, y0 + y) - corner));
+                    Vector128<ushort> first = Vector128.Min(Vector128.Max(low + left, zero), most).AsUInt16();
+                    Vector128<ushort> second = Vector128.Min(Vector128.Max(high + left, zero), most).AsUInt16();
+                    Vector128<byte> row = Vector128.Narrow(first, second);
+                    Span<byte> output = plane.Row(y0 + y).Slice(x0, size);
+                    if (size == 16)
                     {
-                        row[x] = Clamp(above[x] + left);
+                        row.CopyTo(output);
+                    }
+                    else
+                    {
+                        MemoryMarshal.Write(output, row.AsUInt64().ToScalar());
                     }
                 }
 
