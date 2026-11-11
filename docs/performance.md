@@ -76,7 +76,7 @@ included; ours is the better of two encodes. Numbers after the improvement round
 
 | Format, against | Size | Time | ΔPSNR | ΔSSIM | Notes |
 |---|---:|---:|---:|---:|---|
-| Lossy WebP q80, cwebp `-q 80` | 0.971 | 0.99 | +1.12 | +0.0000 | +1.15 dB at cwebp's file size |
+| Lossy WebP q80, cwebp `-q 80` | 0.971 | 0.96 | +1.13 | +0.0000 | +1.16 dB at cwebp's file size |
 | JPEG q80, cjpeg `-quality 80` | 0.913 | 0.29 | +0.00 | +0.0000 | decoding matches djpeg byte for byte |
 | Lossless WebP, cwebp `-lossless` | 0.994 | 0.61 | lossless | | smaller than cwebp on most categories; textures_pk02 4.7% larger |
 | PNG, oxipng `-o 2` | 1.092 | 0.06 | lossless | | oxipng searches far longer; `Optimize` closes most of it |
