@@ -9,7 +9,8 @@ namespace Zorg.Imaging.Codecs.Webp;
 /// <remarks>
 /// <para>
 /// Images of up to 256 colours become a colour table and indexes (section 4.4), packed several to a pixel when the
-/// table is small; above effort 0, those of more than 16 colours are also coded as below and the smaller kept. Other
+/// table is small; above effort 0, those of more than 16 colours are also coded as below and the smaller kept, unless
+/// (to effort 4) an entropy estimate clearly favours the table. Other
 /// images get subtract-green (4.3) where it helps, the predictor (4.1), each tile's mode chosen for the fewest bits by
 /// the statistics of the residuals chosen so far, and from effort 1 the cross-colour transform (4.2).
 /// </para>
@@ -40,7 +41,8 @@ internal static class Vp8lEncoder
     /// <summary>Encodes ARGB pixels (alpha in the top byte) as a VP8L stream, header included.</summary>
     /// <remarks>
     /// An image of 17 to 256 colours is also coded with the predictor, above effort 0, and the smaller kept: a colour
-    /// table suits graphics, but smooth grey or few-colour gradients predict better.
+    /// table suits graphics, but smooth grey or few-colour gradients predict better. To effort 4, an image the estimate
+    /// gives the table under half the bits of the other codings is coded with the table alone.
     /// </remarks>
     public static byte[] Encode(uint[] argb, int width, int height, bool alpha, int effort) => Encode(argb, width, height, alpha, effort, chooseOne: false, nearBits: 0);
 
@@ -70,12 +72,19 @@ internal static class Vp8lEncoder
             return [.. header, .. only];
         }
 
+        (double indexed, double other) = IndexedEstimate(argb, width, height, palette.Length, AnalysisTileBits(effort));
         if (chooseOne)
         {
-            ReadOnlySpan<byte> one = IndexedLooksSmaller(argb, width, height, palette.Length, AnalysisTileBits(effort))
-                ? Indexed(argb, width, height, palette, effort)
-                : Predicted(argb, width, height, effort, nearBits);
+            ReadOnlySpan<byte> one = indexed <= other ? Indexed(argb, width, height, palette, effort) : Predicted(argb, width, height, effort, nearBits);
             return [.. header, .. one];
+        }
+
+        // Up to effort 4, where the estimate gives the colour table under half the bits of the other codings it alone is
+        // coded: of 16 such images in the test corpora (cut-outs, graphics, game textures) the predicted coding was smaller
+        // for two, by 0.1 and 0.2%, and coding both took twice the time (a 1784 x 1862 cut-out of 129 colours: 640 ms).
+        if (effort <= 4 && indexed < 0.5 * other)
+        {
+            return [.. header, .. Indexed(argb, width, height, palette, effort)];
         }
 
         // Both codings, side by side when there are cores for them; the smaller is kept, the predicted one on a tie.
@@ -178,6 +187,13 @@ internal static class Vp8lEncoder
     // ways and keeping the smaller, in about half the time.
     internal static bool IndexedLooksSmaller(uint[] p, int width, int height, int colours, int tileBits)
     {
+        (double indexed, double other) = IndexedEstimate(p, width, height, colours, tileBits);
+        return indexed <= other;
+    }
+
+    // The bits estimated for the colour table and indexes, and for the better of the other codings, as above.
+    private static (double Indexed, double Other) IndexedEstimate(uint[] p, int width, int height, int colours, int tileBits)
+    {
         int[] hashes = new int[256];
         int[] counts = new int[8 * 256];
         uint previous = 0;
@@ -214,7 +230,7 @@ internal static class Vp8lEncoder
         double indexed = Entropy(hashes) + (colours * 8);
         double direct = Row(0) + Row(1) + Row(2) + Row(3);
         double predicted = Row(4) + Row(5) + Row(6) + Row(7) + (tiles * Math.Log2(14));
-        return indexed <= Math.Min(direct, predicted);
+        return (indexed, Math.Min(direct, predicted));
     }
 
     // Which transforms to use, from the entropy each choice would leave (libwebp chooses the same way; this is our own
@@ -996,6 +1012,33 @@ internal static class Vp8lEncoder
     private static void EncodeImage(Vp8lBitWriter bits, uint[] pixels, int width, int effort, bool main)
     {
         (int[] lengths, int[] distances, int count, int cacheBits) = Tokens(pixels, width, effort);
+        int prefixBits = main ? EntropyBits(width, pixels.Length / width, effort) : 0;
+        int[]? tileGroups = null;
+        int[]? tokenTiles = null;
+        int groupCount = 1;
+        if (prefixBits > 0)
+        {
+            // The cache size was chosen by the statistics of the whole image, but the groups take up much of what a cache
+            // saves: so the tiles are clustered without the cache too, and the cache kept only if that comes out larger
+            // (a plant cut-out 5% smaller without; the test corpora 0.2 to 0.4% smaller, photos the same).
+            tokenTiles = TokenTiles(lengths, count, width, prefixBits);
+            int tileCount = DivideUp(width, prefixBits) * DivideUp(pixels.Length / width, prefixBits);
+            int most = effort >= 5 ? 256 : 64;
+            Histogram[] tiles = Histogram.CountGroups(pixels, lengths, distances, count, width, cacheBits, tokenTiles, tileCount, out _);
+            tileGroups = Cluster(tiles, most, out groupCount, out double estimate);
+            if (cacheBits > 0)
+            {
+                Histogram[] plain = Histogram.CountGroups(pixels, lengths, distances, count, width, 0, tokenTiles, tileCount, out _);
+                int[] plainGroups = Cluster(plain, most, out int plainCount, out double plainEstimate);
+                if (plainEstimate < estimate)
+                {
+                    cacheBits = 0;
+                    tileGroups = plainGroups;
+                    groupCount = plainCount;
+                }
+            }
+        }
+
         if (cacheBits > 0)
         {
             bits.Write(1, 1);
@@ -1007,34 +1050,25 @@ internal static class Vp8lEncoder
         }
 
         int[]? tokenGroups = null;
-        int groupCount = 1;
-        if (main)
+        if (main && tileGroups is null)
         {
-            int height = pixels.Length / width;
-            int prefixBits = EntropyBits(width, height, effort);
-            if (prefixBits == 0)
+            bits.Write(0, 1);
+        }
+        else if (main)
+        {
+            bits.Write(1, 1);
+            bits.Write((uint)(prefixBits - 2), 3);
+            uint[] entropyImage = new uint[tileGroups!.Length];
+            for (int t = 0; t < tileGroups.Length; t++)
             {
-                bits.Write(0, 1);
+                entropyImage[t] = 0xFF000000u | ((uint)tileGroups[t] << 8);
             }
-            else
-            {
-                int[] tokenTiles = TokenTiles(lengths, count, width, prefixBits);
-                Histogram[] tiles = Histogram.CountGroups(pixels, lengths, distances, count, width, cacheBits, tokenTiles, DivideUp(width, prefixBits) * DivideUp(height, prefixBits), out _);
-                int[] tileGroups = Cluster(tiles, effort >= 5 ? 256 : 64, out groupCount);
-                bits.Write(1, 1);
-                bits.Write((uint)(prefixBits - 2), 3);
-                uint[] entropyImage = new uint[tileGroups.Length];
-                for (int t = 0; t < tileGroups.Length; t++)
-                {
-                    entropyImage[t] = 0xFF000000u | ((uint)tileGroups[t] << 8);
-                }
 
-                EncodeImage(bits, entropyImage, DivideUp(width, prefixBits), effort, main: false);
-                tokenGroups = new int[count];
-                for (int k = 0; k < count; k++)
-                {
-                    tokenGroups[k] = tileGroups[tokenTiles[k]];
-                }
+            EncodeImage(bits, entropyImage, DivideUp(width, prefixBits), effort, main: false);
+            tokenGroups = new int[count];
+            for (int k = 0; k < count; k++)
+            {
+                tokenGroups[k] = tileGroups[tokenTiles![k]];
             }
         }
 
@@ -1128,10 +1162,10 @@ internal static class Vp8lEncoder
         return tiles;
     }
 
-    // Tiles into at most `most` groups: tiles first binned by how many bits per pixel their green, red and blue take,
-    // then the pair of groups whose merge saves most bits merged, while a merge saves any, then each tile moved to the
-    // group that codes it in the fewest bits.
-    private static int[] Cluster(Histogram[] tiles, int most, out int groupCount)
+    // Tiles into at most `most` groups: tiles first binned by how many bits per pixel their green, red and blue take and
+    // whether their alpha varies, then the pair of groups whose merge saves most bits merged, while a merge saves any,
+    // then tiles moved between groups where that saves bits. `estimate` is the bits of the groups' codes.
+    private static int[] Cluster(Histogram[] tiles, int most, out int groupCount, out double estimate)
     {
         int n = tiles.Length;
         double[][] perPixel = new double[3][];
@@ -1141,6 +1175,7 @@ internal static class Vp8lEncoder
         }
 
         bool[] empty = new bool[n];
+        bool[] alphaVaries = new bool[n];
 
         for (int t = 0; t < n; t++)
         {
@@ -1152,9 +1187,13 @@ internal static class Vp8lEncoder
                 perPixel[c][t] = entropy / Math.Max(total, 1);
                 empty[t] |= c == 0 && total == 0;
             }
+
+            alphaVaries[t] = h.EntropyOf(3).Entropy > 0;
         }
 
-        // Up to 4 x 4 x 4 bins between each channel's least and most.
+        // Up to 4 x 4 x 4 bins between each channel's least and most, twice: tiles whose alpha varies apart from those
+        // where it doesn't. A prefix code of two or more symbols takes at least a bit each, so a cut-out's opaque tiles,
+        // whose alpha costs nothing in a group of their own, paid a bit a pixel once grouped with its edges.
         int[] bin = new int[n];
         for (int c = 0; c < 3; c++)
         {
@@ -1173,8 +1212,13 @@ internal static class Vp8lEncoder
             }
         }
 
+        for (int t = 0; t < n; t++)
+        {
+            bin[t] += alphaVaries[t] ? 64 : 0;
+        }
+
         var clusters = new List<Histogram>();
-        int[] binCluster = new int[64];
+        int[] binCluster = new int[128];
         Array.Fill(binCluster, -1);
         int[] tileCluster = new int[n];
         for (int t = 0; t < n; t++)
@@ -1284,48 +1328,25 @@ internal static class Vp8lEncoder
             }
         }
 
-        // Number the groups left, then move each tile to the group whose codes would take fewest bits for it.
+        // Number the groups left, then move tiles between them.
         int[] number = new int[m];
-        groupCount = 0;
         var final = new List<Histogram>();
         for (int a = 0; a < m; a++)
         {
-            number[a] = alive[a] ? groupCount++ : -1;
+            number[a] = alive[a] ? final.Count : -1;
             if (alive[a])
             {
                 final.Add(clusters[a]);
             }
         }
 
-        groupCount = Math.Max(groupCount, 1);
-        float[][] costs = new float[final.Count][];
-        for (int g = 0; g < final.Count; g++)
-        {
-            costs[g] = final[g].SymbolCosts();
-        }
-
         int[] tileGroups = new int[n];
         for (int t = 0; t < n; t++)
         {
-            if (tileCluster[t] < 0)
-            {
-                continue;
-            }
-
-            int bestGroup = number[tileCluster[t]];
-            double bestBits = double.MaxValue;
-            for (int g = 0; g < final.Count; g++)
-            {
-                double bitsHere = tiles[t].BitsUnder(costs[g]);
-                if (bitsHere < bestBits)
-                {
-                    bestBits = bitsHere;
-                    bestGroup = g;
-                }
-            }
-
-            tileGroups[t] = bestGroup;
+            tileGroups[t] = tileCluster[t] < 0 ? 0 : number[tileCluster[t]];
         }
+
+        MoveTiles(tiles, tileCluster, tileGroups, final);
 
         // The move can leave a group with no tiles. A decoder reads one set of codes for each number up to the largest
         // in the entropy image, so the groups still used are numbered again, in the same order, and only they count.
@@ -1340,9 +1361,11 @@ internal static class Vp8lEncoder
 
         int[] renumber = new int[final.Count];
         groupCount = 0;
+        estimate = 0;
         for (int g = 0; g < final.Count; g++)
         {
             renumber[g] = used[g] ? groupCount++ : 0;
+            estimate += used[g] ? final[g].Bits() : 0;
         }
 
         groupCount = Math.Max(groupCount, 1);
@@ -1354,12 +1377,83 @@ internal static class Vp8lEncoder
         return tileGroups;
     }
 
+    // Each tile in turn moved to the group where all groups' bits (as Histogram.Bits prices them) come out least, if a
+    // move saves any; in up to two rounds. Only the two groups whose codes would take fewest bits for the tile, by each
+    // symbol's share of the counts, are priced in full, which costs a few times more. Choosing by the share of the counts
+    // alone, as before, moved tiles with a few alpha values into groups of constant alpha, whose alpha then cost a bit a
+    // pixel: moving by the full price made icons and cut-outs 2 to 3% smaller.
+    private static void MoveTiles(Histogram[] tiles, int[] tileCluster, int[] tileGroups, List<Histogram> groups)
+    {
+        foreach (Histogram g in groups)
+        {
+            g.Tally();
+        }
+
+        const int Rounds = 2;
+        const int Shortlist = 2;
+        int count = groups.Count;
+        float[][] costs = new float[count][];
+        double[] priced = new double[count];
+        int[] order = new int[count];
+        for (int round = 0; round < Rounds && count > 1; round++)
+        {
+            for (int g = 0; g < count; g++)
+            {
+                costs[g] = groups[g].SymbolCosts();
+            }
+
+            bool moved = false;
+            for (int t = 0; t < tiles.Length; t++)
+            {
+                if (tileCluster[t] < 0)
+                {
+                    continue;
+                }
+
+                for (int g = 0; g < count; g++)
+                {
+                    priced[g] = tiles[t].BitsUnder(costs[g]);
+                    order[g] = g;
+                }
+
+                Array.Sort(priced, order);
+                int own = tileGroups[t];
+                double leave = groups[own].Change(tiles[t], -1, false);
+                int best = own;
+                double bestChange = 0;
+                for (int k = 0; k < Math.Min(Shortlist, count); k++)
+                {
+                    int g = order[k];
+                    double change = g == own ? 0 : leave + groups[g].Change(tiles[t], 1, false);
+                    if (change < bestChange - 1e-6)
+                    {
+                        bestChange = change;
+                        best = g;
+                    }
+                }
+
+                if (best != own)
+                {
+                    groups[own].Change(tiles[t], -1, true);
+                    groups[best].Change(tiles[t], 1, true);
+                    tileGroups[t] = best;
+                    moved = true;
+                }
+            }
+
+            if (!moved)
+            {
+                break;
+            }
+        }
+    }
+
     /// <summary>The symbol counts of one parse, or of the part of it in one group, as the decoder will see the cache.</summary>
     /// <remarks>
     /// The five codes' counts lie end to end in one array (green with the lengths and cache, red, blue, alpha, then
     /// distance), so the clustering adds, merges and prices them in plain loops.
     /// </remarks>
-    private sealed class Histogram
+    internal sealed class Histogram
     {
         // A rough cost of writing a code's lengths in the header: the code-length code and its own lengths, then a few
         // bits for each symbol used. A flat 4 bits a symbol undercounted small images, which then split into too many
@@ -1398,8 +1492,9 @@ internal static class Vp8lEncoder
         /// <summary>
         /// Counts the tokens into one histogram per group (all into the first when <paramref name="tokenGroups"/> is
         /// <see langword="null"/>); <paramref name="cacheHits"/> is each literal's cache index when it's a hit, else -1.
+        /// The tokens start at <paramref name="firstPixel"/>, with an empty cache.
         /// </summary>
-        public static Histogram[] CountGroups(uint[] pixels, int[] lengths, int[] distances, int count, int width, int cacheBits, int[]? tokenGroups, int groupCount, out int[] cacheHits)
+        public static Histogram[] CountGroups(uint[] pixels, int[] lengths, int[] distances, int count, int width, int cacheBits, int[]? tokenGroups, int groupCount, out int[] cacheHits, int firstPixel = 0)
         {
             var groups = new Histogram[groupCount];
             for (int g = 0; g < groupCount; g++)
@@ -1414,7 +1509,7 @@ internal static class Vp8lEncoder
             int[] hits = new int[count];
             uint[] cache = new uint[cacheBits == 0 ? 1 : 1 << cacheBits];
             int shift = 32 - cacheBits;
-            int at = 0;
+            int at = firstPixel;
             for (int k = 0; k < count; k++)
             {
                 int[] h = groups[tokenGroups is null ? 0 : tokenGroups[k]].Counts;
@@ -1496,6 +1591,83 @@ internal static class Vp8lEncoder
             {
                 mine[k] += theirs[k];
             }
+        }
+
+        // Each code's count of symbols, sum of c log2 c and symbols used, kept by Tally and Change.
+        private readonly long[] _totals = new long[5];
+        private readonly double[] _sums = new double[5];
+        private readonly int[] _useds = new int[5];
+
+        /// <summary>Works out each code's totals for <see cref="Change"/>.</summary>
+        public void Tally()
+        {
+            for (int code = 0; code < 5; code++)
+            {
+                long total = 0;
+                double sum = 0;
+                int used = 0;
+                foreach (int c in Code(code))
+                {
+                    if (c > 0)
+                    {
+                        total += c;
+                        sum += TimesLog2(c);
+                        used++;
+                    }
+                }
+
+                _totals[code] = total;
+                _sums[code] = sum;
+                _useds[code] = used;
+            }
+        }
+
+        /// <summary>
+        /// The change in <see cref="Bits"/> of this tallied histogram from adding a frozen one's counts (sign 1) or taking
+        /// them away (sign -1); with <paramref name="apply"/>, made. Only the other's symbols are visited.
+        /// </summary>
+        public double Change(Histogram other, int sign, bool apply)
+        {
+            int[] mine = Counts;
+            int[] theirs = other.Counts;
+            double change = 0;
+            int code = -1;
+            long total = 0;
+            double sum = 0;
+            int used = 0;
+            foreach (int i in other._used!)
+            {
+                int c = i < _greenLength ? 0 : i >= _greenLength + 768 ? 4 : 1 + ((i - _greenLength) >> 8);
+                if (c != code)
+                {
+                    if (code >= 0)
+                    {
+                        change += Close(code, total, sum, used, apply);
+                    }
+
+                    code = c;
+                    total = _totals[c];
+                    sum = _sums[c];
+                    used = _useds[c];
+                }
+
+                int before = mine[i];
+                int after = before + (sign * theirs[i]);
+                total += after - before;
+                sum += TimesLog2(after) - TimesLog2(before);
+                used += (after > 0 ? 1 : 0) - (before > 0 ? 1 : 0);
+                if (apply)
+                {
+                    mine[i] = after;
+                }
+            }
+
+            if (code >= 0)
+            {
+                change += Close(code, total, sum, used, apply);
+            }
+
+            return change;
         }
 
         /// <summary>The bits the five codes take, symbols and a rough header.</summary>
@@ -1587,6 +1759,20 @@ internal static class Vp8lEncoder
             return total;
         }
 
+        // One code's change in bits, and its totals stored when applied.
+        private double Close(int code, long total, double sum, int used, bool apply)
+        {
+            double change = CodeBits(total, sum, used) - CodeBits(_totals[code], _sums[code], _useds[code]);
+            if (apply)
+            {
+                _totals[code] = total;
+                _sums[code] = sum;
+                _useds[code] = used;
+            }
+
+            return change;
+        }
+
         private int Start(int code) => code == 0 ? 0 : _greenLength + ((code - 1) * 256);
 
         private int End(int code) => code == 4 ? Counts.Length : _greenLength + (code * 256);
@@ -1608,7 +1794,7 @@ internal static class Vp8lEncoder
                 }
             }
 
-            return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol) + HeaderBitsPerCode;
+            return CodeBits(total, sum, used);
         }
 
         private static double MergedArrayBits(ReadOnlySpan<int> a, ReadOnlySpan<int> b)
@@ -1638,11 +1824,41 @@ internal static class Vp8lEncoder
                 }
             }
 
-            return used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol) + HeaderBitsPerCode;
+            return CodeBits(total, sum, used);
         }
 
-        // c log2 c, from a table for the small counts that most symbols have.
-        private static double TimesLog2(long c) => c < TimesLog2Table.Length ? TimesLog2Table[c] : c * Math.Log2(c);
+        // A code's bits from its count of symbols, sum of c log2 c and symbols used.
+        private static double CodeBits(long total, double sum, int used) =>
+            used <= 1 ? 4 : Math.Max(TimesLog2(total) - sum, total) + (used * HeaderBitsPerSymbol) + HeaderBitsPerCode;
+
+        // c log2 c, from a table for the small counts that most symbols have, else by FastLog2.
+        private static double TimesLog2(long c) => c < TimesLog2Table.Length ? TimesLog2Table[c] : c * FastLog2(c);
+
+        // log2 of 1 + j / 4096 for j = 0 to 4096, between which FastLog2 interpolates.
+        private static readonly double[] MantissaLog2 = BuildMantissaLog2();
+
+        private static double[] BuildMantissaLog2()
+        {
+            double[] table = new double[4097];
+            for (int j = 0; j < table.Length; j++)
+            {
+                table[j] = Math.Log2(1 + (j / 4096.0));
+            }
+
+            return table;
+        }
+
+        // log2 of c, at least 4096: the exponent, then the mantissa's from the table, linearly between entries (within
+        // about 1e-8). Math.Log2 took a tenth of the tile moves' time on photos.
+        internal static double FastLog2(long c)
+        {
+            int exponent = BitOperations.Log2((ulong)c);
+            int shift = exponent - 12;
+            long top = c >> shift;
+            int j = (int)(top - 4096);
+            double fraction = (c - (top << shift)) / (double)(1L << shift);
+            return exponent + MantissaLog2[j] + ((MantissaLog2[j + 1] - MantissaLog2[j]) * fraction);
+        }
 
         private static readonly double[] TimesLog2Table = BuildTimesLog2();
 
@@ -1716,7 +1932,8 @@ internal static class Vp8lEncoder
 
     // The tokens and the cache size. Effort 0 and 1: greedy, the longest match at each token. Above that: the longest
     // match at every pixel, a greedy parse of those to choose the cache size and price the symbols, then the cheapest
-    // path through literals, cache hits and copies (twice at effort 5 and 6, priced the second time by the first).
+    // path through literals, cache hits and copies (twice at effort 5 and 6, and for images of under 16,384 pixels,
+    // priced the second time by the first). See PricingParse and LearnedPrices for how the first path is priced.
     // Lengths of 0 are literals.
     private static (int[] Lengths, int[] Distances, int Count, int CacheBits) Tokens(uint[] p, int width, int effort)
     {
@@ -1809,21 +2026,105 @@ internal static class Vp8lEncoder
         }
 
         int cacheBits = ChooseCacheBits(p, lengths, count);
-        for (int pass = effort >= 5 ? 2 : 1; pass > 0; pass--)
+
+        // How copies are priced matters where they cover much of the image: not in photos, where the greedy parse's copies
+        // cover 1 to 32% of the pixels (icons, cut-outs and screenshots 39% and more), and the two steps below saved
+        // under 0.1% for 7% of the time.
+        long copied = 0;
+        for (int k = 0; k < count; k++)
         {
-            Histogram histogram = Histogram.CountGroups(p, lengths, distances, count, width, cacheBits, null, 1, out _)[0];
+            copied += lengths[k];
+        }
+
+        Histogram? learned = null;
+        if (copied * 3 >= n)
+        {
+            (lengths, distances, count) = PricingParse(p, width, cacheBits, lengths, distances, count, nearLength, nearDistance);
+            learned = n >= LearnedPricesFrom ? LearnedPrices(p, width, matchLength, matchDistance, nearLength, nearDistance, lengths, distances, count, cacheBits) : null;
+        }
+
+        for (int pass = effort >= 5 || n < LearnedPricesFrom ? 2 : 1; pass > 0; pass--)
+        {
+            Histogram histogram = learned ?? Histogram.CountGroups(p, lengths, distances, count, width, cacheBits, null, 1, out _)[0];
+            learned = null;
             count = Cheapest(p, width, matchLength, matchDistance, nearLength, nearDistance, histogram, lengths, distances);
         }
 
         return (lengths, distances, count, cacheBits);
     }
 
-    // The cheapest path, by symbol costs from a histogram: cost[i] is the fewest bits for the first i pixels, step[i]
-    // the step that reached it (1 for a literal, -k for a copy of k). Whether a pixel is a cache hit doesn't depend on
-    // the path, since every pixel enters the cache in order, so hits are priced exactly.
-    private static int Cheapest(uint[] p, int width, int[] matchLength, int[] matchDistance, int[] nearLength, int[] nearDistance, Histogram histogram, int[] lengths, int[] distances)
+    // Below this many pixels the cheapest path is found twice instead of learning its prices from strips.
+    private const int LearnedPricesFrom = 1 << 14;
+
+    // The parse whose symbol statistics price the cheapest path: the greedy parse of longest matches, or one of the
+    // longest near matches (the pixel to the left and the three rows above) alone, whichever looks smaller, extra bits
+    // included. Longest matches in a smooth alpha mask are mostly short copies from far back, whose distance codes, so
+    // common in the greedy parse, then seemed cheap; cwebp codes such alpha with near copies alone. Priced from near
+    // copies, lossy cut-outs' alpha came out 2 to 3% smaller, and graphics 0.5 to 1% larger, hence the choice.
+    private static (int[] Lengths, int[] Distances, int Count) PricingParse(uint[] p, int width, int cacheBits, int[] lengths, int[] distances, int count, int[] nearLength, int[] nearDistance)
     {
         int n = p.Length;
+        int[] nearLengths = new int[n];
+        int[] nearDistances = new int[n];
+        int nearCount = 0;
+        for (int i = 0; i < n; nearCount++)
+        {
+            bool copy = nearLength[i] >= MinCopy;
+            nearLengths[nearCount] = copy ? nearLength[i] : 0;
+            nearDistances[nearCount] = copy ? nearDistance[i] : 0;
+            i += copy ? nearLength[i] : 1;
+        }
+
+        double longest = Histogram.CountGroups(p, lengths, distances, count, width, cacheBits, null, 1, out _)[0].Bits() + ExtraBits(lengths, distances, count, width);
+        double near = Histogram.CountGroups(p, nearLengths, nearDistances, nearCount, width, cacheBits, null, 1, out _)[0].Bits() + ExtraBits(nearLengths, nearDistances, nearCount, width);
+        return near < longest ? (nearLengths, nearDistances, nearCount) : (lengths, distances, count);
+    }
+
+    // The extra bits of the copies' lengths and distances, which the histograms don't count.
+    private static long ExtraBits(int[] lengths, int[] distances, int count, int width)
+    {
+        long total = 0;
+        for (int k = 0; k < count; k++)
+        {
+            if (lengths[k] > 0)
+            {
+                total += Prefix(lengths[k]).ExtraBits + Prefix(DistanceCode(distances[k], width)).ExtraBits;
+            }
+        }
+
+        return total;
+    }
+
+    // Prices for the cheapest path, from cheapest paths through four strips spread down the image, each a sixteenth of
+    // it, priced by the parse given. A path priced by a greedy parse is far from the one it would choose priced by
+    // itself (a second pass made a 129-colour cut-out 3.5% smaller); the strips get nearly all of that (icons and
+    // cut-outs 0.8% smaller, screenshots 0.6%) for a quarter of a pass.
+    private static Histogram LearnedPrices(uint[] p, int width, int[] matchLength, int[] matchDistance, int[] nearLength, int[] nearDistance, int[] lengths, int[] distances, int count, int cacheBits)
+    {
+        int n = p.Length;
+        Histogram first = Histogram.CountGroups(p, lengths, distances, count, width, cacheBits, null, 1, out _)[0];
+        var learned = new Histogram(cacheBits);
+        int[] stripLengths = new int[(n / 16) + 1];
+        int[] stripDistances = new int[(n / 16) + 1];
+        for (int strip = 0; strip < 4; strip++)
+        {
+            int from = (int)((long)n * ((4 * strip) + 1) / 16);
+            int to = from + (n / 16);
+            int stripCount = Cheapest(p, width, matchLength, matchDistance, nearLength, nearDistance, first, stripLengths, stripDistances, from, to);
+            learned.Add(Histogram.CountGroups(p, stripLengths, stripDistances, stripCount, width, cacheBits, null, 1, out _, from)[0]);
+        }
+
+        return learned;
+    }
+
+    // The cheapest path, by symbol costs from a histogram, through pixels start to end (all by default; copies may
+    // reach back before start): cost[i] is the fewest bits for the first i pixels, step[i] the step that reached it (1
+    // for a literal, -k for a copy of k). Whether a pixel is a cache hit doesn't depend on
+    // the path, since every pixel enters the cache in order, so hits are priced exactly.
+    private static int Cheapest(uint[] p, int width, int[] matchLength, int[] matchDistance, int[] nearLength, int[] nearDistance, Histogram histogram, int[] lengths, int[] distances, int start = 0, int end = -1)
+    {
+        end = end < 0 ? p.Length : end;
+        int n = end - start;
         float[] greenCost = Costs(histogram.Green);
         float[] redCost = Costs(histogram.Red);
         float[] blueCost = Costs(histogram.Blue);
@@ -1863,8 +2164,9 @@ internal static class Vp8lEncoder
         int otherDistance = -1;
         float otherSymbol = 0;
         int otherBits = 0;
-        for (int i = 0; i < n; i++)
+        for (int o = 0; o < n; o++)
         {
+            int i = start + o;
             uint pixel = p[i];
             float literal = greenCost[(pixel >> 8) & 0xFF] + redCost[(pixel >> 16) & 0xFF] + blueCost[pixel & 0xFF] + alphaCost[pixel >> 24];
             if (cacheBits > 0)
@@ -1878,20 +2180,20 @@ internal static class Vp8lEncoder
                 cache[key] = pixel;
             }
 
-            if (cost[i] + literal < cost[i + 1])
+            if (cost[o] + literal < cost[o + 1])
             {
-                cost[i + 1] = cost[i] + literal;
-                step[i + 1] = 1;
+                cost[o + 1] = cost[o] + literal;
+                step[o + 1] = 1;
             }
 
             // Copies by the longest match, and by the longest near one where that differs: a near distance codes in a bit
             // or two where a far one takes up to twenty, so a shorter near copy is often the cheaper path (palette indexes
             // and alpha masks, 4 to 19% smaller).
-            Offer(i, matchLength[i], matchDistance[i]);
+            Offer(o, Math.Min(matchLength[i], n - o), matchDistance[i]);
 
             if (nearDistance[i] != matchDistance[i])
             {
-                Offer(i, nearLength[i], nearDistance[i]);
+                Offer(o, Math.Min(nearLength[i], n - o), nearDistance[i]);
             }
         }
 
