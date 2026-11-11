@@ -119,7 +119,7 @@ internal static class WebpEncoder
             if (band == 0)
             {
                 (byte[] y, byte[] u, byte[] v) = ToYuv(argb, width, height, options.Effort, options.Quality);
-                vp8 = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort, alpha ? HiddenMacroblocks(argb, width, height) : null);
+                vp8 = Vp8Encoder.Encode(y, u, v, width, height, Vp8Encoder.QuantiserFor(options.Quality), options.Effort, alpha ? HiddenMacroblocks(argb, width, height) : null, alpha ? OpaqueBlocks(argb, width, height) : null);
             }
 
             if (alpha && band == bands - 1)
@@ -188,6 +188,31 @@ internal static class WebpEncoder
 
             return total == 0 ? 0 : (total * Math.Log2(total)) - sum;
         }
+    }
+
+    /// <summary>
+    /// Which 8 x 8 blocks are wholly opaque, row by row, two a macroblock across (blocks past the picture's edge are not).
+    /// </summary>
+    internal static bool[] OpaqueBlocks(uint[] argb, int width, int height)
+    {
+        int wide = (width + 15) / 16 * 2;
+        bool[] opaque = new bool[wide * ((height + 15) / 16 * 2)];
+        for (int by = 0; by * 8 < height; by++)
+        {
+            for (int bx = 0; bx * 8 < width; bx++)
+            {
+                bool all = true;
+                int columns = Math.Min(8, width - (bx * 8));
+                for (int y = by * 8; y < Math.Min(height, (by * 8) + 8) && all; y++)
+                {
+                    all = !argb.AsSpan((y * width) + (bx * 8), columns).ContainsAnyInRange(0u, 0xFEFFFFFFu);
+                }
+
+                opaque[(by * wide) + bx] = all;
+            }
+        }
+
+        return opaque;
     }
 
     /// <summary>Which 16 x 16 macroblocks show nothing: every pixel in them fully transparent.</summary>
