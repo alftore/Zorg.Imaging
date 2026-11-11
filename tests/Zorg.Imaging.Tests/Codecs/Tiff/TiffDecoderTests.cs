@@ -288,10 +288,12 @@ public class TiffDecoderTests
         using Image ours = Image.Decode(await File.ReadAllBytesAsync(folder.File("out.tif"), TestContext.Current.CancellationToken), new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
         byte[] actual = ours.GetPixelBytes().ToArray();
         Assert.Equal(expected.Length, actual.Length);
+        byte[] tif = await File.ReadAllBytesAsync(folder.File("out.tif"), TestContext.Current.CancellationToken);
+        string diag = "ours " + Convert.ToHexString(actual.AsSpan(0, 16)) + " magick " + Convert.ToHexString(expected.AsSpan(0, 16)) + " tif " + Convert.ToBase64String(tif);
         for (int i = 0; i < actual.Length; i++)
         {
             // Associated alpha divides out with rounding that may differ by one.
-            Assert.True(Math.Abs(expected[i] - actual[i]) <= (options.Contains("=associated", StringComparison.Ordinal) ? 1 : 0), $"byte {i}: {actual[i]}, expected {expected[i]}");
+            Assert.True(Math.Abs(expected[i] - actual[i]) <= (options.Contains("=associated", StringComparison.Ordinal) ? 1 : 0), $"byte {i}: {actual[i]}, expected {expected[i]}; {diag}");
         }
     }
 }
