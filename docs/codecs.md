@@ -22,6 +22,24 @@ until the first image is read with it, then it's fixed. A library should pass th
 `ImagePipeline` and `AnimationReader` use the codecs in the decode options. An animation from a codec reads as one
 still frame.
 
+## Zorg.Imaging.SystemCodecs
+
+The first such package decodes AVIF and HEIC with the operating system's own decoders, for desktop apps on Windows and
+macOS:
+
+```csharp
+ImageDefaults.Codecs = SystemCodecs.All; // SystemCodecs.Heif and SystemCodecs.Avif
+```
+
+- **Windows:** the Windows Imaging Component's HEIF decoder, from the Microsoft Store's HEIF Image Extension, with HEVC
+  Video Extensions for HEIC or the AV1 Video Extension for AVIF. It's created by its class ID, so no other installed
+  WIC codec sees the file.
+- **macOS:** ImageIO; HEIC from 10.13, AVIF from 13. The pixels keep the file's colour space.
+- **Elsewhere,** and on Windows Server, the codecs report themselves unavailable.
+
+It reads the file's boxes in managed code first (the primary image's size, rotation, alpha, bit depth, colour and the
+number of tiles), so the limits apply before the system decoder runs. It decodes at full size, and the first image only.
+
 ## What the library does around a codec
 
 These checks run for every codec, so the [guarantees](../README.md) hold as far as managed code can make them:

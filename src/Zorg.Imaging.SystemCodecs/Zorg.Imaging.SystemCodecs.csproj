@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>AVIF and HEIC decoding for Zorg.Imaging through the operating system's own decoders: Windows Imaging Component on Windows, ImageIO on macOS. Ships no codec and no native binaries.</Description>
+    <PackageTags>image;imaging;avif;heic;heif;wic;imageio</PackageTags>
+    <RootNamespace>Zorg.Imaging</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Zorg.Imaging\Zorg.Imaging.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zorg.Imaging.SystemCodecs.Tests" />
+  </ItemGroup>
+
+</Project>

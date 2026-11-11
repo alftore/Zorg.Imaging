@@ -10,10 +10,12 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Zorg.Imaging/Zorg.Imaging.csproj" />
+    <Project Path="src/Zorg.Imaging.SystemCodecs/Zorg.Imaging.SystemCodecs.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Zorg.Imaging.ComplianceTests/Zorg.Imaging.ComplianceTests.csproj" />
     <Project Path="tests/Zorg.Imaging.Tests/Zorg.Imaging.Tests.csproj" />
+    <Project Path="tests/Zorg.Imaging.SystemCodecs.Tests/Zorg.Imaging.SystemCodecs.Tests.csproj" />
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/Zorg.Imaging.Benchmarks/Zorg.Imaging.Benchmarks.csproj" />
