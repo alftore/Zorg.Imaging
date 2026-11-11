@@ -536,7 +536,25 @@ internal static class WebpEncoder
     // chosen for what a decoder will show (SharpYuv): at equal file size 0.3 to 0.6 dB on photos and 1.5 dB on game screenshots, up to
     // 9 dB on coloured text, for 5 to 15% more time on all cores. Below, the plain 2 x 2 average.
     internal static (byte[] Y, byte[] U, byte[] V) ToYuv(uint[] argb, int width, int height, int effort, int quality) =>
-        effort >= SharpEffort && quality >= SharpQuality ? SharpYuv.Convert(argb, width, height, SharpRounds) : PlainYuv(argb, width, height);
+        effort >= SharpEffort && quality >= SharpQuality ? SharpYuv.Convert(argb, width, height, SharpRoundsFor(argb, width)) : PlainYuv(argb, width, height);
+
+    // Photos (fewer than a quarter of the pixels repeat the one to their left or above) take one round: within 0.02 dB and
+    // 0.02% luma SSIM of two at equal size, for 3 to 5% less time. Graphics, where coloured edges are sharp, keep two
+    // (one lost 0.26 dB on game screenshots).
+    internal static int SharpRoundsFor(uint[] argb, int width)
+    {
+        long repeats = 0;
+        for (int i = 1; i < argb.Length; i++)
+        {
+            uint p = argb[i];
+            if (p == argb[i - 1] || (i >= width && p == argb[i - width]))
+            {
+                repeats++;
+            }
+        }
+
+        return repeats * 4 < argb.Length ? 1 : SharpRounds;
+    }
 
     // The plain conversion: chroma the 2 x 2 average. The planes are padded to whole macroblocks by repeating the last
     // row and column, so the padding costs few bits.

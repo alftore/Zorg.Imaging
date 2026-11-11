@@ -541,6 +541,20 @@ internal sealed class Vp8Encoder
         Span<byte> trialReconstructions = stackalloc byte[4 * 16];
         Span<long> trialDistortions = stackalloc long[4];
         Span<int> spectrum = stackalloc int[16];
+        // A macroblock the best whole-block mode rebuilds exactly (flat areas of screenshots, graphics and cut-outs) keeps
+        // it without trying subblock modes: game screenshots 13% and cut-outs 3 to 7% faster, the same quality. Within a
+        // level a pixel was not enough: subblock modes still coded such areas cheaper (0.2 dB lost).
+        if (subblocks && best != long.MaxValue)
+        {
+            long wholeError = 0;
+            for (int r = 0; r < 16; r++)
+            {
+                wholeError += SquaredError(_sourceY.AsSpan(((y0 + r) * _strideY) + x0, 16), bestPixels.Slice(r * 16, 16));
+            }
+
+            subblocks = wholeError != 0;
+        }
+
         long subTotal = subblocks ? q.ModeLambda * ModeCost(BPred) : long.MaxValue;
         int subModeBits = ModeCost(BPred);
         for (int i = 0; i < 16 && subTotal < best; i++)
