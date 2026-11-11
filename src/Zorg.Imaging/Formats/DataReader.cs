@@ -170,6 +170,49 @@ internal sealed class DataReader
         return SkipByReadingAsync(_stream, rest, cancellationToken);
     }
 
+    /// <summary>Reads the rest of the data, for a codec that needs the whole file.</summary>
+    /// <param name="max">The most bytes allowed (<see cref="ImageLimits.MaxFileBytes"/>).</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The bytes from <see cref="Position"/> to the end.</returns>
+    /// <exception cref="ImageLimitException">There are more than <paramref name="max"/> bytes.</exception>
+    public async ValueTask<ReadOnlyMemory<byte>> ReadToEndAsync(long max, CancellationToken cancellationToken)
+    {
+        if (_stream is null)
+        {
+            ReadOnlyMemory<byte> rest = _memory[(int)Position..];
+            if (rest.Length > max)
+            {
+                throw FileTooLong(max);
+            }
+
+            Position += rest.Length;
+            return rest;
+        }
+
+        long cap = Math.Min(max + 1, Array.MaxLength);
+        byte[] buffer = new byte[(int)Math.Min(cap, 64 * 1024)];
+        int length = 0;
+        while (true)
+        {
+            if (length == buffer.Length)
+            {
+                Array.Resize(ref buffer, (int)Math.Min(cap, (long)buffer.Length * 2));
+            }
+
+            int read = await ReadSomeAsync(buffer.AsMemory(length), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return buffer.AsMemory(0, length);
+            }
+
+            length += read;
+            if (length > max)
+            {
+                throw FileTooLong(max);
+            }
+        }
+    }
+
     /// <summary>
     /// Gives back what was read ahead into the internal buffer, when the stream can seek, so the stream ends up just
     /// after the last byte the decoder used.
@@ -188,6 +231,9 @@ internal sealed class DataReader
     /// <returns>The exception to throw.</returns>
     public ImageFormatException Truncated() =>
         ImageErrors.Truncated(string.Create(CultureInfo.InvariantCulture, $"The {FormatName} file ends early, at byte {Position}."));
+
+    private ImageLimitException FileTooLong(long max) =>
+        ImageErrors.ExceedsLimits(string.Create(CultureInfo.InvariantCulture, $"The {FormatName} file is longer than {max} bytes, the limit (ImageLimits.MaxFileBytes)."));
 
     private async ValueTask ReadStreamExactlyAsync(Stream source, Memory<byte> destination, CancellationToken cancellationToken)
     {

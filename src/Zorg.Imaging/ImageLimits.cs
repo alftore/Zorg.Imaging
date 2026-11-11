@@ -26,6 +26,10 @@ public sealed class ImageLimits
     /// <example><code>int max = ImageLimits.DefaultMaxHeaderBytes;</code></example>
     public const int DefaultMaxHeaderBytes = 1024 * 1024;
 
+    /// <summary>The default for <see cref="MaxFileBytes"/>: 256 MiB.</summary>
+    /// <example><code>long max = ImageLimits.DefaultMaxFileBytes;</code></example>
+    public const long DefaultMaxFileBytes = 256L * 1024 * 1024;
+
     /// <summary>The default limits.</summary>
     /// <example><code>ImageLimits limits = ImageLimits.Default;</code></example>
     public static ImageLimits Default { get; } = new();
@@ -71,4 +75,20 @@ public sealed class ImageLimits
             field = value;
         }
     } = DefaultMaxHeaderBytes;
+
+    /// <summary>
+    /// The most bytes a file may have when it must be read whole, as for an <see cref="ImageCodec"/> added by another
+    /// package. The built-in decoders read as they go and don't use it.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is less than <see cref="ImageFormats.MaxSignatureLength"/>.</exception>
+    /// <example><code>var limits = new ImageLimits { MaxFileBytes = 50L * 1024 * 1024 };</code></example>
+    public long MaxFileBytes
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, ImageFormats.MaxSignatureLength);
+            field = value;
+        }
+    } = DefaultMaxFileBytes;
 }

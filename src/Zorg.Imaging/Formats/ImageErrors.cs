@@ -28,6 +28,7 @@ internal static class ImageErrors
         public IdentifyStatus Status => exception switch
         {
             ImageLimitException => IdentifyStatus.ExceedsLimits,
+            ImageCodecException => IdentifyStatus.CodecFailed,
             UnsupportedImageFormatException => IdentifyStatus.UnsupportedFormat,
             ImageFormatException { IsTruncated: true } => IdentifyStatus.Truncated,
             _ => IdentifyStatus.Corrupt,

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Added:
+
+- Codecs from other packages, for formats the library recognises but doesn't decode (AVIF, HEIC, JPEG XL): subclass `ImageCodec`, and add it through `DecodeOptions.Codecs`, `IdentifyOptions.Codecs` or, once at start-up, `ImageDefaults.Codecs`. The library checks the header against the limits before the codec decodes, checks the result, applies the orientation, and reports a codec's own failures as `ImageCodecException` (`IdentifyStatus.CodecFailed`). See [docs/codecs.md](docs/codecs.md).
+- `ImageLimits.MaxFileBytes` (256 MiB by default), for codecs that need the whole file.
+- `ImageInfo` has a public constructor, and its `Orientation`, `HasAlpha`, `HasIccProfile`, `ColorSpace` and `HasExif` can be set when it's created.
+
+Other:
+
 - The package readme on nuget.org has a short example, the comparison with the C tools and links to the documentation.
 
 ## 0.1.0

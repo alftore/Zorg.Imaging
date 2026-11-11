@@ -5,7 +5,7 @@ These are the formats and features Zorg.Imaging doesn't handle yet. A file that 
 
 ## Formats
 
-- **AVIF, HEIC and JPEG XL** are recognised (`ImageFormats.Detect`, `Image.Identify`) but not decoded. HEIC may come
+- **AVIF, HEIC and JPEG XL** are recognised (`ImageFormats.Detect`, `Image.Identify`) but not decoded, unless the app adds a [codec from another package](codecs.md). HEIC may come
   later as an opt-in native add-on, because of HEVC patents.
 - **BMP and TIFF** are decoded, not encoded.
 - **Animations:** `Image.Decode` reads the first frame. Animated GIF and WebP are read and written frame by frame with
@@ -43,5 +43,6 @@ Every decoder checks these against the headers before it allocates. A file over 
 | `MaxPixels` (width × height, or the animation canvas) | 268,402,689 (16,383 × 16,383, as sharp) |
 | `MaxFrames` | 10,000 |
 | `MaxHeaderBytes` (headers read before the pixels) | 1 MiB |
+| `MaxFileBytes` (a whole file, for [codecs from other packages](codecs.md)) | 256 MiB |
 
 A server that takes uploads should lower `MaxPixels` to what it actually needs.

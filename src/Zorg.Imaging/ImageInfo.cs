@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 
 namespace Zorg.Imaging;
@@ -14,8 +15,18 @@ namespace Zorg.Imaging;
 /// </example>
 public sealed class ImageInfo
 {
-    internal ImageInfo(ImageFormat format, int width, int height)
+    /// <summary>Describes an image, for an <see cref="ImageCodec"/> to return from <see cref="ImageCodec.ReadHeader"/>.</summary>
+    /// <param name="format">The format.</param>
+    /// <param name="width">The stored width, before orientation.</param>
+    /// <param name="height">The stored height, before orientation.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="format"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="width"/> or <paramref name="height"/> is negative.</exception>
+    /// <example><code>var info = new ImageInfo(ImageFormat.Heif, 4032, 3024) { Orientation = 6, HasAlpha = false };</code></example>
+    public ImageInfo(ImageFormat format, int width, int height)
     {
+        ArgumentNullException.ThrowIfNull(format);
+        ArgumentOutOfRangeException.ThrowIfNegative(width);
+        ArgumentOutOfRangeException.ThrowIfNegative(height);
         Format = format;
         Width = width;
         Height = height;
@@ -38,7 +49,7 @@ public sealed class ImageInfo
     /// it by default.
     /// </summary>
     /// <example><code>bool rotated = info.Orientation != 1;</code></example>
-    public int Orientation { get; internal init; } = 1;
+    public int Orientation { get; init; } = 1;
 
     /// <summary>The width once orientation is applied: <see cref="Height"/> for orientations 5 to 8, which turn the image a quarter.</summary>
     /// <example><code>string size = $"{info.DisplayWidth} x {info.DisplayHeight}";</code></example>
@@ -53,7 +64,7 @@ public sealed class ImageInfo
     /// entry. It says what the format allows, not that any pixel is actually transparent.
     /// </summary>
     /// <example><code>ImageFormat output = info.HasAlpha ? ImageFormat.Png : ImageFormat.Jpeg;</code></example>
-    public bool HasAlpha { get; internal init; }
+    public bool HasAlpha { get; init; }
 
     /// <summary>Whether the file declares more than one frame: APNG, animated WebP, or a GIF with a loop extension or several frames.</summary>
     /// <example><code>bool animated = info.IsAnimated;</code></example>
@@ -68,18 +79,18 @@ public sealed class ImageInfo
 
     /// <summary>Whether the file carries an ICC colour profile.</summary>
     /// <example><code>bool profiled = info.HasIccProfile;</code></example>
-    public bool HasIccProfile { get; internal init; }
+    public bool HasIccProfile { get; init; }
 
     /// <summary>
     /// The colour space decoding will give the pixels, when <see cref="IdentifyOptions.ReadColorSpace"/> asked for it;
     /// otherwise <see langword="null"/>. A CMYK JPEG reports sRGB, since decoding converts it.
     /// </summary>
     /// <example><code>bool wide = info.ColorSpace is { IsSrgb: false };</code></example>
-    public ColorSpace? ColorSpace { get; internal init; }
+    public ColorSpace? ColorSpace { get; init; }
 
     /// <summary>Whether the file carries an EXIF block. Decoding strips it by default.</summary>
     /// <example><code>bool exif = info.HasExif;</code></example>
-    public bool HasExif { get; internal init; }
+    public bool HasExif { get; init; }
 
     private bool SwapsAxes => Orientation is >= 5 and <= 8;
 
