@@ -1,1 +1,5 @@
 #nullable enable
+static Zorg.Imaging.SystemCodecs.All.get -> Zorg.Imaging.ImageCodecs!
+static Zorg.Imaging.SystemCodecs.Avif.get -> Zorg.Imaging.ImageCodec!
+static Zorg.Imaging.SystemCodecs.Heif.get -> Zorg.Imaging.ImageCodec!
+Zorg.Imaging.SystemCodecs
