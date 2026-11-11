@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Lossy WebP makes its ten 4 x 4 predictions from one table of edge averages with byte shuffles: the same output, about 1.5% faster on photos.
 - Lossy WebP gives photos one round of its colour fitting instead of two: 3 to 5% less time, quality within 0.02 dB either way at equal size. Graphics keep two.
 - Lossy WebP skips the subblock search for macroblocks a whole-block mode already rebuilds exactly: game screenshots encode 13% faster and cut-outs 3 to 7%, with the same quality.
 

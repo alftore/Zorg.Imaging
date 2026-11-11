@@ -582,10 +582,7 @@ internal sealed class Vp8Encoder
             }
             // All ten predicted before any is read back as a vector: the predictors write single bytes, and a vector
             // load straight after them waits for those stores to drain.
-            for (int mode = BDcPred; mode <= BHuPred; mode++)
-            {
-                PredictSubblock(edge, mode, predictions.Slice(mode * 16, 16));
-            }
+            PredictSubblocks(edge, predictions);
 
             for (int mode = BDcPred; mode <= BHuPred; mode++)
             {
@@ -873,6 +870,69 @@ internal sealed class Vp8Encoder
 
         return loss;
     }
+
+    // The ten subblock predictions from one edge, into 160 bytes (mode m at 16 m), the same as Vp8Decoder.PredictSubblock
+    // gives. Every mode but DC and TM takes each pixel from one of 26 values: the 3-tap averages along the 13 edge
+    // pixels (ends repeated), the 2-tap averages of neighbouring edge pixels, and the bottom left pixel. They are worked
+    // out once, and each mode is two byte shuffles of them by a fixed index table (derived from the scalar predictor).
+    internal static void PredictSubblocks(int[] edge, Span<byte> predictions)
+    {
+        if (!Ssse3.IsSupported)
+        {
+            for (int mode = BDcPred; mode <= BHuPred; mode++)
+            {
+                PredictSubblock(edge, mode, predictions.Slice(mode * 16, 16));
+            }
+
+            return;
+        }
+
+        Span<byte> table = stackalloc byte[32];
+        for (int k = 0; k < 13; k++)
+        {
+            table[k] = (byte)((edge[Math.Max(k - 1, 0)] + (2 * edge[k]) + edge[Math.Min(k + 1, 12)] + 2) >> 2);
+        }
+
+        for (int k = 0; k < 12; k++)
+        {
+            table[13 + k] = (byte)((edge[k] + edge[k + 1] + 1) >> 1);
+        }
+
+        table[25] = (byte)edge[0];
+        Vector128<byte> low = Vector128.Create<byte>(table[..16]);
+        Vector128<byte> high = Vector128.Create<byte>(table[16..]);
+        ReadOnlySpan<byte> lowIndexes = SubblockLowIndexes;
+        ReadOnlySpan<byte> highIndexes = SubblockHighIndexes;
+        for (int mode = BVePred; mode <= BHuPred; mode++)
+        {
+            int at = (mode - BVePred) * 16;
+            Vector128<byte> pixels = Ssse3.Shuffle(low, Vector128.Create<byte>(lowIndexes.Slice(at, 16)))
+                | Ssse3.Shuffle(high, Vector128.Create<byte>(highIndexes.Slice(at, 16)));
+            pixels.CopyTo(predictions.Slice(mode * 16, 16));
+        }
+
+        PredictSubblock(edge, BDcPred, predictions[..16]);
+        PredictSubblock(edge, BTmPred, predictions.Slice(16, 16));
+    }
+
+    // Each table-driven mode's 16 pixels as indexes into the 26 values (VE, HE, LD, RD, VR, VL, HD, HU).
+    private static ReadOnlySpan<byte> SubblockIndexes =>
+    [
+        5, 6, 7, 8, 5, 6, 7, 8, 5, 6, 7, 8, 5, 6, 7, 8,
+        3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0,
+        6, 7, 8, 9, 7, 8, 9, 10, 8, 9, 10, 11, 9, 10, 11, 12,
+        4, 5, 6, 7, 3, 4, 5, 6, 2, 3, 4, 5, 1, 2, 3, 4,
+        17, 18, 19, 20, 4, 5, 6, 7, 3, 17, 18, 19, 2, 4, 5, 6,
+        18, 19, 20, 21, 6, 7, 8, 9, 19, 20, 21, 10, 7, 8, 9, 11,
+        16, 4, 5, 6, 15, 3, 16, 4, 14, 2, 15, 3, 13, 1, 14, 2,
+        15, 2, 14, 1, 14, 1, 13, 0, 13, 0, 25, 25, 25, 25, 25, 25,
+    ];
+
+    // The same split for the two shuffles: an index below 16 into the first vector, else into the second; 0x80 gives 0.
+    private static readonly byte[] SubblockLowIndexes = [.. SubblockIndexesArray().Select(i => i < 16 ? i : (byte)0x80)];
+    private static readonly byte[] SubblockHighIndexes = [.. SubblockIndexesArray().Select(i => i >= 16 ? (byte)(i - 16) : (byte)0x80)];
+
+    private static byte[] SubblockIndexesArray() => SubblockIndexes.ToArray();
 
     // ---- Four blocks in the lanes of 128-bit vectors ----
     // Element i (row-major in the block) of four blocks, one block in each lane. Each helper follows its scalar
