@@ -4,10 +4,6 @@ using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Zorg.Imaging.Codecs.Gif;
-using Zorg.Imaging.Codecs.Jpeg;
-using Zorg.Imaging.Codecs.Png;
-using Zorg.Imaging.Codecs.Webp;
 using Zorg.Imaging.Formats;
 using Zorg.Imaging.Processing;
 
@@ -87,34 +83,9 @@ public sealed partial class Image
         using Parallelism.Scope scope = Parallelism.Use(options.MaxDegreeOfParallelism);
         ReadOnlyMemory<byte> head = await reader.PeekAsync(ImageFormats.MaxSignatureLength, cancellationToken).ConfigureAwait(false);
         ImageFormat? format = ImageFormats.Detect(head.Span);
-        if (format == ImageFormat.Png)
+        if (CodecTable.For(format) is { } codec)
         {
-            return await PngDecoder.DecodeAsync(reader, options, sync, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (format == ImageFormat.Jpeg)
-        {
-            return await JpegDecoder.DecodeAsync(reader, options, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (format == ImageFormat.Gif)
-        {
-            return await GifDecoder.DecodeAsync(reader, options, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (format == ImageFormat.Webp)
-        {
-            return await WebpDecoder.DecodeAsync(reader, options, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (format == ImageFormat.Tiff)
-        {
-            return await Codecs.Tiff.TiffDecoder.DecodeAsync(reader, options, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (format == ImageFormat.Bmp)
-        {
-            return await Codecs.Bmp.BmpDecoder.DecodeAsync(reader, options, cancellationToken).ConfigureAwait(false);
+            return await codec.Decode(reader, options, sync, cancellationToken).ConfigureAwait(false);
         }
 
         throw format is null

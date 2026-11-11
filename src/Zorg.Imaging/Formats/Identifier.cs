@@ -2,10 +2,6 @@ using System;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
-using Zorg.Imaging.Codecs.Gif;
-using Zorg.Imaging.Codecs.Jpeg;
-using Zorg.Imaging.Codecs.Png;
-using Zorg.Imaging.Codecs.Webp;
 
 namespace Zorg.Imaging.Formats;
 
@@ -46,35 +42,12 @@ internal static class Identifier
         }
     }
 
-    private static ValueTask<ImageInfo> ReadHeadersAsync(ImageFormat format, HeaderReader reader, IdentifyOptions options, CancellationToken cancellationToken)
-    {
-        if (format == ImageFormat.Png)
-        {
-            return PngHeaderReader.ReadAsync(reader, options, cancellationToken);
-        }
-
-        if (format == ImageFormat.Jpeg)
-        {
-            return JpegHeaderReader.ReadAsync(reader, options, cancellationToken);
-        }
-
-        if (format == ImageFormat.Gif)
-        {
-            return GifHeaderReader.ReadAsync(reader, options, cancellationToken);
-        }
-
-        if (format == ImageFormat.Tiff)
-        {
-            return Codecs.Tiff.TiffHeaderReader.ReadAsync(reader, options, cancellationToken);
-        }
-
-        if (format == ImageFormat.Bmp)
-        {
-            return Codecs.Bmp.BmpHeaderReader.ReadAsync(reader, options, cancellationToken);
-        }
-
-        return WebpHeaderReader.ReadAsync(reader, options, cancellationToken);
-    }
+    private static ValueTask<ImageInfo> ReadHeadersAsync(ImageFormat format, HeaderReader reader, IdentifyOptions options, CancellationToken cancellationToken) =>
+        CodecTable.For(format) is { } codec
+            ? codec.ReadHeaders(reader, options, cancellationToken)
+            : throw new UnsupportedImageFormatException(
+                string.Create(CultureInfo.InvariantCulture, $"{format.Name} images aren't supported."),
+                format);
 
     private static void CheckLimits(ImageInfo info, ImageLimits limits)
     {

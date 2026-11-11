@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Zorg.Imaging.Formats;
 using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging;
@@ -553,28 +554,9 @@ public sealed class ImagePipeline
         return text.ToString();
     }
 
-    private static ImageFormat? FormatOf(string extension)
-    {
-        foreach (ImageFormat format in (ReadOnlySpan<ImageFormat>)[ImageFormat.Png, ImageFormat.Jpeg, ImageFormat.Webp, ImageFormat.Gif])
-        {
-            foreach (string known in format.FileExtensions)
-            {
-                if (string.Equals(known, extension, StringComparison.OrdinalIgnoreCase))
-                {
-                    return format;
-                }
-            }
-        }
+    private static ImageFormat? FormatOf(string extension) => CodecTable.EncodableFormatOf(extension);
 
-        return null;
-    }
-
-    private static Func<Image, Stream, CancellationToken, ValueTask>? Saver(ImageFormat? format) =>
-        format == ImageFormat.Png ? (image, stream, token) => image.SaveAsPngAsync(stream, null, token)
-        : format == ImageFormat.Jpeg ? (image, stream, token) => image.SaveAsJpegAsync(stream, null, token)
-        : format == ImageFormat.Webp ? (image, stream, token) => image.SaveAsWebpAsync(stream, null, token)
-        : format == ImageFormat.Gif ? (image, stream, token) => image.SaveAsGifAsync(stream, null, token)
-        : null;
+    private static Func<Image, Stream, CancellationToken, ValueTask>? Saver(ImageFormat? format) => CodecTable.For(format)?.Save;
 
     /// <summary>
     /// The size the first resize makes, seen from the decoded (upright) size, when only steps that keep every pixel
