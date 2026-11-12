@@ -17,6 +17,7 @@ dotnet test --solution Zorg.Imaging.slnx --no-build
 - Commits are signed through `commit.gpgsign`. Never bypass it. If signing fails, stop and tell the maintainer.
 - Commit messages and pull requests have no `Co-Authored-By` or "Generated with" lines. The README states that agents help build the library.
 - `.tmp/design/` holds the agreed design, where it exists on your machine. `01-implementation-plan.md` wins over older notes.
+- `docs/dotnet-versions.md` records what each new .NET version offers the library; update it when one ships.
 - The library takes no runtime packages. Test and benchmark packages need a row in `docs/dependencies.md`, with the licence checked in the `.nuspec`.
 - Never read ImageSharp's source (Six Labors Split License). Other libraries may be read for ideas, but don't copy their code.
 
