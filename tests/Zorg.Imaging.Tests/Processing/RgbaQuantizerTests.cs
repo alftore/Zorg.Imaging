@@ -66,13 +66,15 @@ public class RgbaQuantizerTests
 
         RgbaQuantizer.Result result = RgbaQuantizer.Run(argb, Width, Height, 64, dither: 0);
 
+        // Opaque pictures are matched in Oklab; any with alpha, premultiplied over black and white.
+        bool overPage = Array.Exists(argb, p => p < 0xFF000000u);
+        Func<uint, Vector128<float>> space = overPage ? RgbaQuantizer.Premultiply : Oklab.FromArgb;
         var palette = new Vector128<float>[result.Palette.Length];
         for (int k = 0; k < palette.Length; k++)
         {
-            palette[k] = RgbaQuantizer.Premultiply(result.Palette[k]);
+            palette[k] = space(result.Palette[k]);
         }
 
-        bool overPage = Array.Exists(argb, p => p < 0xFF000000u);
         for (int i = 0; i < argb.Length; i++)
         {
             if (argb[i] < 0x01000000u)
@@ -81,7 +83,7 @@ public class RgbaQuantizerTests
                 continue;
             }
 
-            Vector128<float> p = RgbaQuantizer.Premultiply(argb[i]);
+            Vector128<float> p = space(argb[i]);
             int best = 0;
             float least = float.MaxValue;
             for (int k = 0; k < palette.Length; k++)

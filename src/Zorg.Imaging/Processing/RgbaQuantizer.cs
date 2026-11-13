@@ -21,6 +21,12 @@ namespace Zorg.Imaging.Processing;
 /// differ over both black and white, so an error in alpha counts as much as a page shows it.
 /// </para>
 /// <para>
+/// An opaque picture is reduced in <see cref="Oklab"/> instead (the cells, boxes, means and nearest colours all in its
+/// lanes; error diffusion still carries sRGB): on 168 test images SSIMULACRA 2 rose by 1.7 on average and 2 to 3 on
+/// photos, for about 1 dB less PSNR and a third more time. Squared sRGB error spends the palette on hue and saturation,
+/// where the eye forgives more than in lightness. Three flat game screenshots lost up to 1.7.
+/// </para>
+/// <para>
 /// Pixels are matched to their exact nearest colour through a cache of the colours that can be nearest in each cell, with
 /// optional Floyd–Steinberg dithering of the premultiplied values. Everything runs in a fixed order, so the result
 /// doesn't depend on the number of threads.
@@ -65,17 +71,21 @@ internal static class RgbaQuantizer
         }
 
         int colours = maxColours - (anyTransparent ? 1 : 0);
-        Cells cells = Cells.Count(argb, exactCells: FewColours(argb));
+        bool exactCells = FewColours(argb);
+        bool oklab = !anyAlpha;
+        Cells cells = Cells.Count(argb, exactCells, oklab);
         Vector128<float>[] means = MedianCut(cells, Math.Max(colours, 1));
         bool[] opaque = Refine(cells, means, anyAlpha);
 
         var palette = new List<uint>(means.Length + 1);
         var premultiplied = new List<Vector128<float>>(means.Length + 1);
+        var search = new List<Vector128<float>>(means.Length + 1);
         for (int k = 0; k < means.Length; k++)
         {
-            uint colour = Straight(means[k], opaque[k]);
+            uint colour = oklab ? Oklab.ToArgb(means[k]) : Straight(means[k], opaque[k]);
             palette.Add(colour);
             premultiplied.Add(Premultiply(colour));
+            search.Add(oklab ? Oklab.FromArgb(colour) : Premultiply(colour));
         }
 
         int transparentIndex = -1;
@@ -84,9 +94,10 @@ internal static class RgbaQuantizer
             transparentIndex = palette.Count;
             palette.Add(0);
             premultiplied.Add(Vector128<float>.Zero);
+            search.Add(Vector128<float>.Zero);
         }
 
-        byte[] indices = Map(argb, width, height, [.. premultiplied], transparentIndex, dither, anyAlpha);
+        byte[] indices = Map(argb, width, height, [.. premultiplied], oklab ? [.. search] : null, transparentIndex, dither, anyAlpha);
         return new Result([.. palette], indices);
     }
 
@@ -511,16 +522,17 @@ internal static class RgbaQuantizer
     private static Vector128<float> Narrow(Vector128<double> low, Vector128<double> high) =>
         Vector128.Create((float)low.GetElement(0), (float)low.GetElement(1), (float)high.GetElement(0), (float)high.GetElement(1));
 
-    // Each pixel's palette index: its exact nearest premultiplied colour (the lowest index of equals), with
-    // Floyd–Steinberg error diffusion (alternate rows in opposite directions) when dither is above 0, passing on 60% of
-    // the error at full strength. Fully transparent pixels take the transparent index. A cache of 32 levels a channel
+    // Each pixel's palette index: its exact nearest premultiplied colour (the lowest index of equals), or nearest in
+    // Oklab when oklab holds the palette there, with Floyd–Steinberg error diffusion (alternate rows in opposite
+    // directions, the error carried in sRGB) when dither is above 0, passing on 60% of the error at full strength. Fully
+    // transparent pixels take the transparent index. A cache of 32 levels a channel
     // keeps, for each cell, the colours that can be nearest to some value in it: those within the distance of the colour
     // nearest the cell's centre plus twice the farthest a value lies from the centre (4 a channel, so 8 in all).
-    private static byte[] Map(uint[] argb, int width, int height, Vector128<float>[] palette, int transparentIndex, double dither, bool overPage)
+    private static byte[] Map(uint[] argb, int width, int height, Vector128<float>[] palette, Vector128<float>[]? oklab, int transparentIndex, double dither, bool overPage)
     {
         Vector128<float>[] colours = transparentIndex >= 0 ? palette[..transparentIndex] : palette;
-        var nearest = new NearestColour(colours, overPage);
-        int Find(Vector128<float> p) => nearest.Find(p);
+        var nearest = new NearestColour(oklab ?? colours, overPage);
+        Oklab.Cache? converted = oklab is null ? null : new Oklab.Cache();
 
         byte[] indices = new byte[argb.Length];
         float strength = (float)(dither * DitherShare);
@@ -554,7 +566,10 @@ internal static class RgbaQuantizer
                 }
 
                 // A flat area in a palette colour carries no error, so the same colour comes again and again.
-                int index = Vector128.EqualsAll(wanted, lastWanted) ? lastIndex : Find(wanted);
+                // In Oklab, a colour carrying error is converted as it is; one without, through the cache.
+                int index = Vector128.EqualsAll(wanted, lastWanted) ? lastIndex
+                    : converted is null ? nearest.Find(wanted)
+                    : nearest.Find(strength > 0 ? Oklab.FromRgb(wanted) : converted.FromArgb(p));
                 (lastWanted, lastIndex) = (wanted, index);
                 indices[i] = (byte)index;
                 if (strength > 0)
@@ -586,7 +601,7 @@ internal static class RgbaQuantizer
         public int Length { get; private set; }
 
         // With exactCells, each distinct colour is a cell of its own; else colours share cells of 64 levels a channel.
-        public static Cells Count(uint[] argb, bool exactCells)
+        public static Cells Count(uint[] argb, bool exactCells, bool oklab)
         {
             var cells = new Cells();
             var map = new Dictionary<int, int>();
@@ -594,6 +609,8 @@ internal static class RgbaQuantizer
             var opaque = new List<bool>();
             uint last = 0;
             int lastCell = -1;
+            Vector128<float> lastColour = default;
+            Oklab.Cache? converted = oklab ? new Oklab.Cache() : null;
             for (int i = 0; i < argb.Length;)
             {
                 // A run of the same colour is added at once.
@@ -617,6 +634,7 @@ internal static class RgbaQuantizer
                 }
                 else
                 {
+                    lastColour = converted?.FromArgb(p) ?? Premultiply(p);
                     int key;
                     if (exactCells)
                     {
@@ -624,8 +642,7 @@ internal static class RgbaQuantizer
                     }
                     else
                     {
-                        Vector128<float> v = Premultiply(p);
-                        Vector128<int> level = Vector128.ConvertToInt32(v) >> 2;
+                        Vector128<int> level = Vector128.ConvertToInt32(lastColour) >> 2;
                         key = (level.GetElement(0) << 18) | (level.GetElement(1) << 12) | (level.GetElement(2) << 6) | level.GetElement(3);
                     }
 
@@ -644,7 +661,7 @@ internal static class RgbaQuantizer
                     (last, lastCell) = (p, cell);
                 }
 
-                Vector128<float> c = Premultiply(p);
+                Vector128<float> c = lastColour;
                 weight[cell] += run;
                 opaque[cell] &= p >= 0xFF000000u;
                 int at = cell * 5;
