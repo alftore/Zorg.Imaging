@@ -3,10 +3,26 @@
 # Oracles (black boxes only, never read as source): libpng tools, libjpeg-turbo (djpeg/cjpeg),
 # libwebp (dwebp/cwebp/webpmux), oxipng, exiftool, ImageMagick with JPEG and WebP modules.
 # clang, build-base and zlib-dev are for the Native AOT publish.
-FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine3.24
+FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine3.24 AS gate
 RUN apk add --no-cache libpng-utils libjpeg-turbo-utils libwebp-tools oxipng exiftool \
         imagemagick imagemagick-jpeg imagemagick-webp \
         clang build-base zlib-dev tar curl
 ENV DOTNET_NOLOGO=1 \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+
+# SSIMULACRA 2.1 (BSD-3, github.com/cloudinary/ssimulacra2), the perceptual metric the corpus comparison uses. Built
+# from a pinned commit, as no Alpine package ships it, and only for the "metric" target, so the test gate doesn't
+# build it:  podman build --target metric -t localhost/zorg-imaging-gate:metric -f scripts/linux/Dockerfile.alpine scripts/linux
+FROM alpine:3.24 AS ssimulacra2
+ARG SSIMULACRA2_COMMIT=81feacf6a5b0bbd7ec11b4a881a4615033ab0b10
+ARG SSIMULACRA2_SHA256=2c85dda01cf83898d85f5002eb9424a540436b8a64342e4cf0b7bf0a39a82d88
+RUN apk add --no-cache build-base cmake samurai highway-dev lcms2-dev libpng-dev libjpeg-turbo-dev curl
+RUN curl -fsSL -o /tmp/s2.tar.gz "https://github.com/cloudinary/ssimulacra2/archive/${SSIMULACRA2_COMMIT}.tar.gz"     && echo "${SSIMULACRA2_SHA256}  /tmp/s2.tar.gz" | sha256sum -c -     && mkdir /src && tar -xzf /tmp/s2.tar.gz -C /src --strip-components=1     && cmake -S /src/src -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF     && cmake --build /build --target ssimulacra2
+
+FROM gate AS metric
+RUN apk add --no-cache libhwy lcms2 libpng libjpeg-turbo
+COPY --from=ssimulacra2 /build/ssimulacra2 /usr/local/bin/ssimulacra2
+
+# The default target is the test gate.
+FROM gate
