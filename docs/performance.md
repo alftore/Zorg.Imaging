@@ -8,6 +8,29 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-14: 256 colours in Oklab
+
+The 256-colour quantiser (PNG `MaxColors`, GIF) now builds and matches an opaque picture's palette in Oklab. Same
+corpus, ours less theirs:
+
+| Format, against | Size | Time | ΔPSNR | ΔS2 before | ΔS2 now |
+|---|---:|---:|---:|---:|---:|
+| PNG 256 colours, pngquant 256 | 1.023 | 0.52 | +0.04 | -0.41 | +1.28 |
+| GIF, libvips `gifsave` | 0.994 | 0.29 | +0.48 | -0.02 | +1.67 |
+
+Photos went from 1 to 2 points behind pngquant to 2.5 to 3.2 ahead; photo textures -0.18 to +2.22. Of 168 images, 90
+gained more than 0.3 and 3 lost more (flat game screenshots, up to 1.7); pictures with transparency are unchanged.
+Without dithering on either side, pngquant's luma error was 25 to 35% lower than ours and its chroma error 25 to 35%
+higher: it spends colours on lightness. A third more time, as the palette is packed tighter in Oklab and the nearest-
+colour search has more candidates per cell.
+
+Tried and left out: dithering only flat areas at full strength, or less at edges and in texture (all lower S2 than the
+uniform 60%), and weighting each pixel's vote for the palette by how flat its surroundings are (no gain, icons 27%
+larger). For PNG compression against oxipng (9.2% larger, at 0.06 of its time): zlib level 9 closes it to 5.8% for
+3.7 times the time, Entropy and Bigrams among the adaptive filters 0.7% for 1.6 times, adaptive filtering of palette
+rows nothing, and the optimal parser cut to 2 attempts to 3.1% for 36 times. `Optimize` is the way to smaller files:
+0.996 of oxipng's size, for about 200 times the default's time.
+
 ## 2026-11-13: the corpus scored with SSIMULACRA 2.1
 
 The corpus of the 2026-11-10 section below (168 images; sizes and times unchanged) scored again with SSIMULACRA 2.1, a perceptual
