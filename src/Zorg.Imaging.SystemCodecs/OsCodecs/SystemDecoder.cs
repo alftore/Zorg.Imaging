@@ -77,6 +77,24 @@ internal abstract class SystemDecoder
                 current = Replace(current, current.Crop(crop.X, crop.Y, crop.Width, crop.Height));
             }
 
+            return Turn(current, header);
+        }
+        catch
+        {
+            current.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Turns and mirrors a cropped picture as the file says (<c>irot</c>, then <c>imir</c>).</summary>
+    /// <param name="cropped">The picture, cropped but not turned. Disposed if a new image is returned.</param>
+    /// <param name="header">The file's geometry.</param>
+    /// <returns>The picture as shown.</returns>
+    protected static Image Turn(Image cropped, HeifHeader header)
+    {
+        Image current = cropped;
+        try
+        {
             if (header.Rotation != 0)
             {
                 current = Replace(current, current.Rotate(-90 * header.Rotation));

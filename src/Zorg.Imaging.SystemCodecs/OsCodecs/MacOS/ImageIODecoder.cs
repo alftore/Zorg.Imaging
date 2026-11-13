@@ -60,17 +60,20 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
                 throw new ImageFormatException("ImageIO can't open the " + header.Format.Name + " file.");
             }
 
-            // Shrink-on-load: ImageIO's thumbnail of the primary image, turned as the file says and no larger than asked.
-            // Used only when it comes back at the size wanted (a pixel either way), else the full picture is decoded.
+            // Shrink-on-load: ImageIO's thumbnail of the primary image, cropped but not turned (ImageIO's own orientation
+            // handling doesn't always match HEIF's irot and imir, so the codec turns it), at the size wanted. Used only
+            // when it comes back at that size, a pixel either way; else the full picture is decoded.
             bool scaled = false;
+            int wantWidth = 0, wantHeight = 0;
             if (scaledTo is (int scaledWidth, int scaledHeight))
             {
-                void* options = Native.ThumbnailOptions(Math.Max(scaledWidth, scaledHeight));
+                (wantWidth, wantHeight) = header.Rotation % 2 == 1 ? (scaledHeight, scaledWidth) : (scaledWidth, scaledHeight);
+                void* options = Native.ThumbnailOptions(Math.Max(wantWidth, wantHeight));
                 cgImage = Native.CGImageSourceCreateThumbnailAtIndex(source, 0, options);
                 Native.Release(options);
                 if (cgImage is not null
-                    && Math.Abs(Native.CGImageGetWidth(cgImage) - scaledWidth) <= 1
-                    && Math.Abs(Native.CGImageGetHeight(cgImage) - scaledHeight) <= 1)
+                    && Math.Abs(Native.CGImageGetWidth(cgImage) - wantWidth) <= 1
+                    && Math.Abs(Native.CGImageGetHeight(cgImage) - wantHeight) <= 1)
                 {
                     scaled = true;
                 }
@@ -140,7 +143,21 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             image.ColorSpace = keep ? header.ColorSpace ?? IccOf(space) ?? ColorSpace.Srgb : ColorSpace.Srgb;
             Image result = image;
             image = null;
-            return scaled ? result : AsShown(result, header, applied);
+            if (!scaled)
+            {
+                return AsShown(result, header, applied);
+            }
+
+            // ImageIO rounds the thumbnail's size its own way; a pixel's stretch keeps the size the caller expects.
+            if (result.Width != wantWidth || result.Height != wantHeight)
+            {
+                Image exact = result.Resize(wantWidth, wantHeight);
+                exact.ColorSpace = result.ColorSpace;
+                result.Dispose();
+                result = exact;
+            }
+
+            return Turn(result, header);
         }
         finally
         {
@@ -320,7 +337,7 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
 
         /// <summary>
         /// Options for a thumbnail of at most <paramref name="size"/> pixels on its longer side, always made from the
-        /// full image (never an embedded preview), with the file's orientation applied and nothing cached. The caller
+        /// full image (never an embedded preview), without ImageIO's orientation, and nothing cached. The caller
         /// releases the dictionary.
         /// </summary>
         public static void* ThumbnailOptions(int size)
@@ -338,7 +355,7 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
                 keys[0] = Constant("ImageIO", "kCGImageSourceCreateThumbnailFromImageAlways");
                 values[0] = yes;
                 keys[1] = Constant("ImageIO", "kCGImageSourceCreateThumbnailWithTransform");
-                values[1] = yes;
+                values[1] = no;
                 keys[2] = Constant("ImageIO", "kCGImageSourceThumbnailMaxPixelSize");
                 values[2] = number;
                 keys[3] = Constant("ImageIO", "kCGImageSourceShouldCache");
