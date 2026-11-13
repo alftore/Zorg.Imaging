@@ -22,7 +22,7 @@ Measured on one core over about 170 test images against the reference tools:
 | JPEG vs cjpeg | 9% smaller | 3.4 times faster | the same |
 | Lossless WebP vs cwebp | 1% smaller | 1.6 times faster | lossless |
 | PNG vs libvips | 19% smaller | 7 times faster | lossless |
-| 256-colour PNG vs pngquant | about the same | 2 times faster | 0.8 dB closer |
+| 256-colour PNG vs pngquant | 2% larger | 2 times faster | 1.3 points better by SSIMULACRA 2 (perceptual) |
 
 JPEG decoding gives the same pixels as libjpeg-turbo. The details are in [docs/performance.md](https://github.com/alftore/Zorg.Imaging/blob/main/docs/performance.md).
 

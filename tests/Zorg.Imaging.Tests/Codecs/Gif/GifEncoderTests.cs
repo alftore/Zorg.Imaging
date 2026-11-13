@@ -188,10 +188,12 @@ public class GifEncoderTests
 
     [Theory]
     [InlineData(1.0, 27)]
-    [InlineData(0.0, 30)]
+    [InlineData(0.0, 29)]
     [InlineData(0.5, 28.5)]
     public void Photos_are_reduced_with_good_fidelity(double dithering, double minimumPsnr)
     {
+        // Opaque palettes are chosen in Oklab, for perceived quality (SSIMULACRA 2, 1 to 3 points higher on photos),
+        // which costs about 1 dB of PSNR; the floors allow for that.
         using Image photo = JpegEncoderTests.Photo(200, 150, PixelFormat.Rgb24, seed: 4);
         using Image decoded = Image.Decode(Save(photo, new GifEncoderOptions { Dithering = dithering }));
         double psnr = JpegEncoderTests.Psnr(decoded.GetPixelBytes(), photo.GetPixelBytes());
