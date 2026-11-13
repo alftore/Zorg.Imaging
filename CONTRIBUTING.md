@@ -33,6 +33,15 @@ The script sends the tree into the container as a tar stream, so uncommitted edi
 
 The containers use `--network host`, as in Zorg.Ssh: on the Podman machine used for development, the default rootless network was slow enough to make package installs look hung.
 
+For comparing lossy output by eye-like quality rather than PSNR, the Alpine Dockerfile has a second target, `metric`, that adds SSIMULACRA 2.1 (BSD-3, built from a pinned commit; no package ships it). The tests don't use it, so the gate doesn't build it:
+
+```
+podman build --target metric -t localhost/zorg-imaging-gate:metric -f scripts/linux/Dockerfile.alpine scripts/linux
+podman run --rm -v "$PWD:/w" localhost/zorg-imaging-gate:metric ssimulacra2 /w/original.png /w/decoded.png
+```
+
+Scores run from 100 (identical) down; about 90 is visually lossless, 70 to 80 is a typical web quality, and a difference of a point or less is noise.
+
 ### Required oracles
 
 `ZORG_REQUIRE_ORACLES=1` turns every "tool isn't installed" skip into a failure. The Alpine gate sets it, and so does the CI oracle job. A run that passes by skipping the oracle tests proves nothing.
