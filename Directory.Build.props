@@ -20,7 +20,8 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
 
     <!-- Packaging metadata -->
-    <VersionPrefix>0.2.0</VersionPrefix>
+    <VersionPrefix>0.3.0</VersionPrefix>
+    <VersionSuffix>preview.1</VersionSuffix>
     <Authors>Zorg.Imaging contributors</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>

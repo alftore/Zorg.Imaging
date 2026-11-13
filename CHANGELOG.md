@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `Zorg.Imaging.SystemCodecs` decodes thumbnails at 1/2, 1/4 or 1/8 size when the pipeline shrinks the picture anyway, as JPEG does: a 48 MP phone photo no longer needs its full-size pixels to make a thumbnail.
+- `Zorg.Imaging.SystemCodecs` passes the file's EXIF and XMP on: `image.Metadata` reads them, and encoders keep them only when `MetadataOptions` asks (stripped by default).
+- `ImageCodec.AttachMetadata`, for codecs to pass a file's EXIF and XMP on.
+- Fixed: an AVIF or HEIC file whose colour is marked "unspecified" (CICP 2) is read as sRGB; before, saving it as JPEG or WebP failed.
+
 ## 0.2.0
 
 Other packages can now add codecs for the formats Zorg.Imaging recognises but doesn't decode, and the first one is here: `Zorg.Imaging.SystemCodecs` decodes AVIF and HEIC through Windows' and macOS's own decoders, for desktop apps. Image output is the same as 0.1.0, and the same on .NET 11 as on .NET 10.

@@ -119,6 +119,70 @@ public sealed class RealFileTests
         Assert.Equal((300, 226), (thumbnail.Width, thumbnail.Height));
     }
 
+    [Theory]
+    [MemberData(nameof(Samples))]
+    public async Task Shrink_on_load_matches_a_full_decode_resized(string name, int width, int height, bool alpha)
+    {
+        _ = (width, height, alpha);
+        byte[] file = Load(name);
+        var options = new DecodeOptions { Codecs = SystemCodecs.All };
+        Image full;
+        try
+        {
+            full = Image.Decode(file, options);
+        }
+        catch (UnsupportedImageFormatException e)
+        {
+            Assert.Skip(e.Message);
+            return;
+        }
+
+        using (full)
+        {
+            int box = Math.Max(1, Math.Max(full.Width, full.Height) / 5);
+            using Image fast = await ImagePipeline.Load(file).WithDecodeOptions(options).Fit(box, box).ToImageAsync(TestContext.Current.CancellationToken);
+            using Image slow = full.Fit(box, box);
+            Assert.Equal((slow.Width, slow.Height), (fast.Width, fast.Height));
+
+            // The systems average in gamma-encoded values, as JPEG's shrink-on-load does, so the two differ a little.
+            Span<byte> a = fast.GetPixelBytes();
+            Span<byte> b = slow.GetPixelBytes();
+            double squares = 0;
+            for (int i = 0; i < a.Length; i++)
+            {
+                double d = a[i] - b[i];
+                squares += d * d;
+            }
+
+            double psnr = 10 * Math.Log10(255.0 * 255 / (squares / a.Length));
+            Assert.True(psnr > 30, $"{name}: shrink-on-load is {psnr:F1} dB from a full decode.");
+        }
+    }
+
+    [Fact]
+    public void Metadata_comes_through_and_is_stripped_unless_kept()
+    {
+        byte[] file = Load("libavif-paris_icc_exif_xmp.avif");
+        if (!SystemCodecs.Avif.Availability.IsAvailable)
+        {
+            Assert.Skip(SystemCodecs.Avif.Availability.Reason!);
+        }
+
+        using Image photo = Image.Decode(file, new DecodeOptions { Codecs = SystemCodecs.All });
+        Assert.Equal("Pixel 4a", photo.Metadata?.CameraModel);
+        Assert.NotNull(photo.Metadata?.Location);
+
+        using var kept = new MemoryStream();
+        photo.SaveAsJpeg(kept, new JpegEncoderOptions { Metadata = MetadataOptions.Keep });
+        using Image keptBack = Image.Decode(kept.ToArray());
+        Assert.Equal("Pixel 4a", keptBack.Metadata?.CameraModel);
+
+        using var stripped = new MemoryStream();
+        photo.SaveAsJpeg(stripped);
+        using Image strippedBack = Image.Decode(stripped.ToArray());
+        Assert.Null(strippedBack.Metadata?.CameraModel);
+    }
+
     private static bool Varied(Span<byte> pixels)
     {
         for (int i = 4; i < pixels.Length; i += 4)

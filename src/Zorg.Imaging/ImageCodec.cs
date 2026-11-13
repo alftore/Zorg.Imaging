@@ -84,6 +84,35 @@ public abstract class ImageCodec
     /// <example><code>public override Image Decode(ReadOnlyMemory&lt;byte&gt; data, ImageInfo header, CodecContext context) => DecodeWithTheSystem(data.Span);</code></example>
     public abstract Image Decode(ReadOnlyMemory<byte> data, ImageInfo header, CodecContext context);
 
+    /// <summary>
+    /// Attaches the file's metadata to a decoded image, as the built-in decoders do: <see cref="Image.Metadata"/> reads
+    /// it, and encoders write it back when their <see cref="MetadataOptions"/> ask. Call it from <see cref="Decode"/>.
+    /// </summary>
+    /// <param name="image">The decoded image.</param>
+    /// <param name="exif">The EXIF block as a TIFF structure (byte order mark first, no <c>Exif</c> prefix), or empty.</param>
+    /// <param name="xmp">The XMP packet, UTF-8, or empty.</param>
+    /// <param name="orientationApplied">
+    /// Whether the pixels are already turned as the file says, so an EXIF orientation in <paramref name="exif"/> no
+    /// longer describes them and is written as 1.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="image"/> is <see langword="null"/>.</exception>
+    /// <example><code>AttachMetadata(image, exif, xmp, orientationApplied: true);</code></example>
+    protected static void AttachMetadata(Image image, ReadOnlySpan<byte> exif, ReadOnlySpan<byte> xmp, bool orientationApplied)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (exif.IsEmpty && xmp.IsEmpty)
+        {
+            image.SourceMetadata = null;
+            return;
+        }
+
+        image.SourceMetadata = new Metadata.SourceMetadata(
+            exif.IsEmpty ? null : exif.ToArray(),
+            xmp.IsEmpty ? null : xmp.ToArray(),
+            Iptc: null,
+            orientationApplied);
+    }
+
     /// <summary>The name.</summary>
     /// <returns><see cref="Name"/>.</returns>
     /// <example><code>Console.WriteLine(codec);</code></example>

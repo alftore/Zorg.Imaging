@@ -41,7 +41,14 @@ It reads the file's boxes in managed code first (the primary image's size, crop,
 colour and the number of tiles), so the limits apply before the system decoder runs: both the stored size and the size as
 shown. HEIF's crop (`clap`), turn (`irot`) and mirror (`imir`) are part of the image, so `Identify` reports the size as
 shown with orientation 1, and decoding returns the picture that way (WIC applies them itself; on macOS the codec applies
-what ImageIO leaves). It decodes at full size, and the first image only.
+what ImageIO leaves). It decodes the first image only.
+
+- **Thumbnails:** when the pipeline will shrink the picture (`ImagePipeline.Load(...).Fit(...)`), the system decodes at
+  1/2, 1/4 or 1/8 (WIC's scaler, ImageIO's thumbnail), keeping at least twice the size wanted, as JPEG's shrink-on-load
+  does. A 48-megapixel phone photo then never needs its full-size pixels in memory on our side.
+- **Metadata:** the file's EXIF and XMP items come through like a JPEG's: `image.Metadata` reads them, and encoders keep
+  them only when `MetadataOptions` says so (stripped by default). The EXIF orientation is written as 1, since the
+  pixels are already turned.
 
 Alpha comes from the file's alpha plane. If the system can't read that plane (Windows can't for some small AVIF test
 files), decoding fails with `UnsupportedImageFormatException` rather than returning an opaque picture.
@@ -125,6 +132,8 @@ The rules for a codec:
 - **Damaged files throw `ImageFormatException`** (or `ImageLimitException` for a limit). Anything else is treated as a
   bug in the codec.
 - **Keep the colour.** Set `image.ColorSpace` from the file's profile rather than converting to sRGB.
+- **Pass the metadata on** with `AttachMetadata(image, exif, xmp, orientationApplied)`, so `MetadataOptions` works the
+  same as for the built-in formats.
 
 ## Native code
 
