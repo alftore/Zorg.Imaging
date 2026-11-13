@@ -12,7 +12,7 @@ tools and the change between runs made back to back.
 
 The corpus of the 2026-11-10 section below (168 images; sizes and times unchanged) scored again with SSIMULACRA 2.1, a perceptual
 metric (0 to 100; about 90 is visually lossless, a point or less is noise), from the gate image's `metric` target.
-ΔS2 is ours less theirs, over white. For lossy WebP, cwebp was also run at qualities 50, 65, 90 and 97, so the size at
+Our build agrees with CID22's human ratings as published (4,292 rated images of its validation set, CC BY-SA 4.0: Kendall 0.706, Spearman 0.889, Pearson 0.878, against 0.708, 0.890 and 0.879). ΔS2 is ours less theirs, over white. For lossy WebP, cwebp was also run at qualities 50, 65, 90 and 97, so the size at
 equal S2 over that sweep (BD-rate) could be measured.
 
 | Format, against | Size | ΔPSNR | ΔS2 | ΔS2 at equal size | BD-rate (S2) |
