@@ -13,6 +13,8 @@ public sealed class HeifFile
     private readonly List<byte[]> _properties = [];
     private readonly Dictionary<uint, List<int>> _associations = [];
     private readonly List<(string Type, uint From, uint[] To)> _references = [];
+    private readonly List<(uint Id, byte[] Data)> _idat = [];
+    private readonly HashSet<uint> _mime = [];
 
     public string MajorBrand { get; init; } = "heic";
 
@@ -88,6 +90,18 @@ public sealed class HeifFile
     /// <summary>Adds an EXIF item, 98, describing the primary image.</summary>
     public HeifFile WithExif() => Item(98, "Exif").Reference("cdsc", 98, Primary);
 
+    /// <summary>Adds an Exif item (97) and an XMP item (96) describing the primary image, stored in idat.</summary>
+    public HeifFile WithMetadata(byte[] tiff, byte[] xmp)
+    {
+        Item(97, "Exif").Reference("cdsc", 97, Primary);
+        _mime.Add(96);
+        Item(96, "mime").Reference("cdsc", 96, Primary);
+        byte[] exifItem = [.. U32(0), .. tiff];
+        _idat.Add((97, exifItem));
+        _idat.Add((96, xmp));
+        return this;
+    }
+
     public static byte[] Ispe(int width, int height) => FullBox("ispe", 0, 0, U32((uint)width), U32((uint)height));
 
     public static byte[] Irot(int anticlockwise) => Box("irot", [(byte)anticlockwise]);
@@ -112,7 +126,30 @@ public sealed class HeifFile
         }
 
         meta.Add(FullBox("pitm", 0, 0, U16((ushort)Primary)));
-        meta.Add(FullBox("iinf", 0, 0, U16((ushort)_items.Count), [.. _items.SelectMany(i => FullBox("infe", 2, 0, U16((ushort)i.Id), U16(0), Encoding.ASCII.GetBytes(i.Type), [0]))]));
+        meta.Add(FullBox("iinf", 0, 0, U16((ushort)_items.Count), [.. _items.SelectMany(i => FullBox(
+            "infe", 2, 0, U16((ushort)i.Id), U16(0), Encoding.ASCII.GetBytes(i.Type), [0],
+            _mime.Contains(i.Id) ? [.. "application/rdf+xml"u8, 0] : []))]));
+        if (_idat.Count > 0)
+        {
+            // iloc version 1, 4-byte offsets and lengths, no base offset: each item one extent in idat (method 1).
+            var iloc = new List<byte> { 0x44, 0x00 };
+            iloc.AddRange(U16((ushort)_idat.Count));
+            uint offset = 0;
+            foreach ((uint id, byte[] data) in _idat)
+            {
+                iloc.AddRange(U16((ushort)id));
+                iloc.AddRange(U16(1)); // construction method 1: idat
+                iloc.AddRange(U16(0)); // data reference index
+                iloc.AddRange(U16(1)); // one extent
+                iloc.AddRange(U32(offset));
+                iloc.AddRange(U32((uint)data.Length));
+                offset += (uint)data.Length;
+            }
+
+            meta.Add(FullBox("iloc", 1, 0, [.. iloc]));
+            meta.Add(Box("idat", [.. _idat.SelectMany(d => d.Data)]));
+        }
+
         if (_references.Count > 0)
         {
             meta.Add(FullBox("iref", 0, 0, [.. _references.SelectMany(r => Box(r.Type, U16((ushort)r.From), U16((ushort)r.To.Length), [.. r.To.SelectMany(t => U16((ushort)t))]))]));

@@ -38,6 +38,7 @@ internal static class HeifReader
     public static HeifHeader Read(ReadOnlySpan<byte> head, ImageLimits limits)
     {
         ReadOnlySpan<byte> meta = default;
+        int metaStart = 0;
         bool sawFtyp = false;
         bool avifBrand = false;
         int at = 0;
@@ -70,6 +71,7 @@ internal static class HeifReader
             else if (box.Type == Fourcc("meta"))
             {
                 meta = body;
+                metaStart = box.BodyStart;
                 break;
             }
 
@@ -81,13 +83,18 @@ internal static class HeifReader
             throw sawFtyp ? Truncated("before its meta box") : Truncated("before its ftyp box");
         }
 
-        return ReadMeta(meta, avifBrand, limits);
+        return ReadMeta(meta, metaStart, avifBrand, limits);
     }
 
-    private static HeifHeader ReadMeta(ReadOnlySpan<byte> meta, bool avifBrand, ImageLimits limits)
+    private static HeifHeader ReadMeta(ReadOnlySpan<byte> meta, int metaStart, bool avifBrand, ImageLimits limits)
     {
         // meta is a FullBox: version and flags, then child boxes.
         ReadOnlySpan<byte> children = FullBoxBody(meta, "meta", out _);
+        int childrenStart = metaStart + 4;
+        var locations = new Dictionary<uint, Location>();
+        var xmpItems = new HashSet<uint>();
+        long idatStart = -1;
+        int idatLength = 0;
         uint primary = 0;
         bool sawPrimary = false;
         var itemTypes = new Dictionary<uint, uint>();
@@ -111,7 +118,14 @@ internal static class HeifReader
                     sawPrimary = true;
                     break;
                 case var t when t == Fourcc("iinf"):
-                    ReadItemInfo(body, itemTypes);
+                    ReadItemInfo(body, itemTypes, xmpItems);
+                    break;
+                case var t when t == Fourcc("iloc"):
+                    ReadLocations(body, locations);
+                    break;
+                case var t when t == Fourcc("idat"):
+                    idatStart = childrenStart + box.BodyStart;
+                    idatLength = box.BodyLength;
                     break;
                 case var t when t == Fourcc("iref"):
                     ReadReferences(body, references);
@@ -218,11 +232,17 @@ internal static class HeifReader
         Property? pixi = Find(properties, associations, primary, "pixi");
         Property? colour = Find(properties, associations, primary, "colr");
         bool alpha = HasAlpha(primary, references, properties, associations);
+        ItemData? exifItem = Describing(primary, references, id => itemTypes.GetValueOrDefault(id) == Fourcc("Exif"), locations, idatStart, idatLength);
+        ItemData? xmpItem = Describing(primary, references, xmpItems.Contains, locations, idatStart, idatLength);
         bool exif = HasExif(primary, references, itemTypes);
-        return new HeifHeader(format, width, height, crop, rotation, mirror, alpha, pixi?.Value ?? 8, colour?.Colour, tiles, exif);
+        return new HeifHeader(format, width, height, crop, rotation, mirror, alpha, pixi?.Value ?? 8, colour?.Colour, tiles, exif)
+        {
+            ExifItem = exifItem,
+            XmpItem = xmpItem,
+        };
     }
 
-    private static void ReadItemInfo(ReadOnlySpan<byte> iinf, Dictionary<uint, uint> itemTypes)
+    private static void ReadItemInfo(ReadOnlySpan<byte> iinf, Dictionary<uint, uint> itemTypes, HashSet<uint> xmpItems)
     {
         ReadOnlySpan<byte> body = FullBoxBody(iinf, "iinf", out int version);
         int countBytes = version == 0 ? 2 : 4;
@@ -257,6 +277,22 @@ internal static class HeifReader
             }
 
             itemTypes.TryAdd(id, type);
+
+            // A mime item names its content type after its name: XMP is application/rdf+xml.
+            if (type == Fourcc("mime"))
+            {
+                ReadOnlySpan<byte> strings = infe[(idBytes + 2 + 4)..];
+                int nameEnd = strings.IndexOf((byte)0);
+                if (nameEnd >= 0)
+                {
+                    ReadOnlySpan<byte> contentType = strings[(nameEnd + 1)..];
+                    int typeEnd = contentType.IndexOf((byte)0);
+                    if ((typeEnd < 0 ? contentType : contentType[..typeEnd]).SequenceEqual("application/rdf+xml"u8))
+                    {
+                        xmpItems.Add(id);
+                    }
+                }
+            }
         }
     }
 
@@ -346,8 +382,9 @@ internal static class HeifReader
             uint kind = body.ReadU32(0);
             if (kind == Fourcc("nclx") && body.Length >= 4 + 7)
             {
-                int primaries = body.ReadU16(4);
-                int transfer = body.ReadU16(6);
+                // 2 is "unspecified": HEIF readers take sRGB's (BT.709 primaries, sRGB transfer) for it.
+                int primaries = body.ReadU16(4) is 2 ? 1 : body.ReadU16(4);
+                int transfer = body.ReadU16(6) is 2 ? 13 : body.ReadU16(6);
                 return new Property(type) { Colour = ColourOf(() => ColorSpace.FromCicp(primaries, transfer)) };
             }
 
@@ -500,6 +537,201 @@ internal static class HeifReader
         }
 
         return false;
+    }
+
+    // iloc (ISO/IEC 14496-12 8.11.3): where each item's bytes are, as extents in the file (construction method 0) or
+    // in the idat box (1). Method 2 (from another item) isn't used for metadata and is skipped.
+    private static void ReadLocations(ReadOnlySpan<byte> iloc, Dictionary<uint, Location> locations)
+    {
+        ReadOnlySpan<byte> body = FullBoxBody(iloc, "iloc", out int version);
+        if (version > 2)
+        {
+            return;
+        }
+
+        Need(body, 2, "iloc");
+        int offsetSize = body[0] >> 4, lengthSize = body[0] & 15, baseSize = body[1] >> 4;
+        int indexSize = version is 1 or 2 ? body[1] & 15 : 0;
+        if (!ValidSize(offsetSize) || !ValidSize(lengthSize) || !ValidSize(baseSize) || !ValidSize(indexSize))
+        {
+            throw Corrupt("has an iloc box with an invalid field size");
+        }
+
+        int at = 2;
+        uint count;
+        if (version < 2)
+        {
+            count = Need(body, at + 2, "iloc").ReadU16(at);
+            at += 2;
+        }
+        else
+        {
+            count = Need(body, at + 4, "iloc").ReadU32(at);
+            at += 4;
+        }
+
+        if (count > MaxEntries)
+        {
+            throw Corrupt("locates too many items");
+        }
+
+        for (uint i = 0; i < count; i++)
+        {
+            int idBytes = version < 2 ? 2 : 4;
+            Need(body, at + idBytes, "iloc");
+            uint id = idBytes == 2 ? body.ReadU16(at) : body.ReadU32(at);
+            at += idBytes;
+            int method = 0;
+            if (version is 1 or 2)
+            {
+                method = Need(body, at + 2, "iloc").ReadU16(at) & 15;
+                at += 2;
+            }
+
+            Need(body, at + 2 + baseSize + 2, "iloc");
+            at += 2; // data_reference_index
+            ulong baseOffset = ReadSized(body, at, baseSize);
+            at += baseSize;
+            int extents = body.ReadU16(at);
+            at += 2;
+            int extentBytes = (indexSize + offsetSize + lengthSize) * extents;
+            Need(body, at + extentBytes, "iloc");
+            var offsets = new ulong[extents];
+            var lengths = new ulong[extents];
+            for (int e = 0; e < extents; e++)
+            {
+                at += indexSize;
+                offsets[e] = ReadSized(body, at, offsetSize);
+                at += offsetSize;
+                lengths[e] = ReadSized(body, at, lengthSize);
+                at += lengthSize;
+            }
+
+            locations.TryAdd(id, new Location(method, baseOffset, offsets, lengths));
+        }
+    }
+
+    private static bool ValidSize(int size) => size is 0 or 4 or 8;
+
+    private static ulong ReadSized(ReadOnlySpan<byte> body, int at, int size) => size switch
+    {
+        4 => body.ReadU32(at),
+        8 => BinaryPrimitives.ReadUInt64BigEndian(body[at..]),
+        _ => 0,
+    };
+
+    // The first item that a cdsc reference says describes the primary image, matching the test, with its bytes'
+    // places in the file. Null when there's none or its location makes no sense.
+    private static ItemData? Describing(
+        uint primary,
+        List<Reference> references,
+        Func<uint, bool> isWanted,
+        Dictionary<uint, Location> locations,
+        long idatStart,
+        int idatLength)
+    {
+        foreach (Reference reference in references)
+        {
+            if (reference.Type != Fourcc("cdsc") || Array.IndexOf(reference.To, primary) < 0 || !isWanted(reference.From)
+                || !locations.TryGetValue(reference.From, out Location location))
+            {
+                continue;
+            }
+
+            if (location.Method is not (0 or 1) || (location.Method == 1 && idatStart < 0) || location.Offsets.Length == 0)
+            {
+                return null;
+            }
+
+            var offsets = new long[location.Offsets.Length];
+            var lengths = new long[location.Offsets.Length];
+            for (int e = 0; e < offsets.Length; e++)
+            {
+                ulong offset = location.BaseOffset + location.Offsets[e];
+                ulong length = location.Lengths[e];
+                if (offset < location.BaseOffset || length > int.MaxValue || offset > int.MaxValue)
+                {
+                    return null;
+                }
+
+                if (location.Method == 1)
+                {
+                    if (offset + length > (ulong)idatLength)
+                    {
+                        return null;
+                    }
+
+                    offset += (ulong)idatStart;
+                }
+
+                offsets[e] = (long)offset;
+                lengths[e] = (long)length;
+            }
+
+            return new ItemData(offsets, lengths);
+        }
+
+        return null;
+    }
+
+    /// <summary>An item's bytes from the whole file, or null when they don't fit in it or are longer than the limit.</summary>
+    /// <param name="file">The whole file.</param>
+    /// <param name="item">Where the item is.</param>
+    /// <param name="max">The most bytes to accept.</param>
+    /// <returns>The bytes, or null.</returns>
+    public static byte[]? ReadItem(ReadOnlySpan<byte> file, ItemData item, int max)
+    {
+        long total = 0;
+        for (int e = 0; e < item.Offsets.Length; e++)
+        {
+            // A length of 0 means "to the end of the file".
+            long length = item.Lengths[e] == 0 ? file.Length - item.Offsets[e] : item.Lengths[e];
+            if (item.Offsets[e] < 0 || length < 0 || item.Offsets[e] + length > file.Length)
+            {
+                return null;
+            }
+
+            total += length;
+            if (total > max)
+            {
+                return null;
+            }
+        }
+
+        byte[] bytes = new byte[total];
+        int at = 0;
+        for (int e = 0; e < item.Offsets.Length; e++)
+        {
+            int length = (int)(item.Lengths[e] == 0 ? file.Length - item.Offsets[e] : item.Lengths[e]);
+            file.Slice((int)item.Offsets[e], length).CopyTo(bytes.AsSpan(at));
+            at += length;
+        }
+
+        return bytes;
+    }
+
+    /// <summary>
+    /// The TIFF structure in an Exif item: after a 4-byte offset that says how far past it the TIFF header starts
+    /// (6 when the item keeps JPEG's <c>Exif\0\0</c>). Null when it isn't one.
+    /// </summary>
+    /// <param name="item">The Exif item's bytes.</param>
+    /// <returns>The TIFF bytes, byte order mark first, or null.</returns>
+    public static byte[]? ExifTiff(byte[] item)
+    {
+        if (item.Length < 4)
+        {
+            return null;
+        }
+
+        uint skip = BinaryPrimitives.ReadUInt32BigEndian(item);
+        if (skip > (uint)(item.Length - 4 - 8))
+        {
+            return null;
+        }
+
+        ReadOnlySpan<byte> tiff = item.AsSpan(4 + (int)skip);
+        bool tiffHeader = tiff.StartsWith("II*\0"u8) || tiff.StartsWith("MM\0*"u8);
+        return tiffHeader ? tiff.ToArray() : null;
     }
 
     /// <summary>
@@ -695,6 +927,8 @@ internal static class HeifReader
 
     private sealed record Reference(uint Type, uint From, uint[] To);
 
+    private readonly record struct Location(int Method, ulong BaseOffset, ulong[] Offsets, ulong[] Lengths);
+
     private readonly record struct Property(uint Type)
     {
         public int Width { get; init; }
@@ -737,7 +971,16 @@ internal sealed record HeifHeader(ImageFormat Format, int Width, int Height, Cro
 
     /// <summary>The height as shown: cropped, then turned.</summary>
     public int DisplayHeight => Rotation % 2 == 1 ? Crop.Width : Crop.Height;
+
+    /// <summary>Where the Exif item describing the image is, or null.</summary>
+    public ItemData? ExifItem { get; init; }
+
+    /// <summary>Where the XMP item describing the image is, or null.</summary>
+    public ItemData? XmpItem { get; init; }
 }
+
+/// <summary>An item's bytes as extents of the file: offsets and lengths (0 meaning to the end).</summary>
+internal sealed record ItemData(long[] Offsets, long[] Lengths);
 
 /// <summary>A rectangle of the stored image.</summary>
 internal readonly record struct Crop(int X, int Y, int Width, int Height);

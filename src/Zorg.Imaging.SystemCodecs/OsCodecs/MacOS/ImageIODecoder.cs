@@ -31,7 +31,7 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             : CodecAvailability.Unavailable(format == ImageFormat.Avif ? "AVIF decoding through ImageIO needs macOS 13 or later." : "This system's ImageIO can't decode HEIC.");
     }
 
-    public override Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context)
+    public override Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context, (int Width, int Height)? scaledTo)
     {
         PixelFormat target = Target(context);
         bool sixteen = target == PixelFormat.Rgba64;
@@ -60,7 +60,31 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
                 throw new ImageFormatException("ImageIO can't open the " + header.Format.Name + " file.");
             }
 
-            cgImage = Native.CGImageSourceCreateImageAtIndex(source, 0, noCache);
+            // Shrink-on-load: ImageIO's thumbnail of the primary image, cropped but not turned (ImageIO's own orientation
+            // handling doesn't always match HEIF's irot and imir, so the codec turns it), at the size wanted. Used only
+            // when it comes back at that size, a pixel either way; else the full picture is decoded.
+            bool scaled = false;
+            int wantWidth = 0, wantHeight = 0;
+            if (scaledTo is (int scaledWidth, int scaledHeight))
+            {
+                (wantWidth, wantHeight) = header.Rotation % 2 == 1 ? (scaledHeight, scaledWidth) : (scaledWidth, scaledHeight);
+                void* options = Native.ThumbnailOptions(Math.Max(wantWidth, wantHeight));
+                cgImage = Native.CGImageSourceCreateThumbnailAtIndex(source, 0, options);
+                Native.Release(options);
+                if (cgImage is not null
+                    && Math.Abs(Native.CGImageGetWidth(cgImage) - wantWidth) <= 1
+                    && Math.Abs(Native.CGImageGetHeight(cgImage) - wantHeight) <= 1)
+                {
+                    scaled = true;
+                }
+                else
+                {
+                    Native.Release(cgImage);
+                    cgImage = null;
+                }
+            }
+
+            cgImage = scaled ? cgImage : Native.CGImageSourceCreateImageAtIndex(source, 0, noCache);
             if (cgImage is null)
             {
                 throw new ImageFormatException("ImageIO can't decode the " + header.Format.Name + " file's primary image.");
@@ -68,7 +92,7 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
 
             nint width = Native.CGImageGetWidth(cgImage);
             nint height = Native.CGImageGetHeight(cgImage);
-            bool shown = width == header.DisplayWidth && height == header.DisplayHeight;
+            bool shown = scaled || width == header.DisplayWidth && height == header.DisplayHeight;
             bool cropped = width == header.Crop.Width && height == header.Crop.Height;
             if (!shown && !cropped && (width != header.Width || height != header.Height))
             {
@@ -119,7 +143,21 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             image.ColorSpace = keep ? header.ColorSpace ?? IccOf(space) ?? ColorSpace.Srgb : ColorSpace.Srgb;
             Image result = image;
             image = null;
-            return AsShown(result, header, applied);
+            if (!scaled)
+            {
+                return AsShown(result, header, applied);
+            }
+
+            // ImageIO rounds the thumbnail's size its own way; a pixel's stretch keeps the size the caller expects.
+            if (result.Width != wantWidth || result.Height != wantHeight)
+            {
+                Image exact = result.Resize(wantWidth, wantHeight);
+                exact.ColorSpace = result.ColorSpace;
+                result.Dispose();
+                result = exact;
+            }
+
+            return Turn(result, header);
         }
         finally
         {
@@ -297,6 +335,39 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
             }
         }
 
+        /// <summary>
+        /// Options for a thumbnail of at most <paramref name="size"/> pixels on its longer side, always made from the
+        /// full image (never an embedded preview), without ImageIO's orientation, and nothing cached. The caller
+        /// releases the dictionary.
+        /// </summary>
+        public static void* ThumbnailOptions(int size)
+        {
+            nint foundation = NativeLibrary.Load(CoreFoundation);
+            void* yes = *(void**)NativeLibrary.GetExport(foundation, "kCFBooleanTrue");
+            void* no = *(void**)NativeLibrary.GetExport(foundation, "kCFBooleanFalse");
+            void* keyCallbacks = (void*)NativeLibrary.GetExport(foundation, "kCFTypeDictionaryKeyCallBacks");
+            void* valueCallbacks = (void*)NativeLibrary.GetExport(foundation, "kCFTypeDictionaryValueCallBacks");
+            void* number = CFNumberCreate(null, NumberIntType, &size);
+            try
+            {
+                void** keys = stackalloc void*[4];
+                void** values = stackalloc void*[4];
+                keys[0] = Constant("ImageIO", "kCGImageSourceCreateThumbnailFromImageAlways");
+                values[0] = yes;
+                keys[1] = Constant("ImageIO", "kCGImageSourceCreateThumbnailWithTransform");
+                values[1] = no;
+                keys[2] = Constant("ImageIO", "kCGImageSourceThumbnailMaxPixelSize");
+                values[2] = number;
+                keys[3] = Constant("ImageIO", "kCGImageSourceShouldCache");
+                values[3] = no;
+                return CFDictionaryCreate(null, keys, values, 4, keyCallbacks, valueCallbacks);
+            }
+            finally
+            {
+                Release(number);
+            }
+        }
+
         public static void Release(void* instance)
         {
             if (instance is not null)
@@ -349,6 +420,12 @@ internal sealed unsafe partial class ImageIODecoder : SystemDecoder
 
         [LibraryImport(ImageIO)]
         public static partial void* CGImageSourceCopyPropertiesAtIndex(void* source, nint index, void* options);
+
+        [LibraryImport(ImageIO)]
+        public static partial void* CGImageSourceCreateThumbnailAtIndex(void* source, nint index, void* options);
+
+        [LibraryImport(CoreFoundation)]
+        public static partial void* CFNumberCreate(void* allocator, int type, void* value);
 
         [LibraryImport(ImageIO)]
         public static partial void* CGImageSourceCopyTypeIdentifiers();

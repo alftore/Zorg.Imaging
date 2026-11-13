@@ -26,6 +26,7 @@ internal sealed unsafe class WicDecoder : SystemDecoder
     private const int DecodeMetadataCacheOnDemand = 0;
     private const int DitherNone = 0;
     private const int PaletteCustom = 0;
+    private const int InterpolationFant = 3;
     private const int SOk = 0;
     private const int SFalse = 1;
     private const int ChangedMode = unchecked((int)0x80010106);
@@ -56,7 +57,7 @@ internal sealed unsafe class WicDecoder : SystemDecoder
     public override CodecAvailability Availability(ImageFormat format) =>
         _heifExtension.Value ? CodecAvailability.Available : CodecAvailability.Unavailable(Missing(format));
 
-    public override Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context)
+    public override Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context, (int Width, int Height)? scaledTo)
     {
         PixelFormat target = Target(context);
         Guid wicFormat = target switch
@@ -72,6 +73,7 @@ internal sealed unsafe class WicDecoder : SystemDecoder
         void* decoder = null;
         void* frame = null;
         void* converter = null;
+        void* scaler = null;
         Image? image = null;
         try
         {
@@ -96,9 +98,25 @@ internal sealed unsafe class WicDecoder : SystemDecoder
             }
 
             context.CancellationToken.ThrowIfCancellationRequested();
+
+            // Shrink-on-load: scale the decoded frame down by 2, 4 or 8 (Fant averages every pixel), so only the small
+            // picture is copied out. Only when WIC has applied the transforms, so the size is the one shown.
+            void* source = frame;
+            (int frameWidth, int frameHeight) = ((int)width, (int)height);
+            bool scaled = false;
+            bool shown = width == (uint)header.DisplayWidth && height == (uint)header.DisplayHeight;
+            if (scaledTo is (int scaledWidth, int scaledHeight) && shown)
+            {
+                Check(Call(factory, 11, &scaler), "creating a scaler", header.Format); // IWICImagingFactory::CreateBitmapScaler
+                Check(((delegate* unmanaged[Stdcall]<void*, void*, uint, uint, int, int>)Vtable(scaler)[8])(scaler, frame, (uint)scaledWidth, (uint)scaledHeight, InterpolationFant), "scaling the image", header.Format); // IWICBitmapScaler::Initialize
+                source = scaler;
+                (width, height) = ((uint)scaledWidth, (uint)scaledHeight);
+                scaled = true;
+            }
+
             Check(Call(factory, 10, &converter), "creating a pixel converter", header.Format); // IWICImagingFactory::CreateFormatConverter
             Guid wanted = wicFormat;
-            Check(((delegate* unmanaged[Stdcall]<void*, void*, Guid*, int, void*, double, int, int>)Vtable(converter)[8])(converter, frame, &wanted, DitherNone, null, 0, PaletteCustom), "converting the pixels", header.Format); // IWICFormatConverter::Initialize
+            Check(((delegate* unmanaged[Stdcall]<void*, void*, Guid*, int, void*, double, int, int>)Vtable(converter)[8])(converter, source, &wanted, DitherNone, null, 0, PaletteCustom), "converting the pixels", header.Format); // IWICFormatConverter::Initialize
 
             image = new Image((int)width, (int)height, target);
             int stride = image.Width * (target == PixelFormat.Rgba64 ? 8 : 4);
@@ -112,18 +130,19 @@ internal sealed unsafe class WicDecoder : SystemDecoder
             if (header.HasAlpha)
             {
                 // The HEIF decoder gives the colour and the alpha plane separately: the frame's pixels are opaque.
-                AddAlpha(frame, image, header.Format);
+                AddAlpha(frame, image, header.Format, frameWidth, frameHeight);
             }
 
             image.ColorSpace = header.ColorSpace ?? ColorSpace.Srgb;
             Image result = image;
             image = null;
-            return AsShown(result, header, systemApplied: true);
+            return scaled ? result : AsShown(result, header, systemApplied: true);
         }
         finally
         {
             image?.Dispose();
             Release(converter);
+            Release(scaler);
             Release(frame);
             Release(decoder);
             Release(stream);
@@ -133,15 +152,16 @@ internal sealed unsafe class WicDecoder : SystemDecoder
 
     // IWICBitmapSourceTransform::CopyPixels with GUID_WICPixelFormat8bppAlpha gives the alpha plane, the same way up as
     // the colour; it goes into the image's alpha channel unchanged (the colour isn't premultiplied).
-    private static void AddAlpha(void* frame, Image image, ImageFormat format)
+    private static void AddAlpha(void* frame, Image image, ImageFormat format, int frameWidth, int frameHeight)
     {
         void* transform = null;
         try
         {
             Guid interfaceId = SourceTransformInterface;
             Check(((delegate* unmanaged[Stdcall]<void*, Guid*, void**, int>)Vtable(frame)[0])(frame, &interfaceId, &transform), "reading the alpha plane", format); // IUnknown::QueryInterface
-            int width = image.Width;
-            int height = image.Height;
+            // The plane at the frame's size; averaged down below when the colour was scaled.
+            int width = frameWidth;
+            int height = frameHeight;
             byte[] alpha = new byte[width * height];
             Guid alphaFormat = Alpha8;
             int result;
@@ -160,6 +180,10 @@ internal sealed unsafe class WicDecoder : SystemDecoder
             }
 
             Check(result, "reading the alpha plane", format);
+            if (width != image.Width || height != image.Height)
+            {
+                alpha = Shrink(alpha, width, height, image.Width, image.Height);
+            }
 
             Span<byte> pixels = image.GetPixelBytes();
             if (image.PixelFormat == PixelFormat.Rgba64)
@@ -183,6 +207,35 @@ internal sealed unsafe class WicDecoder : SystemDecoder
         {
             Release(transform);
         }
+    }
+
+    // Averages a plane down to a smaller size: each output pixel is the mean of the source pixels it covers.
+    private static byte[] Shrink(byte[] plane, int width, int height, int toWidth, int toHeight)
+    {
+        byte[] result = new byte[toWidth * toHeight];
+        for (int y = 0; y < toHeight; y++)
+        {
+            int top = (int)((long)y * height / toHeight);
+            int bottom = Math.Max(top + 1, (int)((long)(y + 1) * height / toHeight));
+            for (int x = 0; x < toWidth; x++)
+            {
+                int left = (int)((long)x * width / toWidth);
+                int right = Math.Max(left + 1, (int)((long)(x + 1) * width / toWidth));
+                int sum = 0;
+                for (int sy = top; sy < bottom; sy++)
+                {
+                    for (int sx = left; sx < right; sx++)
+                    {
+                        sum += plane[(sy * width) + sx];
+                    }
+                }
+
+                int count = (bottom - top) * (right - left);
+                result[(y * toWidth) + x] = (byte)((sum + (count / 2)) / count);
+            }
+        }
+
+        return result;
     }
 
     private static bool FindHeifExtension()

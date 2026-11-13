@@ -20,6 +20,8 @@ using Image photo = Image.Decode(File.ReadAllBytes("IMG_0001.HEIC"));
 | macOS | 10.13 or later | 13 or later |
 | Linux, Windows Server | Not available | Not available |
 
+Thumbnails made with `ImagePipeline.Load(...).Fit(...)` are decoded at 1/2, 1/4 or 1/8 size by the system, and the file's EXIF and XMP come through `image.Metadata` (and are stripped when saving unless `MetadataOptions` keeps them).
+
 `SystemCodecs.Heif.Availability` says whether it works here and, if not, what to install. A file that needs a missing codec fails with `UnsupportedImageFormatException` and that reason.
 
 ## Safety

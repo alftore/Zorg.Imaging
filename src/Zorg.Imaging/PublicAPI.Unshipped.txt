@@ -1,1 +1,2 @@
 #nullable enable
+static Zorg.Imaging.ImageCodec.AttachMetadata(Zorg.Imaging.Image! image, System.ReadOnlySpan<byte> exif, System.ReadOnlySpan<byte> xmp, bool orientationApplied) -> void

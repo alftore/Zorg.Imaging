@@ -23,7 +23,11 @@ internal abstract class SystemDecoder
     public abstract CodecAvailability Availability(ImageFormat format);
 
     /// <summary>Decodes the primary image as shown: cropped, turned and mirrored as the file says.</summary>
-    public abstract Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context);
+    /// <param name="data">The whole file.</param>
+    /// <param name="header">The file's boxes.</param>
+    /// <param name="context">The pixel format and limits.</param>
+    /// <param name="scaledTo">A smaller size as shown to decode at, or null for full size. A decoder may ignore it.</param>
+    public abstract Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context, (int Width, int Height)? scaledTo);
 
     /// <summary>The pixel format to produce: the one asked for, else 8-bit RGBA.</summary>
     protected static PixelFormat Target(CodecContext context) =>
@@ -73,6 +77,24 @@ internal abstract class SystemDecoder
                 current = Replace(current, current.Crop(crop.X, crop.Y, crop.Width, crop.Height));
             }
 
+            return Turn(current, header);
+        }
+        catch
+        {
+            current.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Turns and mirrors a cropped picture as the file says (<c>irot</c>, then <c>imir</c>).</summary>
+    /// <param name="cropped">The picture, cropped but not turned. Disposed if a new image is returned.</param>
+    /// <param name="header">The file's geometry.</param>
+    /// <returns>The picture as shown.</returns>
+    protected static Image Turn(Image cropped, HeifHeader header)
+    {
+        Image current = cropped;
+        try
+        {
             if (header.Rotation != 0)
             {
                 current = Replace(current, current.Rotate(-90 * header.Rotation));
@@ -110,7 +132,7 @@ internal abstract class SystemDecoder
         public override CodecAvailability Availability(ImageFormat format) =>
             CodecAvailability.Unavailable("AVIF and HEIC decoding through the operating system works on Windows and macOS only.");
 
-        public override Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context) =>
+        public override Image Decode(ReadOnlyMemory<byte> data, HeifHeader header, CodecContext context, (int Width, int Height)? scaledTo) =>
             throw new PlatformNotSupportedException("AVIF and HEIC decoding through the operating system works on Windows and macOS only.");
     }
 }
