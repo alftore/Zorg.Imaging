@@ -7,3 +7,32 @@ Zorg.Imaging.DecodeOptions.ShrinkTo.get -> (int Width, int Height)?
 Zorg.Imaging.DecodeOptions.ShrinkTo.init -> void
 Zorg.Imaging.Image.Convert(Zorg.Imaging.PixelFormat format) -> Zorg.Imaging.Image!
 Zorg.Imaging.Image.IsOpaque() -> bool
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Canvas(Zorg.Imaging.Image! image) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Clear(Zorg.Imaging.Rgba32 color) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Dispose() -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Fill(Zorg.Imaging.Drawing.Shape! shape, Zorg.Imaging.Rgba32 color, Zorg.Imaging.Drawing.FillRule rule = Zorg.Imaging.Drawing.FillRule.NonZero) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Fill(Zorg.Imaging.Drawing.Shape! shape, Zorg.Imaging.Rgba32 color, in System.Numerics.Matrix3x2 transform, Zorg.Imaging.Drawing.FillRule rule = Zorg.Imaging.Drawing.FillRule.NonZero) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.FillRectangle(float x, float y, float width, float height, Zorg.Imaging.Rgba32 color) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Image.get -> Zorg.Imaging.Image!
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.ResetClip() -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.SetClip(int x, int y, int width, int height) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Tolerance.get -> float
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Tolerance.set -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Transform.get -> System.Numerics.Matrix3x2
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Transform.set -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.FillRule
+[ZORGDRAW]Zorg.Imaging.Drawing.FillRule.EvenOdd = 1 -> Zorg.Imaging.Drawing.FillRule
+[ZORGDRAW]Zorg.Imaging.Drawing.FillRule.NonZero = 0 -> Zorg.Imaging.Drawing.FillRule
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.Clear() -> Zorg.Imaging.Drawing.Shape!
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.Close() -> Zorg.Imaging.Drawing.Shape!
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.CubicTo(float control1X, float control1Y, float control2X, float control2Y, float x, float y) -> Zorg.Imaging.Drawing.Shape!
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.IsEmpty.get -> bool
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.LineTo(float x, float y) -> Zorg.Imaging.Drawing.Shape!
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.MoveTo(float x, float y) -> Zorg.Imaging.Drawing.Shape!
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.QuadTo(float controlX, float controlY, float x, float y) -> Zorg.Imaging.Drawing.Shape!
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.SegmentCount.get -> int
+[ZORGDRAW]Zorg.Imaging.Drawing.Shape.Shape() -> void
+[ZORGDRAW]static Zorg.Imaging.Drawing.Shape.Ellipse(float centerX, float centerY, float radiusX, float radiusY) -> Zorg.Imaging.Drawing.Shape!
+[ZORGDRAW]static Zorg.Imaging.Drawing.Shape.Rectangle(float x, float y, float width, float height) -> Zorg.Imaging.Drawing.Shape!

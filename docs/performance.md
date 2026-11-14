@@ -8,6 +8,12 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-14: the canvas
+
+An A4 page at 150 dpi (1240 x 1754, `Rgb24`): cleared to white, 3,000 fills of a 21-pixel letter of quadratic curves
+with a counter, and 50 rules. 22 ms on one thread, best of seven. The core DLL grew 14 KiB (656 to 670); the AOT smoke
+binary, which doesn't draw, stayed at 3398 KiB, since trimming leaves the canvas out.
+
 ## 2026-11-14: shrink-on-load without the pipeline, `Convert` and `IsOpaque`
 
 New calls for programs that decode once and handle the pixels themselves, such as a PDF writer. Nothing the library

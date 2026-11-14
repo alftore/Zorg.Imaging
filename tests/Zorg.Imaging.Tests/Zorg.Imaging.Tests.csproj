@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- The drawing API is marked experimental for callers; the library and its tests use it freely. -->
+    <NoWarn>$(NoWarn);ZORGDRAW</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

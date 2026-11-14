@@ -8,6 +8,7 @@ Added:
 - `DecodeOptions.ShrinkTo`: shrink-on-load without the pipeline. Given the box the image will be fitted into, a JPEG (or a codec from another package that can) decodes at 1/2, 1/4 or 1/8 size, still at least twice the box. A 12 MP JPEG for a 400 x 300 thumbnail decodes and fits in 43 ms instead of 132 (one core). Other formats decode at full size.
 - `Image.Convert(PixelFormat)` converts the pixels to another layout: 8 to 16 bits and back exactly, colour to grey by Rec. 709 luma. Dropping alpha works only when every pixel is opaque; otherwise it throws and points at `Flatten`, so colour never shifts unasked. `Rgba32` to `Rgb24` takes 6 ms for 12 MP.
 - `Image.IsOpaque()` tells whether any pixel is transparent or translucent, for files whose alpha channel is there but unused (`ImageInfo.HasAlpha` says only that the file could hold transparency). About 3 ms for 12 MP.
+- A canvas, new and experimental (`Zorg.Imaging.Drawing`, behind the diagnostic `ZORGDRAW`): fill shapes of lines and quadratic and cubic curves, with either fill rule, a transform and a clip rectangle, anti-aliased by exact pixel coverage and blended as PDF viewers blend. For page previews, charts and badges. See [docs/drawing.md](docs/drawing.md).
 
 ## 0.3.0
 
