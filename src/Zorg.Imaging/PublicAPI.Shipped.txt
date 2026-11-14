@@ -580,3 +580,16 @@ Zorg.Imaging.Drawing.Canvas.Stroke(Zorg.Imaging.Drawing.Shape! shape, float widt
 Zorg.Imaging.Drawing.Canvas.StrokeLine(float x1, float y1, float x2, float y2, float width, Zorg.Imaging.Rgba32 color) -> void
 Zorg.Imaging.Drawing.Canvas.DrawImage(Zorg.Imaging.Image! image, float x, float y, float width, float height, Zorg.Imaging.Resampler? resampler = null, double opacity = 1) -> void
 Zorg.Imaging.Drawing.Canvas.DrawImage(Zorg.Imaging.Image! image, in System.Numerics.Matrix3x2 transform, Zorg.Imaging.Resampler? resampler = null, double opacity = 1) -> void
+Zorg.Imaging.CmykImage
+Zorg.Imaging.CmykImage.Black.get -> Zorg.Imaging.Image!
+Zorg.Imaging.CmykImage.Cyan.get -> Zorg.Imaging.Image!
+Zorg.Imaging.CmykImage.Dispose() -> void
+Zorg.Imaging.CmykImage.Height.get -> int
+Zorg.Imaging.CmykImage.IccProfile.get -> System.ReadOnlyMemory<byte>
+Zorg.Imaging.CmykImage.Magenta.get -> Zorg.Imaging.Image!
+Zorg.Imaging.CmykImage.Map(System.Func<Zorg.Imaging.Image!, Zorg.Imaging.Image!>! operation) -> Zorg.Imaging.CmykImage!
+Zorg.Imaging.CmykImage.ToInterleaved() -> byte[]!
+Zorg.Imaging.CmykImage.ToSrgb() -> Zorg.Imaging.Image!
+Zorg.Imaging.CmykImage.Width.get -> int
+Zorg.Imaging.CmykImage.Yellow.get -> Zorg.Imaging.Image!
+static Zorg.Imaging.Image.DecodeCmyk(System.ReadOnlyMemory<byte> data, Zorg.Imaging.DecodeOptions? options = null) -> Zorg.Imaging.CmykImage?
