@@ -18,6 +18,21 @@ pipeline, a 12 MP PNG decode, and JPEG and PNG encodes of a 1000 x 750 photo. Ev
 | Before, two runs (ms) | 44.3, 43.5 | 161.5, 165.2 | 12.6, 13.0 | 76.6, 80.8 |
 | After, two runs (ms) | 41.5, 43.3 | 162.9, 160.8 | 12.7, 12.8 | 77.2, 77.2 |
 
+## 2026-11-14: the canvas against Skia
+
+`CanvasBenchmarks` draws the page below with the canvas and with SkiaSharp (a native reference, benchmarks only).
+Three changes made the plain page a third faster: `Clear` copies a whole row at a time instead of 3 bytes at a time,
+the 8-bit layouts get their own blending, and rows of coverage reach the painter through a generic struct instead of a
+delegate, so a page of glyphs allocates nothing (it was 460 KB). Tall fills now work in bands of at most 4 MB.
+Bold gained little, as the gain went on exactness: a stroke's segment now ends at its inner corner instead of
+overlapping the next one, since an overlap was counted twice in the pixels it crossed (a stroked star had 0.3 % too
+much ink; now it agrees with cairo within 0.05 %). BenchmarkDotNet, one thread:
+
+| | Before | After | Skia |
+|---|---:|---:|---:|
+| Page: clear, 3,000 glyph fills, 50 rules | 22.8 ms, 464 KB | 14.7 ms, 0 B | 15.6 ms |
+| The same with synthetic bold | 83.8 ms, 2.7 MB | 81.5 ms, 0 B | 48.8 ms |
+
 ## 2026-11-14: the canvas
 
 An A4 page at 150 dpi (1240 x 1754, `Rgb24`): cleared to white, 3,000 fills of a 21-pixel letter of quadratic curves

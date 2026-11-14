@@ -31,7 +31,8 @@ internal static class Stroker
         float half = width / 2;
         float flatness = tolerance / scale;
         int sides = Sides(half * scale, tolerance / 4); // finer than the curves: a disc's corners show where it meets the sides
-        var figure = new List<Vector2>();
+        List<Vector2> figure = rasterizer.Figure;
+        figure.Clear();
         ReadOnlySpan<byte> verbs = shape.Verbs;
         ReadOnlySpan<float> points = shape.Points;
         int p = 0;
@@ -87,13 +88,16 @@ internal static class Stroker
     private static void AddFigure(Rasterizer rasterizer, List<Vector2> figure, bool closed, float half, int sides, in Matrix3x2 transform)
     {
         // Repeated points make no line and no corner.
-        for (int i = figure.Count - 1; i > 0; i--)
+        int kept = Math.Min(1, figure.Count);
+        for (int i = 1; i < figure.Count; i++)
         {
-            if (figure[i] == figure[i - 1])
+            if (figure[i] != figure[kept - 1])
             {
-                figure.RemoveAt(i);
+                figure[kept++] = figure[i];
             }
         }
+
+        figure.RemoveRange(kept, figure.Count - kept);
 
         if (closed && figure.Count > 1 && figure[^1] == figure[0])
         {
@@ -114,9 +118,45 @@ internal static class Stroker
 
         int count = figure.Count;
         int segments = closed ? count : count - 1;
+
+        // Inner corners: where the two sides' inner edges meet. A segment ending there instead of in a square end
+        // doesn't overlap its neighbour, and an overlap would be counted twice in the pixels it crosses.
+        List<Vector2> inner = rasterizer.Inner;
+        List<sbyte> side = rasterizer.InnerSide;
+        inner.Clear();
+        side.Clear();
+        for (int i = 0; i < count; i++)
+        {
+            (Vector2 point, sbyte which) = closed || (i > 0 && i < count - 1)
+                ? Miter(figure[(i - 1 + count) % count], figure[i], figure[(i + 1) % count], half)
+                : (default, (sbyte)0);
+            inner.Add(point);
+            side.Add(which);
+        }
+
+        Span<Vector2> corners = stackalloc Vector2[6];
         for (int i = 0; i < segments; i++)
         {
-            Rectangle(rasterizer, figure[i], figure[(i + 1) % count], half, transform);
+            int end = (i + 1) % count;
+            Vector2 from = figure[i], to = figure[end];
+            Vector2 left = Vector2.Normalize(to - from);
+            left = new Vector2(-left.Y, left.X) * half;
+            int n = 0;
+            corners[n++] = side[i] > 0 ? inner[i] : from + left;
+            corners[n++] = side[end] > 0 ? inner[end] : to + left;
+            if (side[end] != 0)
+            {
+                corners[n++] = to;
+            }
+
+            corners[n++] = side[end] < 0 ? inner[end] : to - left;
+            corners[n++] = side[i] < 0 ? inner[i] : from - left;
+            if (side[i] != 0)
+            {
+                corners[n++] = from;
+            }
+
+            Polygon(rasterizer, transform, corners[..n]);
         }
 
         // Round corners: at each, the wedge on the outer side between the two rectangles' ends. Its straight edges
@@ -144,6 +184,31 @@ internal static class Stroker
             Arc(rasterizer, figure[0], new Vector2(first.Y, -first.X) * half, -MathF.PI, sides, transform);
             Arc(rasterizer, figure[^1], new Vector2(-last.Y, last.X) * half, -MathF.PI, sides, transform);
         }
+    }
+
+    /// <summary>
+    /// Where the inner edges of the segments into and out of <paramref name="at"/> meet, and on which side of them (1 for
+    /// the left, -1 the right); side 0 where they don't meet within half of either segment, which then end square and
+    /// overlap.
+    /// </summary>
+    private static (Vector2 Point, sbyte Side) Miter(Vector2 before, Vector2 at, Vector2 after, float half)
+    {
+        Vector2 inward = at - before, outward = after - at;
+        float lengthIn = inward.Length(), lengthOut = outward.Length();
+        inward /= lengthIn;
+        outward /= lengthOut;
+        float cross = (inward.X * outward.Y) - (inward.Y * outward.X), dot = Vector2.Dot(inward, outward);
+        if (MathF.Abs(cross) < 1e-4f || dot < -0.999f)
+        {
+            return (default, 0); // straight on, or turning back on itself
+        }
+
+        // Turning left (as the wedges measure it), the inner side is the left.
+        sbyte which = cross > 0 ? (sbyte)1 : (sbyte)-1;
+        Vector2 normalIn = new Vector2(-inward.Y, inward.X) * which, normalOut = new Vector2(-outward.Y, outward.X) * which;
+        Vector2 point = at + ((normalIn + normalOut) * (half / (1 + Vector2.Dot(normalIn, normalOut))));
+        float back = Vector2.Dot(at - point, inward), on = Vector2.Dot(point - at, outward);
+        return back <= 0.5f * lengthIn && on <= 0.5f * lengthOut ? (point, which) : (default, 0);
     }
 
     /// <summary>The rectangle a pen of half-width <paramref name="half"/> sweeps from one point to the next.</summary>

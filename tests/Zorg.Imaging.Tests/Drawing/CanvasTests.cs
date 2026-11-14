@@ -217,6 +217,83 @@ public class CanvasTests
     }
 
     [Fact]
+    public void Translucent_layers_blend_alike_in_every_alpha_layout()
+    {
+        // The 8-bit layouts have their own blending; over a see-through background it must match the 16-bit one.
+        Shape star = Star(16, 16, 14, 6);
+        using Image reference = Draw(PixelFormat.Rgba64);
+        using Image wide = reference.Convert(PixelFormat.Rgba32);
+        foreach (PixelFormat format in new[] { PixelFormat.Rgba32, PixelFormat.Bgra32 })
+        {
+            using Image drawn = Draw(format);
+            using Image back = drawn.Convert(PixelFormat.Rgba32);
+            byte[] a = wide.GetPixelBytes().ToArray(), b = back.GetPixelBytes().ToArray();
+            for (int i = 0; i < a.Length; i++)
+            {
+                Assert.InRange(a[i] - b[i], -1, 1);
+            }
+        }
+
+        Image Draw(PixelFormat format)
+        {
+            var image = new Image(32, 32, format);
+            using var canvas = new Canvas(image);
+            canvas.Clear(new Rgba32(10, 200, 100, 90));
+            canvas.FillRectangle(0, 0, 9.5f, 32, new Rgba32(0, 0, 0, 0)); // and a strip fully see-through
+            canvas.Fill(star, new Rgba32(20, 60, 160, 200));
+            canvas.FillRectangle(2.5f, 20.25f, 27, 3.5f, new Rgba32(200, 30, 30, 255));
+            return image;
+        }
+    }
+
+    [Fact]
+    public void Clear_fills_only_the_clip()
+    {
+        using var image = new Image(7, 5, PixelFormat.Rgb24);
+        using var canvas = new Canvas(image);
+        canvas.SetClip(2, 1, 4, 3);
+        canvas.Clear(new Rgba32(200, 10, 20));
+        for (int y = 0; y < 5; y++)
+        {
+            for (int x = 0; x < 7; x++)
+            {
+                bool inside = x is >= 2 and < 6 && y is >= 1 and < 4;
+                Assert.Equal(inside ? new Rgb24(200, 10, 20) : default, image.GetRow<Rgb24>(y)[x]);
+            }
+        }
+    }
+
+    [Fact]
+    public void Tall_fills_render_in_bands_as_in_one_piece()
+    {
+        // 1200 wide: a band holds fewer rows than the canvas, so a full-height fill is done in more than one.
+        Assert.True(Rasterizer.MaxCells / 1202 < 1000);
+        Shape shape = Shape.Ellipse(600, 500, 590, 490).MoveTo(600, 150).LineTo(850, 800).LineTo(350, 800).Close();
+        using Image banded = Draw(clipped: false);
+        using Image pieces = Draw(clipped: true); // each half within one band
+        Assert.Equal(pieces.GetPixelBytes().ToArray(), banded.GetPixelBytes().ToArray());
+        double inked = banded.GetPixelBytes().ToArray().Sum(b => b / 255.0);
+        Assert.InRange(inked, Math.PI * 590 * 490 * 0.999, Math.PI * 590 * 490 * 1.001); // the triangle is inside, non-zero
+
+        Image Draw(bool clipped)
+        {
+            var image = new Image(1200, 1000, PixelFormat.L8);
+            using var canvas = new Canvas(image);
+            if (!clipped)
+            {
+                canvas.Fill(shape, new Rgba32(255, 255, 255));
+                return image;
+            }
+
+            canvas.SetClip(0, 0, 1200, 500);
+            canvas.Fill(shape, new Rgba32(255, 255, 255));
+            canvas.SetClip(0, 500, 1200, 500);
+            canvas.Fill(shape, new Rgba32(255, 255, 255));
+            return image;
+        }
+    }
+
+    [Fact]
     public void Shapes_check_their_input()
     {
         Assert.Throws<InvalidOperationException>(() => new Shape().LineTo(1, 1));

@@ -15,7 +15,7 @@ public class CanvasOracleTests
 {
     public static TheoryData<string> Shapes() => ["star", "letter", "ellipse", "ring-evenodd", "curves"];
 
-    private static (Shape Shape, string Path, FillRule Rule) Build(string name)
+    internal static (Shape Shape, string Path, FillRule Rule) Build(string name)
     {
         var path = new StringBuilder();
         var shape = new Shape();

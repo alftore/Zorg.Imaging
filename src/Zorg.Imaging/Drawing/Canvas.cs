@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace Zorg.Imaging.Drawing;
 
@@ -160,9 +161,23 @@ public sealed class Canvas : IDisposable
             throw new ArgumentException($"{Image.PixelFormat} has no alpha, so it can't be cleared to a colour that isn't opaque.", nameof(color));
         }
 
-        for (int y = _clipTop; y < _clipBottom; y++)
+        if (_clipLeft >= _clipRight || _clipTop >= _clipBottom)
         {
-            painter.Set(Image.GetRowBytes(y), _clipLeft, _clipRight - _clipLeft);
+            return;
+        }
+
+        // One row of the colour, made by doubling, then copied down.
+        int size = Image.BytesPerPixel;
+        Span<byte> first = Image.GetRowBytes(_clipTop).Slice(_clipLeft * size, (_clipRight - _clipLeft) * size);
+        painter.CopySolidTo(first);
+        for (int done = size; done < first.Length; done *= 2)
+        {
+            first[..Math.Min(done, first.Length - done)].CopyTo(first[done..]);
+        }
+
+        for (int y = _clipTop + 1; y < _clipBottom; y++)
+        {
+            first.CopyTo(Image.GetRowBytes(y)[(_clipLeft * size)..]);
         }
     }
 
@@ -416,9 +431,8 @@ public sealed class Canvas : IDisposable
             _rasterizer.AddLine(b, c);
             _rasterizer.AddLine(c, d);
             _rasterizer.AddLine(d, a);
-            var painter = new ImagePainter(source, Image.PixelFormat, back, nearest, (float)opacity);
-            Image target = Image;
-            _rasterizer.Render(_clipLeft, _clipTop, _clipRight, _clipBottom, FillRule.NonZero, (row, left, coverage) => painter.Blend(target.GetRowBytes(row), row, left, coverage));
+            var painter = new ImagePainter(source, Image, back, nearest, (float)opacity);
+            _rasterizer.Render(_clipLeft, _clipTop, _clipRight, _clipBottom, FillRule.NonZero, ref painter);
         }
         finally
         {
@@ -453,21 +467,32 @@ public sealed class Canvas : IDisposable
     private void Paint(Rgba32 color, FillRule rule)
     {
         var painter = new Painter(Image, color);
-        Image image = Image;
-        _rasterizer.Render(_clipLeft, _clipTop, _clipRight, _clipBottom, rule, (y, x, coverage) => painter.Blend(image.GetRowBytes(y), x, coverage));
+        _rasterizer.Render(_clipLeft, _clipTop, _clipRight, _clipBottom, rule, ref painter);
+    }
+
+    /// <summary>Up to eight bytes of one pixel, held inline.</summary>
+    [InlineArray(8)]
+    private struct PixelBytes
+    {
+        private byte _first;
     }
 
     /// <summary>Writes one colour into rows of any pixel layout, whole or blended by coverage, in the stored values.</summary>
-    private readonly struct Painter
+    private struct Painter : ICoverageRow
     {
+        private readonly Image _image;
         private readonly PixelFormat _format;
+        private readonly int _size;
         private readonly Vector4 _colour; // straight RGBA from 0 to 1; grey layouts hold luma in X, Y and Z
-        private readonly byte[] _solid;    // the colour's bytes in the layout, for fully covered pixels of an opaque colour
+        private readonly Vector3 _layout; // the colour channels from 0 to 255 in the layout's byte order, for 8-bit layouts
         private readonly bool _opaque;
+        private PixelBytes _solid; // the colour in the layout, for fully covered pixels of an opaque colour
 
         public Painter(Image image, Rgba32 color)
         {
+            _image = image;
             _format = image.PixelFormat;
+            _size = image.BytesPerPixel;
             _colour = new Vector4(color.R, color.G, color.B, color.A) / 255;
             if (_format is PixelFormat.L8 or PixelFormat.L16)
             {
@@ -475,26 +500,115 @@ public sealed class Canvas : IDisposable
                 _colour = new Vector4(luma, luma, luma, _colour.W);
             }
 
+            _layout = _format == PixelFormat.Bgra32
+                ? new Vector3(_colour.Z, _colour.Y, _colour.X) * 255
+                : new Vector3(_colour.X, _colour.Y, _colour.Z) * 255;
             _opaque = color.A == 255;
             HasAlpha = _format is PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Rgba64;
-            _solid = new byte[image.BytesPerPixel];
-            Write(_solid, 0, _colour);
+            Pixels.Write(_format, _solid, 0, _colour);
         }
 
         public bool HasAlpha { get; }
 
-        public void Set(Span<byte> row, int x, int count)
+        public readonly void CopySolidTo(Span<byte> pixel) => ((ReadOnlySpan<byte>)_solid)[.._size].CopyTo(pixel);
+
+        public readonly void Paint(int y, int x, ReadOnlySpan<float> coverage)
         {
-            int size = _solid.Length;
-            for (int i = 0; i < count; i++)
+            Span<byte> row = _image.GetRowBytes(y);
+            switch (_format)
             {
-                _solid.CopyTo(row.Slice((x + i) * size, size));
+                case PixelFormat.Rgb24:
+                case PixelFormat.L8:
+                    Opaque8(row, x, coverage);
+                    break;
+                case PixelFormat.Rgba32:
+                case PixelFormat.Bgra32:
+                    Alpha8(row, x, coverage);
+                    break;
+                default:
+                    General(row, x, coverage);
+                    break;
             }
         }
 
-        public void Blend(Span<byte> row, int x, ReadOnlySpan<float> coverage)
+        /// <summary>A byte moved a share <paramref name="a"/> of the way towards <paramref name="to"/> (0 to 255), rounded.</summary>
+        private static byte Mix(byte from, float to, float a) => (byte)(from + ((to - from) * a) + 0.5f);
+
+        /// <summary>RGB or grey bytes: always opaque underneath, so blending is a mix towards the colour.</summary>
+        private readonly void Opaque8(Span<byte> row, int x, ReadOnlySpan<float> coverage)
         {
-            int size = _solid.Length;
+            ReadOnlySpan<byte> solid = ((ReadOnlySpan<byte>)_solid)[.._size];
+            int size = _size;
+            float c0 = _layout.X, c1 = _layout.Y, c2 = _layout.Z, alpha = _colour.W;
+            for (int i = 0; i < coverage.Length; i++)
+            {
+                float cover = coverage[i];
+                if (cover <= 0)
+                {
+                    continue;
+                }
+
+                Span<byte> pixel = row.Slice((x + i) * size, size);
+                float a = alpha * cover;
+                if (a >= 1)
+                {
+                    solid.CopyTo(pixel);
+                }
+                else if (size == 1)
+                {
+                    pixel[0] = Mix(pixel[0], c0, a);
+                }
+                else
+                {
+                    (pixel[0], pixel[1], pixel[2]) = (Mix(pixel[0], c0, a), Mix(pixel[1], c1, a), Mix(pixel[2], c2, a));
+                }
+            }
+        }
+
+        /// <summary>RGBA or BGRA bytes: a mix where the pixel underneath is opaque, source-over otherwise.</summary>
+        private readonly void Alpha8(Span<byte> row, int x, ReadOnlySpan<float> coverage)
+        {
+            ReadOnlySpan<byte> solid = ((ReadOnlySpan<byte>)_solid)[.._size];
+            float c0 = _layout.X, c1 = _layout.Y, c2 = _layout.Z, alpha = _colour.W;
+            for (int i = 0; i < coverage.Length; i++)
+            {
+                float cover = coverage[i];
+                if (cover <= 0)
+                {
+                    continue;
+                }
+
+                Span<byte> pixel = row.Slice((x + i) * 4, 4);
+                float a = alpha * cover;
+                if (a >= 1)
+                {
+                    solid.CopyTo(pixel);
+                }
+                else if (pixel[3] == 255)
+                {
+                    (pixel[0], pixel[1], pixel[2]) = (Mix(pixel[0], c0, a), Mix(pixel[1], c1, a), Mix(pixel[2], c2, a));
+                }
+                else
+                {
+                    float behind = pixel[3] / 255f * (1 - a);
+                    float total = a + behind;
+                    if (total > 0)
+                    {
+                        float scale = 1 / total;
+                        pixel[0] = (byte)((((c0 * a) + (pixel[0] * behind)) * scale) + 0.5f);
+                        pixel[1] = (byte)((((c1 * a) + (pixel[1] * behind)) * scale) + 0.5f);
+                        pixel[2] = (byte)((((c2 * a) + (pixel[2] * behind)) * scale) + 0.5f);
+                    }
+
+                    pixel[3] = (byte)((total * 255) + 0.5f);
+                }
+            }
+        }
+
+        private readonly void General(Span<byte> row, int x, ReadOnlySpan<float> coverage)
+        {
+            ReadOnlySpan<byte> solid = ((ReadOnlySpan<byte>)_solid)[.._size];
+            int size = _size;
             for (int i = 0; i < coverage.Length; i++)
             {
                 float cover = coverage[i];
@@ -506,34 +620,33 @@ public sealed class Canvas : IDisposable
                 int at = (x + i) * size;
                 if (cover >= 1 && _opaque)
                 {
-                    _solid.CopyTo(row.Slice(at, size));
+                    solid.CopyTo(row.Slice(at, size));
                     continue;
                 }
 
                 float alpha = _colour.W * Math.Min(cover, 1);
-                Vector4 target = Read(row, at);
+                Vector4 target = Pixels.Read(_format, row, at);
                 float behind = target.W * (1 - alpha);
                 float total = alpha + behind;
                 Vector3 mixed = total > 0
                     ? ((new Vector3(_colour.X, _colour.Y, _colour.Z) * alpha) + (new Vector3(target.X, target.Y, target.Z) * behind)) / total
                     : Vector3.Zero;
-                Write(row, at, new Vector4(mixed, total));
+                Pixels.Write(_format, row, at, new Vector4(mixed, total));
             }
         }
-
-        private Vector4 Read(ReadOnlySpan<byte> row, int at) => Pixels.Read(_format, row, at);
-
-        private void Write(Span<byte> row, int at, Vector4 p) => Pixels.Write(_format, row, at, p);
     }
 
     /// <summary>Blends an image, sampled through the inverse transform at each pixel's centre, into rows of the canvas.</summary>
-    private sealed class ImagePainter(Image source, PixelFormat target, Matrix3x2 back, bool nearest, float opacity)
+    private readonly struct ImagePainter(Image source, Image canvas, Matrix3x2 back, bool nearest, float opacity) : ICoverageRow
     {
-        private readonly int _size = Image.GetBytesPerPixel(target);
-        private readonly bool _grey = target is PixelFormat.L8 or PixelFormat.L16;
+        private readonly PixelFormat _target = canvas.PixelFormat;
+        private readonly int _size = canvas.BytesPerPixel;
+        private readonly bool _grey = canvas.PixelFormat is PixelFormat.L8 or PixelFormat.L16;
 
-        public void Blend(Span<byte> row, int y, int left, ReadOnlySpan<float> coverage)
+        public void Paint(int y, int left, ReadOnlySpan<float> coverage)
         {
+            Span<byte> row = canvas.GetRowBytes(y);
+            PixelFormat target = _target;
             for (int i = 0; i < coverage.Length; i++)
             {
                 float cover = coverage[i];

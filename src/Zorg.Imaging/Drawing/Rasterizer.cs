@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Numerics;
 
 namespace Zorg.Imaging.Drawing;
@@ -17,6 +18,9 @@ internal sealed class Rasterizer : IDisposable
     /// <summary>The most lines a curve is cut into.</summary>
     internal const int MaxSteps = 1024;
 
+    /// <summary>The most accumulation cells rendered at once: 4 MB, whatever the canvas size.</summary>
+    internal const int MaxCells = 1 << 20;
+
     private float[] _lines = new float[256]; // x0, y0, x1, y1 per line, in pixels
     private int _lineCount;
     private float[]? _cells;
@@ -31,6 +35,15 @@ internal sealed class Rasterizer : IDisposable
     public float MaxY { get; private set; }
 
     public int LineCount => _lineCount;
+
+    /// <summary>The stroker's working list of one figure's points, kept so a page of strokes allocates it once.</summary>
+    internal List<Vector2> Figure { get; } = [];
+
+    /// <summary>The stroker's inner corner points of one figure, and which side each is on.</summary>
+    internal List<Vector2> Inner { get; } = [];
+
+    /// <summary>For each point in <see cref="Inner"/>: 1 left of the path, -1 right, 0 none.</summary>
+    internal List<sbyte> InnerSide { get; } = [];
 
     public void Reset()
     {
@@ -141,9 +154,11 @@ internal sealed class Rasterizer : IDisposable
 
     /// <summary>
     /// Computes the coverage of the lines added so far inside the clip, and hands each row's coverage, from 0 to 1, to
-    /// <paramref name="paint"/> with the row's pixel position.
+    /// <paramref name="paint"/> with the row's pixel position. Tall boxes are done in bands of rows, so the working
+    /// memory stays under <see cref="MaxCells"/> floats whatever the canvas size.
     /// </summary>
-    public void Render(int clipLeft, int clipTop, int clipRight, int clipBottom, FillRule rule, CoverageRow paint)
+    public void Render<TPaint>(int clipLeft, int clipTop, int clipRight, int clipBottom, FillRule rule, ref TPaint paint)
+        where TPaint : ICoverageRow, allows ref struct
     {
         if (_lineCount == 0)
         {
@@ -162,8 +177,9 @@ internal sealed class Rasterizer : IDisposable
             return;
         }
 
-        int width = right - left, height = bottom - top, stride = width + 2;
-        int cells = stride * height;
+        int width = right - left, stride = width + 2;
+        int band = Math.Clamp(MaxCells / stride, 1, bottom - top);
+        int cells = stride * band;
         if (_cells is null || _cells.Length < cells)
         {
             if (_cells is not null)
@@ -184,33 +200,60 @@ internal sealed class Rasterizer : IDisposable
             _coverage = ArrayPool<float>.Shared.Rent(width);
         }
 
-        Span<float> area = _cells.AsSpan(0, cells);
-        area.Clear();
-        for (int i = 0; i < _lineCount; i++)
-        {
-            ReadOnlySpan<float> line = _lines.AsSpan(i * 4, 4);
-            Clip(area, stride, width, height, line[0] - left, line[1] - top, line[2] - left, line[3] - top);
-        }
-
         Span<float> coverage = _coverage.AsSpan(0, width);
-        for (int y = 0; y < height; y++)
+        for (int bandTop = top; bandTop < bottom; bandTop += band)
         {
-            ReadOnlySpan<float> row = area.Slice(y * stride, width);
-            float sum = 0;
-            bool any = false;
-            for (int x = 0; x < width; x++)
+            int height = Math.Min(band, bottom - bandTop);
+            Span<float> area = _cells.AsSpan(0, stride * height);
+            area.Clear();
+            for (int i = 0; i < _lineCount; i++)
+            {
+                ReadOnlySpan<float> line = _lines.AsSpan(i * 4, 4);
+                float y0 = line[1] - bandTop, y1 = line[3] - bandTop;
+                if (Math.Max(y0, y1) <= 0 || Math.Min(y0, y1) >= height)
+                {
+                    continue; // another band's
+                }
+
+                Clip(area, stride, width, height, line[0] - left, y0, line[2] - left, y1);
+            }
+
+            for (int y = 0; y < height; y++)
+            {
+                if (Sum(area.Slice(y * stride, width), coverage, rule))
+                {
+                    paint.Paint(bandTop + y, left, coverage);
+                }
+            }
+        }
+    }
+
+    /// <summary>The running sum along a row, as coverage; whether any pixel is covered.</summary>
+    private static bool Sum(ReadOnlySpan<float> row, Span<float> coverage, FillRule rule)
+    {
+        float sum = 0, any = 0;
+        if (rule == FillRule.NonZero)
+        {
+            for (int x = 0; x < row.Length; x++)
             {
                 sum += row[x];
-                float value = rule == FillRule.NonZero ? Math.Min(1, Math.Abs(sum)) : EvenOdd(sum);
+                float value = Math.Min(1, Math.Abs(sum));
                 coverage[x] = value;
-                any |= value > 0;
-            }
-
-            if (any)
-            {
-                paint(top + y, left, coverage);
+                any = Math.Max(any, value);
             }
         }
+        else
+        {
+            for (int x = 0; x < row.Length; x++)
+            {
+                sum += row[x];
+                float value = EvenOdd(sum);
+                coverage[x] = value;
+                any = Math.Max(any, value);
+            }
+        }
+
+        return any > 0;
     }
 
     public void Dispose()
@@ -364,5 +407,9 @@ internal sealed class Rasterizer : IDisposable
     }
 }
 
-/// <summary>Receives one row of coverage: the pixel row, the first pixel's x and a value from 0 to 1 per pixel.</summary>
-internal delegate void CoverageRow(int y, int x, ReadOnlySpan<float> coverage);
+/// <summary>Receives rows of coverage.</summary>
+internal interface ICoverageRow
+{
+    /// <summary>One row of coverage: the pixel row, the first pixel's x and a value from 0 to 1 per pixel.</summary>
+    public void Paint(int y, int x, ReadOnlySpan<float> coverage);
+}

@@ -21,7 +21,7 @@ The build treats warnings as errors, so it has to finish with 0 warnings.
 
 ## The Linux gate
 
-The oracle tests compare our output with reference tools: libpng's tools, libjpeg-turbo (`djpeg`, `cjpeg`), libwebp (`dwebp`, `cwebp`, `webpmux`), `oxipng`, `exiftool` and ImageMagick. A plain machine doesn't have them, so those tests skip. The Linux gate builds and tests in a container that has them. It needs Podman or Docker, and installs nothing on your machine.
+The oracle tests compare our output with reference tools: libpng's tools, libjpeg-turbo (`djpeg`, `cjpeg`), libwebp (`dwebp`, `cwebp`, `webpmux`), `oxipng`, `exiftool`, ImageMagick and librsvg's `rsvg-convert` (for the canvas). A plain machine doesn't have them, so those tests skip. The Linux gate builds and tests in a container that has them. It needs Podman or Docker, and installs nothing on your machine.
 
 ```
 scripts/test-linux.sh                    # unit and oracle tests on Alpine (musl, every oracle tool)

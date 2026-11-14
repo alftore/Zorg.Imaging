@@ -3,6 +3,8 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <!-- The canvas is marked experimental; the benchmarks time it anyway. -->
+    <NoWarn>$(NoWarn);ZORGDRAW</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

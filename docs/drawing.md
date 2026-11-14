@@ -73,8 +73,12 @@ Each pixel is covered by exactly the share of its area the shape covers, so a bl
 in a viewer. (Blending in linear light, as `Resize` does, would make thin dark text look lighter and thinner.)
 
 Curves are cut into straight lines at most `Canvas.Tolerance` from them, 0.2 pixels by default, which doesn't show.
-Where two parts of one shape with different windings meet inside a single pixel, the even-odd coverage of that pixel is
-an approximation, as in FreeType and Skia.
+Where two parts of one shape overlap inside a single pixel (a glyph's stem over its bowl, an outline crossing itself,
+a stroke's separate figures), that pixel's coverage is an approximation, as in FreeType's and Skia's analytic paths:
+a few edge pixels come out a little darker. A stroke's own corners don't overlap, so a single outline is exact.
+
+The Linux gate checks fills and strokes against librsvg's `rsvg-convert` (cairo): the total ink agrees within 0.3 %
+for fills and 0.5 % for strokes, and the ink of every 4 x 4 block within a third of a pixel for fills.
 
 The image must be sRGB or linear sRGB, so a colour means what it says; call `ToSrgb` first for another colour space.
 Every pixel layout works; grey images take each colour's Rec. 709 luma.
@@ -82,7 +86,8 @@ Every pixel layout works; grey images take each colour's Rec. 709 luma.
 ## Limits
 
 A shape is the caller's data, as an image's size is. Drawing takes time in proportion to the lines and the rows they
-cross, and up to 4 bytes per canvas pixel of memory, reused from one call to the next. A program drawing outlines from
+cross. Its working memory is at most 4 MB however large the canvas, reused from one call to the next; a page of
+glyphs allocates nothing. A program drawing outlines from
 untrusted files should limit `Shape.SegmentCount`. Coordinates must be finite; beyond a million pixels they're clamped,
 and a curve is cut into at most 1024 lines. `SetClip` limits drawing to a rectangle.
 
