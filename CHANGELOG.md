@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+CMYK for print, asked for by Zorg.Pdf: a CMYK file's inks, kept as they are instead of converted to sRGB. And the canvas from 0.4.0 is no longer experimental. Everything else gives the same output at the same speed as 0.4.0.
 
 Added:
 
