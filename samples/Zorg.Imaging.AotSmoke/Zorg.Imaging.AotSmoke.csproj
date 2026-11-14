@@ -6,8 +6,6 @@
     <!-- Report each trim and AOT warning, not one summary warning per assembly. -->
     <TrimmerSingleWarn>false</TrimmerSingleWarn>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <!-- The canvas is marked experimental; the smoke test exercises it anyway. -->
-    <NoWarn>$(NoWarn);ZORGDRAW</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

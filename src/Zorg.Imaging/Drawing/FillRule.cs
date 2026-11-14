@@ -1,10 +1,7 @@
-using System.Diagnostics.CodeAnalysis;
-
 namespace Zorg.Imaging.Drawing;
 
 /// <summary>Which points a shape whose outline crosses itself, or has holes, covers.</summary>
 /// <example><code>canvas.Fill(ring, black, FillRule.EvenOdd);</code></example>
-[Experimental(Canvas.Diagnostic)]
 public enum FillRule
 {
     /// <summary>

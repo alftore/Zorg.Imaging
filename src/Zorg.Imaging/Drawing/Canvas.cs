@@ -23,8 +23,7 @@ namespace Zorg.Imaging.Drawing;
 /// beyond a million pixels are clamped.
 /// </para>
 /// <para>
-/// The canvas is new and may still change, or move to its own package: using it needs the diagnostic
-/// <c>ZORGDRAW</c> suppressed. It isn't safe to use from several threads at once.
+/// It isn't safe to use from several threads at once.
 /// </para>
 /// </remarks>
 /// <example>
@@ -36,12 +35,8 @@ namespace Zorg.Imaging.Drawing;
 /// page.SaveAsPng(output);
 /// </code>
 /// </example>
-[Experimental(Diagnostic)]
 public sealed class Canvas : IDisposable
 {
-    /// <summary>The diagnostic that marks the drawing API as new.</summary>
-    internal const string Diagnostic = "ZORGDRAW";
-
     private readonly Rasterizer _rasterizer = new();
     private Matrix3x2 _transform = Matrix3x2.Identity;
     private float _tolerance = 0.2f;
