@@ -535,3 +535,4 @@ Zorg.Imaging.WebpEncoderOptions.NearLossless.init -> void
 Zorg.Imaging.WebpEncoderOptions.Quality.get -> int
 Zorg.Imaging.WebpEncoderOptions.Quality.init -> void
 Zorg.Imaging.WebpEncoderOptions.WebpEncoderOptions() -> void
+static Zorg.Imaging.ImageCodec.AttachMetadata(Zorg.Imaging.Image! image, System.ReadOnlySpan<byte> exif, System.ReadOnlySpan<byte> xmp, bool orientationApplied) -> void
