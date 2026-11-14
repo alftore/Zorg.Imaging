@@ -1037,6 +1037,12 @@ internal static class Vp8lEncoder
                     groupCount = plainCount;
                 }
             }
+
+            // Every tile in one group: the codes are the same without an image mapping tiles to groups.
+            if (groupCount == 1)
+            {
+                tileGroups = null;
+            }
         }
 
         if (cacheBits > 0)
