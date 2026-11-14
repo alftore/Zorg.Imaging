@@ -1,7 +1,7 @@
 # Drawing
 
 `Canvas` draws filled shapes into an `Image`, anti-aliased by exact pixel coverage. It is made for previews of pages
-(PDF), charts and badges: shapes, rectangles and, later, lines and placed images. It is new: the API may change, or
+(PDF), charts and badges: shapes, rectangles, lines and outlines, and later placed images. It is new: the API may change, or
 move to a package of its own, so using it needs the diagnostic `ZORGDRAW` suppressed.
 
 ```xml
@@ -20,7 +20,8 @@ canvas.Clear(new Rgba32(255, 255, 255));
 var triangle = new Shape().MoveTo(20, 20).LineTo(180, 40).LineTo(90, 160).Close();
 canvas.Fill(triangle, new Rgba32(200, 30, 30));
 canvas.Fill(Shape.Ellipse(280, 150, 80, 60), new Rgba32(30, 90, 200, 180)); // translucent
-canvas.FillRectangle(20, 260, 360, 0.5f, new Rgba32(0, 0, 0)); // a hairline rule
+canvas.StrokeLine(20, 260, 380, 260, 0, new Rgba32(0, 0, 0)); // a hairline rule
+canvas.Stroke(triangle, 4, new Rgba32(0, 0, 0)); // its outline, with round corners
 
 page.SaveAsPng(output);
 ```
@@ -46,6 +47,16 @@ Filling closes every figure. `FillRule.NonZero` (the default, as TrueType, PDF's
 round each outline goes, so a hole needs its outline drawn the other way; `FillRule.EvenOdd` makes every second
 crossing a hole whatever the direction.
 
+## Strokes
+
+`StrokeLine` draws a straight line with square-cut ends, for rules and underlines. `Stroke` draws a shape's outline
+with a round pen: round corners and round ends, joined back to the start only where `Close` ended a figure. Synthetic
+bold strokes a glyph as well as filling it (PDF's `2 Tr`), about 0.03 em wide.
+
+Widths are in the shape's units and scale with the transform, as PDF's line width does. `MinimumStrokeWidth`, 1 pixel
+by default, keeps hairlines (width 0) visible, as PDF viewers draw them. A translucent stroke has no darker spots
+where its pieces overlap. Miter and bevel corners and dashes aren't supported.
+
 ## How it looks
 
 Each pixel is covered by exactly the share of its area the shape covers, so a black edge across half a pixel gives grey
@@ -68,5 +79,6 @@ and a curve is cut into at most 1024 lines. `SetClip` limits drawing to a rectan
 
 ## Not included
 
-Text and fonts (the caller has the glyph outlines), gradients, patterns, dashes, clip paths, blend modes and layers.
+Text and fonts (the caller has the glyph outlines), gradients, patterns, dashes, miter corners, clip paths, blend modes
+and layers.
 Each would be a design decision of its own.

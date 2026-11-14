@@ -36,3 +36,8 @@ Zorg.Imaging.Image.IsOpaque() -> bool
 [ZORGDRAW]Zorg.Imaging.Drawing.Shape.Shape() -> void
 [ZORGDRAW]static Zorg.Imaging.Drawing.Shape.Ellipse(float centerX, float centerY, float radiusX, float radiusY) -> Zorg.Imaging.Drawing.Shape!
 [ZORGDRAW]static Zorg.Imaging.Drawing.Shape.Rectangle(float x, float y, float width, float height) -> Zorg.Imaging.Drawing.Shape!
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.MinimumStrokeWidth.get -> float
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.MinimumStrokeWidth.set -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Stroke(Zorg.Imaging.Drawing.Shape! shape, float width, Zorg.Imaging.Rgba32 color) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Stroke(Zorg.Imaging.Drawing.Shape! shape, float width, Zorg.Imaging.Rgba32 color, in System.Numerics.Matrix3x2 transform) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.StrokeLine(float x1, float y1, float x2, float y2, float width, Zorg.Imaging.Rgba32 color) -> void

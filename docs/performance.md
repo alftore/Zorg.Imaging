@@ -11,7 +11,8 @@ tools and the change between runs made back to back.
 ## 2026-11-14: the canvas
 
 An A4 page at 150 dpi (1240 x 1754, `Rgb24`): cleared to white, 3,000 fills of a 21-pixel letter of quadratic curves
-with a counter, and 50 rules. 22 ms on one thread, best of seven. The core DLL grew 14 KiB (656 to 670); the AOT smoke
+with a counter, and 50 rules. 22 ms on one thread, best of seven. With every glyph also stroked 0.03 em wide for synthetic bold, 88 ms:
+each curve is cut into short lines, and each line gets a rectangle and each corner a wedge. The core DLL grew 14 KiB (656 to 670); the AOT smoke
 binary, which doesn't draw, stayed at 3398 KiB, since trimming leaves the canvas out.
 
 ## 2026-11-14: shrink-on-load without the pipeline, `Convert` and `IsOpaque`

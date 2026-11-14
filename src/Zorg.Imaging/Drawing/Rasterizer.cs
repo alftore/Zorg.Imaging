@@ -234,12 +234,16 @@ internal sealed class Rasterizer : IDisposable
         return folded > 1 ? 2 - folded : folded;
     }
 
-    private static int Steps(float squared) =>
+    internal static int Steps(float squared) =>
         float.IsFinite(squared) ? Math.Clamp((int)MathF.Ceiling(MathF.Sqrt(squared)), 1, MaxSteps) : MaxSteps;
 
-    private static Vector2 Point(ReadOnlySpan<float> points, int index, in Matrix3x2 transform)
+    private static Vector2 Point(ReadOnlySpan<float> points, int index, in Matrix3x2 transform) =>
+        ToPixels(new Vector2(points[index * 2], points[(index * 2) + 1]), transform);
+
+    /// <summary>A point in pixels: transformed, refused when the transform overflowed, clamped to <see cref="Limit"/>.</summary>
+    internal static Vector2 ToPixels(Vector2 point, in Matrix3x2 transform)
     {
-        Vector2 p = Vector2.Transform(new Vector2(points[index * 2], points[(index * 2) + 1]), transform);
+        Vector2 p = Vector2.Transform(point, transform);
         if (float.IsNaN(p.X) || float.IsNaN(p.Y))
         {
             throw new ArgumentException("The transform takes the shape beyond what a float can hold.", nameof(transform));

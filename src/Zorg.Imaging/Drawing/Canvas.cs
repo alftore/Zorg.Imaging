@@ -45,6 +45,7 @@ public sealed class Canvas : IDisposable
     private readonly Rasterizer _rasterizer = new();
     private Matrix3x2 _transform = Matrix3x2.Identity;
     private float _tolerance = 0.2f;
+    private float _minimumStrokeWidth = 1;
     private int _clipLeft, _clipTop, _clipRight, _clipBottom;
 
     /// <summary>Starts drawing into an image.</summary>
@@ -103,6 +104,26 @@ public sealed class Canvas : IDisposable
             }
 
             _tolerance = value;
+        }
+    }
+
+    /// <summary>
+    /// The narrowest a stroke is drawn, in pixels: 1 by default, so a hairline rule (width 0, as PDF's <c>0 w</c>) stays
+    /// visible, as PDF viewers draw it. 0 draws every stroke at its own width, however thin.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative, above 1000 or not a number.</exception>
+    /// <example><code>canvas.MinimumStrokeWidth = 0.5f;</code></example>
+    public float MinimumStrokeWidth
+    {
+        get => _minimumStrokeWidth;
+        set
+        {
+            if (!(value >= 0 && value <= 1000))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "The minimum stroke width must be from 0 to 1000 pixels.");
+            }
+
+            _minimumStrokeWidth = value;
         }
     }
 
@@ -225,6 +246,80 @@ public sealed class Canvas : IDisposable
         Paint(color, FillRule.NonZero);
     }
 
+    /// <summary>Draws a straight line with square-cut ends, such as a table rule or an underline.</summary>
+    /// <param name="x1">The start's x, before <see cref="Transform"/>.</param>
+    /// <param name="y1">The start's y.</param>
+    /// <param name="x2">The end's x.</param>
+    /// <param name="y2">The end's y.</param>
+    /// <param name="width">The width, in the same units; it scales with <see cref="Transform"/>, and is at least <see cref="MinimumStrokeWidth"/> pixels.</param>
+    /// <param name="color">The colour; its alpha makes the line translucent.</param>
+    /// <exception cref="ArgumentOutOfRangeException">A coordinate isn't finite, or the width is negative or not finite.</exception>
+    /// <exception cref="ArgumentException">The transform takes the line beyond what a float can hold.</exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <example><code>canvas.StrokeLine(40, 120.5f, 560, 120.5f, 0.5f, new Rgba32(0, 0, 0));</code></example>
+    public void StrokeLine(float x1, float y1, float x2, float y2, float width, Rgba32 color)
+    {
+        foreach (float value in (ReadOnlySpan<float>)[x1, y1, x2, y2])
+        {
+            if (!float.IsFinite(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(x1), value, "The line's ends must be finite.");
+            }
+        }
+
+        width = Width(width, _transform);
+        _ = Image.GetPixelBytes();
+        if (color.A == 0)
+        {
+            return;
+        }
+
+        _rasterizer.Reset();
+        Stroker.AddLine(_rasterizer, new Vector2(x1, y1), new Vector2(x2, y2), width, _transform);
+        Paint(color, FillRule.NonZero);
+    }
+
+    /// <summary>
+    /// Draws a shape's outline with a round pen: round corners and round ends. A figure is joined back to its start only
+    /// when <see cref="Shape.Close"/> ended it. Synthetic bold strokes a glyph's outline as well as filling it.
+    /// </summary>
+    /// <param name="shape">The outline.</param>
+    /// <param name="width">The pen's width in the shape's units; it scales with <see cref="Transform"/>, and is at least <see cref="MinimumStrokeWidth"/> pixels.</param>
+    /// <param name="color">The colour; its alpha makes the stroke translucent, without darker overlaps.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="shape"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The width is negative or not finite.</exception>
+    /// <exception cref="ArgumentException">The transform takes the shape beyond what a float can hold.</exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <example><code>canvas.Stroke(Shape.Ellipse(50, 50, 30, 20), 2, new Rgba32(0, 0, 0));</code></example>
+    public void Stroke(Shape shape, float width, Rgba32 color) => Stroke(shape, width, color, Matrix3x2.Identity);
+
+    /// <summary>Draws a shape's outline with a round pen, through a transform of its own.</summary>
+    /// <param name="shape">The outline.</param>
+    /// <param name="width">The pen's width in the shape's units; it scales with both transforms, and is at least <see cref="MinimumStrokeWidth"/> pixels.</param>
+    /// <param name="color">The colour; its alpha makes the stroke translucent, without darker overlaps.</param>
+    /// <param name="transform">Applied to the shape before <see cref="Transform"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="shape"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The width is negative or not finite, or an element of <paramref name="transform"/> isn't.</exception>
+    /// <exception cref="ArgumentException">The transforms take the shape beyond what a float can hold.</exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <example><code>canvas.Stroke(glyph, 0.03f * 2048, black, place); // synthetic bold, with canvas.Fill(glyph, black, place)</code></example>
+    public void Stroke(Shape shape, float width, Rgba32 color, in Matrix3x2 transform)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        Finite(transform, nameof(transform));
+        Matrix3x2 whole = transform * _transform;
+        width = Width(width, whole);
+        _ = Image.GetPixelBytes();
+        if (color.A == 0 || shape.IsEmpty)
+        {
+            return;
+        }
+
+        _rasterizer.Reset();
+        Stroker.AddShape(_rasterizer, shape, whole, width, _tolerance);
+        Paint(color, FillRule.NonZero);
+    }
+
     /// <summary>Returns the canvas's working memory to the pool. The image stays as drawn.</summary>
     /// <example><code>canvas.Dispose();</code></example>
     public void Dispose() => _rasterizer.Dispose();
@@ -235,6 +330,18 @@ public sealed class Canvas : IDisposable
         {
             throw new ArgumentOutOfRangeException(name, "Every element of the transform must be finite.");
         }
+    }
+
+    /// <summary>The width to stroke with, in shape units: at least the minimum once the transform has scaled it.</summary>
+    private float Width(float width, in Matrix3x2 transform)
+    {
+        if (!(width >= 0 && float.IsFinite(width)))
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), width, "The width must be finite and not negative.");
+        }
+
+        float scale = Stroker.Scale(transform);
+        return scale > 0 && width * scale < _minimumStrokeWidth ? _minimumStrokeWidth / scale : width;
     }
 
     private void Paint(Rgba32 color, FillRule rule)

@@ -159,4 +159,32 @@ public class CanvasOracleTests
         static (double X, double Y) Centre(float[] v) =>
             (v.Select((c, k) => c * (k % 80)).Sum() / v.Sum(), v.Select((c, k) => c * (k / 80)).Sum() / v.Sum());
     }
+
+    [Theory]
+    [InlineData("star")]
+    [InlineData("letter")]
+    [InlineData("curves")]
+    public async Task Strokes_match_imagemagick(string name)
+    {
+        string magick = Oracle.Require("magick");
+        (Shape shape, string path, _) = Build(name);
+        using Oracle.TempFolder folder = Oracle.CreateFolder();
+        string output = folder.File("out.png");
+        string draw = $"stroke-linejoin round stroke-linecap round path '{path}'";
+        (int code, _, string errors) = await Oracle.RunAsync(
+            magick, "-size", "80x80", "xc:none", "-fill", "none", "-stroke", "white", "-strokewidth", "3", "-draw", draw, "PNG32:" + output);
+        Assert.True(code == 0, errors);
+
+        using Image theirs = Image.Decode(await File.ReadAllBytesAsync(output, TestContext.Current.CancellationToken), new DecodeOptions { PixelFormat = PixelFormat.Rgba32 });
+        using Image ours = CanvasTests.Coverage(80, 80, c => c.Stroke(shape, 3, new Rgba32(255, 255, 255), Matrix3x2.CreateTranslation(0.5f, 0.5f)));
+        float[] a = CanvasTests.Alphas(ours), b = CanvasTests.Alphas(theirs);
+
+        // As for fills: the same solid pixels, the ink in the same place, ImageMagick's edges a little wider.
+        int solidDisagreements = a.Zip(b, (x, y) => (x == 1 && y == 0) || (x == 0 && y == 1)).Count(d => d);
+        double ink = a.Sum(), theirInk = b.Sum();
+        double mean = a.Zip(b, (x, y) => Math.Abs(x - y)).Average();
+        Assert.Equal(0, solidDisagreements);
+        Assert.True(theirInk / ink is >= 0.97 and <= 1.15, FormattableString.Invariant($"{name}: ink {ink:F1} against {theirInk:F1}"));
+        Assert.True(mean <= 8.0 / 255, $"{name}: mean difference {mean * 255:F2}/255");
+    }
 }
