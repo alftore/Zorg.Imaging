@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 namespace Zorg.Imaging.Formats;
 
 /// <summary>
-/// The header check behind <see cref="Image.Identify"/>: detect the format, run its header reader, apply the limits,
+/// The header check behind <see cref="Image.Identify(byte[], IdentifyOptions?)"/>: detect the format, run its header reader, apply the limits,
 /// and turn every <see cref="ImageException"/> into a result.
 /// </summary>
 internal static class Identifier

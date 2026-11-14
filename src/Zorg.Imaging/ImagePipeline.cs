@@ -59,8 +59,15 @@ public sealed class ImagePipeline
     public static ImagePipeline Load(byte[] data)
     {
         ArgumentNullException.ThrowIfNull(data);
-        return new ImagePipeline(new BytesSource(data), [], DecodeOptions.Default);
+        return Load(data.AsMemory());
     }
+
+    /// <summary>Starts a pipeline from a whole file held in a slice of memory.</summary>
+    /// <param name="data">The file. It isn't copied, so don't change it while the pipeline may run.</param>
+    /// <returns>The pipeline, decoding with <see cref="DecodeOptions.Default"/> unless <see cref="WithDecodeOptions"/> says otherwise.</returns>
+    /// <remarks>The same as <see cref="Load(byte[])"/>, for a file that is part of a larger buffer.</remarks>
+    /// <example><code>ImagePipeline thumbnail = ImagePipeline.Load(buffer.AsMemory(offset, length)).Fit(320, 320);</code></example>
+    public static ImagePipeline Load(ReadOnlyMemory<byte> data) => new(new BytesSource(data), [], DecodeOptions.Default);
 
     /// <summary>Starts a pipeline from a stream, which is read when the pipeline runs.</summary>
     /// <param name="stream">
@@ -337,8 +344,9 @@ public sealed class ImagePipeline
     {
         using Parallelism.Scope scope = Parallelism.Use(_parallelism);
         // When a resize comes before anything that needs every pixel (a crop), the decoder learns its target and may
-        // decode smaller (JPEG shrink-on-load).
-        DecodeOptions options = ShrinkTarget(_steps) is { } target ? _options.WithShrinkTarget(target) : _options;
+        // decode smaller (JPEG shrink-on-load). The steps decide alone: DecodeOptions.ShrinkTo is for Image.Decode.
+        Func<int, int, (int Width, int Height)>? target = ShrinkTarget(_steps);
+        DecodeOptions options = target is null && _options.ShrinkTo is null ? _options : _options.WithShrinkTarget(target);
         (Image image, bool owned) = await _source.OpenAsync(options, cancellationToken).ConfigureAwait(false);
         try
         {
@@ -666,7 +674,7 @@ public sealed class ImagePipeline
         public abstract ValueTask<(Image Image, bool Owned)> OpenAsync(DecodeOptions options, CancellationToken cancellationToken);
     }
 
-    private sealed class BytesSource(byte[] data) : Source("bytes")
+    private sealed class BytesSource(ReadOnlyMemory<byte> data) : Source("bytes")
     {
         public override ValueTask<(Image Image, bool Owned)> OpenAsync(DecodeOptions options, CancellationToken cancellationToken)
         {

@@ -3,6 +3,8 @@
   <PropertyGroup>
     <Description>Managed image decoding, resizing and encoding for .NET: PNG, JPEG, GIF and WebP, including animations, plus BMP and TIFF decoding, with no native dependencies.</Description>
     <PackageTags>image;imaging;resize;thumbnail;png;jpeg;gif;webp;exif</PackageTags>
+    <!-- The drawing API is marked experimental for callers; the library and its tests use it freely. -->
+    <NoWarn>$(NoWarn);ZORGDRAW</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

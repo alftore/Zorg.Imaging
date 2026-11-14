@@ -1,6 +1,6 @@
 namespace Zorg.Imaging;
 
-/// <summary>The outcome of <see cref="Image.Identify"/> or <see cref="Image.IdentifyAsync"/>.</summary>
+/// <summary>The outcome of <see cref="Image.Identify(byte[], IdentifyOptions?)"/> or <see cref="Image.IdentifyAsync"/>.</summary>
 /// <example>
 /// <code>
 /// IdentifyResult result = Image.Identify(bytes);

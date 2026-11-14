@@ -9,7 +9,7 @@ namespace Zorg.Imaging;
 
 /// <summary>
 /// An image in memory: a width, a height, a <see cref="PixelFormat"/> and the pixels, row after row with no padding.
-/// The static <see cref="Identify"/> methods read a file's headers without decoding it.
+/// The static <see cref="Identify(byte[], IdentifyOptions?)"/> methods read a file's headers without decoding it.
 /// </summary>
 /// <remarks>
 /// The pixel memory is rented from a shared pool and goes back when the image is disposed, so dispose every image. An
@@ -44,6 +44,21 @@ public sealed partial class Image
     public static IdentifyResult Identify(byte[] data, IdentifyOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(data);
+        return Identify(data.AsMemory(), options);
+    }
+
+    /// <summary>
+    /// Reads the headers of an image file held in a slice of memory, without decoding pixels, and checks them against the
+    /// limits. Bad input gives a result, never an exception.
+    /// </summary>
+    /// <param name="data">The whole file, or at least its start. It isn't copied.</param>
+    /// <param name="options">The limits and options, or <see langword="null"/> for <see cref="IdentifyOptions.Default"/>.</param>
+    /// <returns>The result: <see cref="IdentifyResult.Succeeded"/> with <see cref="IdentifyResult.Info"/>, or a status and message.</returns>
+    /// <remarks>The same as <see cref="Identify(byte[], IdentifyOptions?)"/>, for a file that is part of a larger buffer.</remarks>
+    /// <example><code>IdentifyResult result = Image.Identify(buffer.AsMemory(offset, length));</code></example>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "No argument converts equally well to byte[] and ReadOnlyMemory<byte>: arrays and collection expressions pick byte[], slices and Memory<byte> this one.")]
+    public static IdentifyResult Identify(ReadOnlyMemory<byte> data, IdentifyOptions? options = null)
+    {
         options ??= IdentifyOptions.Default;
         var reader = HeaderReader.FromMemory(data, options.Limits.MaxHeaderBytes);
 

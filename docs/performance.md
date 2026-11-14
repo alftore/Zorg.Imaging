@@ -8,6 +8,62 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-14: the everyday paths after the new calls and the canvas
+
+One core, best of nine, `main` and the branch alternated twice: a 12 MP JPEG to a 400 x 300 thumbnail through the
+pipeline, a 12 MP PNG decode, and JPEG and PNG encodes of a 1000 x 750 photo. Every number is within run-to-run noise:
+
+| | Thumbnail | PNG decode | JPEG encode | PNG encode |
+|---|---:|---:|---:|---:|
+| Before, two runs (ms) | 44.3, 43.5 | 161.5, 165.2 | 12.6, 13.0 | 76.6, 80.8 |
+| After, two runs (ms) | 41.5, 43.3 | 162.9, 160.8 | 12.7, 12.8 | 77.2, 77.2 |
+
+## 2026-11-14: the canvas against Skia
+
+`CanvasBenchmarks` draws the page below with the canvas and with SkiaSharp (a native reference, benchmarks only).
+Three changes made the plain page a third faster: `Clear` copies a whole row at a time instead of 3 bytes at a time,
+the 8-bit layouts get their own blending, and rows of coverage reach the painter through a generic struct instead of a
+delegate, so a page of glyphs allocates nothing (it was 460 KB). Tall fills now work in bands of at most 4 MB.
+Strokes now end each segment at its inner corner instead of overlapping the next one, since an overlap was counted
+twice in the pixels it crossed (a stroked star had 0.3 % too much ink; now it agrees with cairo within 0.05 %). Where
+a corner turns so little that a mitre strays less than a quarter of the tolerance from a round corner, as where a
+curve was cut into lines, the outer side is mitred too and the round wedge left out: that took synthetic bold from
+81.5 ms to 55 ms. BenchmarkDotNet, one thread:
+
+| | Before | After | Skia |
+|---|---:|---:|---:|
+| Page: clear, 3,000 glyph fills, 50 rules | 22.8 ms, 464 KB | 14.7 ms, 0 B | 15.6 ms |
+| The same with synthetic bold | 83.8 ms, 2.7 MB | 55.1 ms, 0 B | 48.7 ms |
+
+## 2026-11-14: the canvas
+
+An A4 page at 150 dpi (1240 x 1754, `Rgb24`): cleared to white, 3,000 fills of a 21-pixel letter of quadratic curves
+with a counter, and 50 rules. 22 ms on one thread, best of seven. With every glyph also stroked 0.03 em wide for synthetic bold, 88 ms:
+each curve is cut into short lines, and each line gets a rectangle and each corner a wedge. The core DLL grew 14 KiB (656 to 670); the AOT smoke
+binary, which doesn't draw, stayed at 3398 KiB, since trimming leaves the canvas out. Once the smoke test also draws a shape, a stroke and
+an image, it is 3438 KiB: 40 KiB for a program that uses the canvas.
+
+## 2026-11-14: shrink-on-load without the pipeline, `Convert` and `IsOpaque`
+
+New calls for programs that decode once and handle the pixels themselves, such as a PDF writer. Nothing the library
+already did runs differently. One core, a 4000 x 3000 image, best of seven runs:
+
+| | Time |
+|---|---:|
+| JPEG to 400 x 300: `Decode`, then `Fit` | 132 ms |
+| The same with `DecodeOptions.ShrinkTo = (400, 300)` (decodes at 1/4) | 43 ms |
+| `IsOpaque()`, `Rgba32` / `Rgba64` | 2.6 / 5.2 ms |
+| `Convert`, `Rgba32` to `Rgb24` (alpha checked in the same pass) | 5.9 ms |
+| `Convert`, `Rgba32` to `Bgra32` | 7.0 ms |
+| `Convert`, `Rgba32` to `Rgba64` | 43 ms |
+| `Convert`, `Rgba64` to `Rgb24` | 54 ms |
+| `Convert`, `Rgba32` to `L8` | 64 ms |
+| For scale: decoding the same picture from PNG | 167 ms |
+
+The common 8-bit pairs have vector paths; the rest go through 16-bit RGBA one row at a time. The first version of the
+vector paths took 11 ms for `Rgba32` to `Rgb24`: slicing the spans for every 16 bytes cost more than the shuffle.
+Loading and storing through a reference, with the bounds checked once per call, halved it.
+
 ## 2026-11-14: 256 colours in Oklab, with transparency, and faster
 
 Pictures with partly transparent pixels are now reduced in Oklab too: each colour as six lanes, its Oklab over black

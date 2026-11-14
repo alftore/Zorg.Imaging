@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace Zorg.Imaging;
 
 /// <summary>
-/// The result of <see cref="Image.Identify"/> or <see cref="Image.IdentifyAsync"/>. Rejecting a file is a normal
+/// The result of <see cref="Image.Identify(byte[], IdentifyOptions?)"/> or <see cref="Image.IdentifyAsync"/>. Rejecting a file is a normal
 /// outcome, so it is reported here rather than thrown.
 /// </summary>
 /// <example>

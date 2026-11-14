@@ -21,7 +21,7 @@ namespace Zorg.Imaging.Formats;
 /// stream is free, because nothing is read.
 /// </para>
 /// <para>
-/// Over memory every method completes synchronously, which <see cref="Image.Identify"/> relies on. Readers must only
+/// Over memory every method completes synchronously, which <see cref="Image.Identify(byte[], IdentifyOptions?)"/> relies on. Readers must only
 /// await this class (and each other), never anything that could yield.
 /// </para>
 /// </remarks>

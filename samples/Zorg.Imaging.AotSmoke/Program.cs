@@ -69,6 +69,8 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     rgb.GetRow<Rgb24>(0)[0] = new Rgb24(1, 2, 3);
     grey.GetRow<L8>(0)[0] = new L8(9);
     Check("image other pixel types", bgra.GetPixelBytes()[0] == 3 && rgb.Stride == 3 && grey.GetPixelBytes()[0] == 9);
+    using Image converted = bgra.Convert(PixelFormat.Rgb24);
+    Check("image convert", bgra.IsOpaque() && converted.GetRow<Rgb24>(0)[0] == new Rgb24(1, 2, 3));
 }
 
 // PNG: encode, decode synchronously and through a stream that can't seek, and refuse damage.
@@ -292,6 +294,21 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
         gifBack.Width == webp.Width && original.A >= 128
             ? gifPixel.A == 255 && Math.Abs(original.R - gifPixel.R) <= 60 && Math.Abs(original.G - gifPixel.G) <= 60
             : gifPixel.A == 0);
+}
+
+using (var page = new Image(20, 10, PixelFormat.Rgb24))
+using (var tile = new Image(2, 2, PixelFormat.Rgb24))
+using (var canvas = new Zorg.Imaging.Drawing.Canvas(page))
+{
+    canvas.Clear(new Rgba32(255, 255, 255));
+    canvas.Fill(Zorg.Imaging.Drawing.Shape.Rectangle(1, 1, 4, 4), new Rgba32(255, 0, 0));
+    canvas.Stroke(new Zorg.Imaging.Drawing.Shape().MoveTo(8, 2).LineTo(12, 2), 2, new Rgba32(0, 0, 255));
+    tile.GetPixelBytes().Clear();
+    canvas.DrawImage(tile, 14, 4, 4, 4);
+    Check(
+        "canvas fill, stroke and image",
+        page.GetRow<Rgb24>(2)[2] == new Rgb24(255, 0, 0) && page.GetRow<Rgb24>(1)[10] == new Rgb24(0, 0, 255)
+            && page.GetRow<Rgb24>(6)[16] == new Rgb24(0, 0, 0) && page.GetRow<Rgb24>(8)[8] == new Rgb24(255, 255, 255));
 }
 
 return failures == 0 ? 0 : 1;

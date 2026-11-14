@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using Zorg.Imaging.Processing;
 
 namespace Zorg.Imaging;
 
@@ -179,6 +180,34 @@ public sealed partial class Image : IDisposable
         source.CopyTo(copy.GetPixelBytes());
         return copy;
     }
+
+    /// <summary>Converts the pixels to another layout.</summary>
+    /// <param name="format">The layout wanted.</param>
+    /// <returns>A new image in <paramref name="format"/>, which the caller disposes; a copy when the image is in it already.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="format"/> is <see cref="PixelFormat.None"/> or isn't a format.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="format"/> has no alpha and a pixel isn't opaque. <see cref="Flatten"/> chooses the colour behind
+    /// the image instead; <see cref="IsOpaque"/> tells which applies.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <remarks>
+    /// 8-bit values become 16-bit as <c>v * 257</c>, and 16-bit values the nearest 8-bit value, so a round trip through a
+    /// wider layout is exact. Grey takes the Rec. 709 luma of the stored values (<c>0.2126 R + 0.7152 G + 0.0722 B</c>),
+    /// which loses colour; grey converted to colour has R = G = B. Alpha is dropped only when every pixel is opaque, so
+    /// no colour shifts without being asked for. The colour space and metadata are kept.
+    /// </remarks>
+    /// <example><code>using Image rgb = logo.IsOpaque() ? logo.Convert(PixelFormat.Rgb24) : logo.Flatten(new Rgba32(255, 255, 255));</code></example>
+    public Image Convert(PixelFormat format) => PixelConverter.Convert(this, format);
+
+    /// <summary>
+    /// Whether every pixel is opaque: always for a layout without alpha, otherwise by reading every alpha value.
+    /// <see cref="ImageInfo.HasAlpha"/> says only whether the file could hold transparency.
+    /// </summary>
+    /// <returns><see langword="true"/> when no pixel is transparent or translucent.</returns>
+    /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
+    /// <remarks>It reads the whole image when every pixel is opaque, about 3 ms for 12 megapixels, so keep the answer rather than asking twice.</remarks>
+    /// <example><code>ImageFormat output = image.IsOpaque() ? ImageFormat.Jpeg : ImageFormat.Png;</code></example>
+    public bool IsOpaque() => PixelConverter.IsOpaque(this);
 
     /// <summary>Returns the pixel memory to the pool. The size and format stay readable; the pixels don't.</summary>
     /// <example><code>image.Dispose();</code></example>
