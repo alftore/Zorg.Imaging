@@ -5,6 +5,7 @@
 Added:
 
 - `Image.Decode`, `Image.Identify`, `AnimationReader.Open` and `ImagePipeline.Load` take a `ReadOnlyMemory<byte>` too, for a file that is part of a larger buffer: no copy into its own array. Existing `byte[]` calls are unchanged.
+- `DecodeOptions.ShrinkTo`: shrink-on-load without the pipeline. Given the box the image will be fitted into, a JPEG (or a codec from another package that can) decodes at 1/2, 1/4 or 1/8 size, still at least twice the box. A 12 MP JPEG for a 400 x 300 thumbnail decodes in 36 ms instead of 63 (one core). Other formats decode at full size.
 
 ## 0.3.0
 

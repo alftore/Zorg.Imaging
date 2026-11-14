@@ -83,9 +83,40 @@ public sealed class DecodeOptions
     }
 
     /// <summary>
-    /// For shrink-on-load: given the upright size, the size the first step will make. A decoder that can decode
-    /// smaller (JPEG) then does, staying at least twice that size. Set only by <see cref="ImagePipeline"/>.
+    /// The box the image will be fitted into afterwards, in the upright orientation, or <see langword="null"/> (the
+    /// default) to decode at full size. A decoder that can decode smaller cheaply then does: JPEG at 1/2, 1/4 or 1/8 of
+    /// its size, staying at least twice the fitted size so a resize keeps its quality, as <see cref="ImagePipeline"/>
+    /// does before a <c>Fit</c>. Codecs from other packages see it as <see cref="CodecContext.ShrinkTo"/>. Other formats
+    /// decode at full size: decoding never resizes, so the result is whatever size the decoder chose. Fit it with
+    /// <see cref="Image.Fit"/>.
     /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">A side is less than 1.</exception>
+    /// <example>
+    /// <code>
+    /// using Image large = Image.Decode(bytes, new DecodeOptions { ShrinkTo = (400, 300) }); // a 4000x3000 JPEG decodes at 1000x750
+    /// using Image thumbnail = large.Fit(400, 300);
+    /// </code>
+    /// </example>
+    public (int Width, int Height)? ShrinkTo
+    {
+        get;
+        init
+        {
+            if (value is { } box)
+            {
+                ArgumentOutOfRangeException.ThrowIfLessThan(box.Width, 1, nameof(value));
+                ArgumentOutOfRangeException.ThrowIfLessThan(box.Height, 1, nameof(value));
+                _shrinkToTarget = (width, height) => Image.Inside(width, height, box.Width, box.Height);
+            }
+            else
+            {
+                _shrinkToTarget = null;
+            }
+
+            field = value;
+        }
+    }
+
     /// <summary>
     /// Codecs from other packages for formats the library doesn't decode itself, such as HEIC. <see langword="null"/>
     /// (the default) uses <see cref="ImageDefaults.Codecs"/>.
@@ -93,7 +124,18 @@ public sealed class DecodeOptions
     /// <example><code>var options = new DecodeOptions { Codecs = ImageCodecs.Empty.Add(heicCodec) };</code></example>
     public ImageCodecs? Codecs { get; init; }
 
-    internal Func<int, int, (int Width, int Height)>? ShrinkTarget { get; init; }
+    /// <summary>
+    /// For shrink-on-load: given the upright size, the size the first step will make. A decoder that can decode
+    /// smaller (JPEG) then does, staying at least twice that size. <see cref="ImagePipeline"/> sets it from its steps;
+    /// otherwise it comes from <see cref="ShrinkTo"/>.
+    /// </summary>
+    internal Func<int, int, (int Width, int Height)>? ShrinkTarget
+    {
+        get => field ?? _shrinkToTarget;
+        init;
+    }
+
+    private readonly Func<int, int, (int Width, int Height)>? _shrinkToTarget;
 
     internal DecodeOptions WithShrinkTarget(Func<int, int, (int Width, int Height)>? target) => new()
     {
@@ -102,6 +144,7 @@ public sealed class DecodeOptions
         ApplyOrientation = ApplyOrientation,
         MaxDegreeOfParallelism = MaxDegreeOfParallelism,
         Codecs = Codecs,
+        ShrinkTo = ShrinkTo,
         ShrinkTarget = target,
     };
 }
