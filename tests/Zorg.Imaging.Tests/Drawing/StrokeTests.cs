@@ -87,6 +87,47 @@ public class StrokeTests
     }
 
     [Fact]
+    public void A_lone_move_paints_nothing_but_a_closed_point_is_a_dot()
+    {
+        // As in PDF and SVG: "m S" paints nothing; "m h S" and a zero-length line with a round cap paint a dot.
+        using Image lone = Coverage(20, 20, c => c.Stroke(new Shape().MoveTo(10, 10).MoveTo(12, 12), 6, White));
+        Assert.Equal(0, CanvasTests.Alphas(lone).Sum());
+        using Image closed = Coverage(20, 20, c => c.Stroke(new Shape().MoveTo(10, 10).Close(), 6, White));
+        Assert.InRange(CanvasTests.Alphas(closed).Sum(), (Math.PI * 9) - 0.5, (Math.PI * 9) + 0.5);
+    }
+
+    [Fact]
+    public void Points_too_close_for_a_direction_make_a_dot()
+    {
+        // 1e-24 apart: the distance squared is 0 in a float, so there's no direction to stroke along.
+        using Image image = Coverage(20, 20, c => c.Stroke(new Shape().MoveTo(10, 10).LineTo(10 + 1e-24f, 10), 6, White));
+        Assert.InRange(CanvasTests.Alphas(image).Sum(), (Math.PI * 9) - 0.5, (Math.PI * 9) + 0.5);
+    }
+
+    [Fact]
+    public void A_hairline_is_a_pixel_wide_whichever_way_the_transform_stretches()
+    {
+        // x is stretched 4 times and y squeezed to a quarter: a width-0 line is still one pixel wide either way.
+        foreach (bool across in new[] { true, false })
+        {
+            using Image image = Coverage(40, 40, c =>
+            {
+                c.Transform = Matrix3x2.CreateScale(4, 0.25f);
+                if (across)
+                {
+                    c.StrokeLine(1, 80.5f, 9, 80.5f, 0, White); // 32 pixels long, in y = 20.125
+                }
+                else
+                {
+                    c.Stroke(new Shape().MoveTo(5.125f, 16).LineTo(5.125f, 144), 0, White); // 32 long, round ends
+                }
+            });
+            double expected = across ? 32 : 32 + (Math.PI / 4);
+            Assert.InRange(CanvasTests.Alphas(image).Sum(), expected - 0.2, expected + 0.2);
+        }
+    }
+
+    [Fact]
     public void Strokes_check_their_input()
     {
         using var image = new Image(8, 8, PixelFormat.Rgb24);

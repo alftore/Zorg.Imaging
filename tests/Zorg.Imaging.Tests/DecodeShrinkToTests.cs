@@ -94,4 +94,23 @@ public class DecodeShrinkToTests
         using Image expected = await ImagePipeline.Load(jpeg).Fit(80, 60).ToImageAsync(TestContext.Current.CancellationToken);
         Assert.Equal(expected.GetPixelBytes().ToArray(), piped.GetPixelBytes().ToArray());
     }
+
+    [Fact]
+    public async Task A_pipeline_that_crops_first_ignores_the_box()
+    {
+        // The crop needs the full-size pixels: a box from the options must not shrink the decode under it.
+        byte[] jpeg = Jpeg160x120();
+        using Image full = Image.Decode(jpeg);
+        using Image expected = full.Crop(100, 70, 60, 50);
+        using Image piped = await ImagePipeline.Load(jpeg)
+            .WithDecodeOptions(new DecodeOptions { ShrinkTo = (10, 10) })
+            .Crop(100, 70, 60, 50)
+            .ToImageAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(expected.GetPixelBytes().ToArray(), piped.GetPixelBytes().ToArray());
+
+        using Image unchanged = await ImagePipeline.Load(jpeg)
+            .WithDecodeOptions(new DecodeOptions { ShrinkTo = (10, 10) })
+            .ToImageAsync(TestContext.Current.CancellationToken);
+        Assert.Equal((160, 120), (unchanged.Width, unchanged.Height));
+    }
 }

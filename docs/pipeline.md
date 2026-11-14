@@ -63,7 +63,8 @@ PNG, WebP and GIF have no such shortcut and always decode at full size.
 
 Without the pipeline, `DecodeOptions.ShrinkTo` asks for the same thing: the box the image will be fitted into
 afterwards. The decoder picks its scale as the pipeline would, and `Image.Fit` does the rest. Decoding itself never
-resizes, so other formats come out at full size.
+resizes, so other formats come out at full size. A pipeline ignores `ShrinkTo`, since its own steps say what size it
+needs: one that crops first still decodes at full size.
 
 ```csharp
 using Image large = Image.Decode(jpeg, new DecodeOptions { ShrinkTo = (400, 300) }); // a 4000x3000 JPEG decodes at 1000x750

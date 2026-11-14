@@ -40,8 +40,8 @@ internal static class PixelConverter
             throw NotOpaque(format);
         }
 
+        ReadOnlySpan<byte> from = source.GetPixelBytes(); // a disposed source throws before anything is rented
         var result = new Image(source.Width, source.Height, format) { ColorSpace = source.ColorSpace, SourceMetadata = source.SourceMetadata };
-        ReadOnlySpan<byte> from = source.GetPixelBytes();
         Span<byte> to = result.GetPixelBytes();
         switch ((source.PixelFormat, format))
         {

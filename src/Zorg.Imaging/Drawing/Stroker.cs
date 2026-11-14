@@ -20,8 +20,28 @@ internal static class Stroker
     /// <summary>How much a transform enlarges lengths, on average over directions: the square root of its area scale.</summary>
     public static float Scale(in Matrix3x2 transform) => MathF.Sqrt(MathF.Abs(transform.GetDeterminant()));
 
-    public static void AddShape(Rasterizer rasterizer, Shape shape, in Matrix3x2 transform, float width, float tolerance)
+    /// <summary>
+    /// The largest factor by which a transform stretches a length, in any direction: its largest singular value.
+    /// </summary>
+    public static float Stretch(in Matrix3x2 m)
     {
+        float sum = (m.M11 * m.M11) + (m.M12 * m.M12) + (m.M21 * m.M21) + (m.M22 * m.M22);
+        float det = m.GetDeterminant();
+        return MathF.Sqrt((sum + MathF.Sqrt(MathF.Max(0, (sum * sum) - (4 * det * det)))) / 2);
+    }
+
+    /// <summary>
+    /// Adds the area a round pen covers along the shape. With <paramref name="inPixels"/>, the shape is transformed
+    /// first and the pen is <paramref name="width"/> pixels wide whatever the transform, as a hairline is drawn.
+    /// </summary>
+    public static void AddShape(Rasterizer rasterizer, Shape shape, Matrix3x2 transform, float width, float tolerance, bool inPixels = false)
+    {
+        Matrix3x2 place = Matrix3x2.Identity;
+        if (inPixels)
+        {
+            (place, transform) = (transform, Matrix3x2.Identity);
+        }
+
         float scale = Scale(transform);
         if (!(scale > 0) || !float.IsFinite(scale))
         {
@@ -31,39 +51,49 @@ internal static class Stroker
         float half = width / 2;
         float flatness = tolerance / scale;
         int sides = Sides(half * scale, tolerance / 4); // finer than the curves: a disc's corners show where it meets the sides
+
+        // A corner whose mitre strays less than that from the round corner (as where a curve was cut into lines) is
+        // mitred: one straight end shared by both segments instead of a wedge. Strays r (1 / cos(a / 2) - 1) at turn a.
+        float flat = 1 / (1 + (tolerance / 4 / (half * scale)));
         List<Vector2> figure = rasterizer.Figure;
         figure.Clear();
         ReadOnlySpan<byte> verbs = shape.Verbs;
         ReadOnlySpan<float> points = shape.Points;
         int p = 0;
+        bool drawn = false; // whether the figure has a segment: a lone MoveTo paints nothing, as in PDF and SVG
         foreach (byte verb in verbs)
         {
             switch (verb)
             {
                 case Shape.Move:
-                    AddFigure(rasterizer, figure, closed: false, half, sides, transform);
+                    AddFigure(rasterizer, figure, closed: false, drawn, half, sides, flat, transform);
                     figure.Clear();
-                    figure.Add(Point(points, p++));
+                    figure.Add(Point(points, p++, place, inPixels));
+                    drawn = false;
                     break;
                 case Shape.Line:
-                    figure.Add(Point(points, p++));
+                    figure.Add(Point(points, p++, place, inPixels));
+                    drawn = true;
                     break;
                 case Shape.Quad:
-                    Vector2 control = Point(points, p++), end = Point(points, p++);
+                    Vector2 control = Point(points, p++, place, inPixels), end = Point(points, p++, place, inPixels);
                     Quad(figure, figure[^1], control, end, flatness);
+                    drawn = true;
                     break;
                 case Shape.Cubic:
-                    Vector2 c1 = Point(points, p++), c2 = Point(points, p++), last = Point(points, p++);
+                    Vector2 c1 = Point(points, p++, place, inPixels), c2 = Point(points, p++, place, inPixels), last = Point(points, p++, place, inPixels);
                     Cubic(figure, figure[^1], c1, c2, last, flatness);
+                    drawn = true;
                     break;
                 default: // End
-                    AddFigure(rasterizer, figure, closed: true, half, sides, transform);
+                    AddFigure(rasterizer, figure, closed: true, drawn: true, half, sides, flat, transform);
                     figure.Clear();
+                    drawn = false;
                     break;
             }
         }
 
-        AddFigure(rasterizer, figure, closed: false, half, sides, transform);
+        AddFigure(rasterizer, figure, closed: false, drawn, half, sides, flat, transform);
     }
 
     /// <summary>A straight line with square-cut ends: one rectangle.</summary>
@@ -83,15 +113,19 @@ internal static class Stroker
         return Math.Clamp((int)Math.Ceiling(2 * Math.PI / angle), MinSides, MaxSides);
     }
 
-    private static Vector2 Point(ReadOnlySpan<float> points, int index) => new(points[index * 2], points[(index * 2) + 1]);
-
-    private static void AddFigure(Rasterizer rasterizer, List<Vector2> figure, bool closed, float half, int sides, in Matrix3x2 transform)
+    private static Vector2 Point(ReadOnlySpan<float> points, int index, in Matrix3x2 place, bool inPixels)
     {
-        // Repeated points make no line and no corner.
+        var point = new Vector2(points[index * 2], points[(index * 2) + 1]);
+        return inPixels ? Rasterizer.ToPixels(point, place) : point;
+    }
+
+    private static void AddFigure(Rasterizer rasterizer, List<Vector2> figure, bool closed, bool drawn, float half, int sides, float flat, in Matrix3x2 transform)
+    {
+        // Repeated points make no line and no corner; nor do points too close for a float to give their direction.
         int kept = Math.Min(1, figure.Count);
         for (int i = 1; i < figure.Count; i++)
         {
-            if (figure[i] != figure[kept - 1])
+            if (!Same(figure[i], figure[kept - 1]))
             {
                 figure[kept++] = figure[i];
             }
@@ -99,12 +133,12 @@ internal static class Stroker
 
         figure.RemoveRange(kept, figure.Count - kept);
 
-        if (closed && figure.Count > 1 && figure[^1] == figure[0])
+        if (closed && figure.Count > 1 && Same(figure[^1], figure[0]))
         {
             figure.RemoveAt(figure.Count - 1);
         }
 
-        if (figure.Count == 0)
+        if (figure.Count == 0 || !drawn)
         {
             return;
         }
@@ -128,7 +162,7 @@ internal static class Stroker
         for (int i = 0; i < count; i++)
         {
             (Vector2 point, sbyte which) = closed || (i > 0 && i < count - 1)
-                ? Miter(figure[(i - 1 + count) % count], figure[i], figure[(i + 1) % count], half)
+                ? Miter(figure[(i - 1 + count) % count], figure[i], figure[(i + 1) % count], half, flat)
                 : (default, (sbyte)0);
             inner.Add(point);
             side.Add(which);
@@ -142,27 +176,40 @@ internal static class Stroker
             Vector2 left = Vector2.Normalize(to - from);
             left = new Vector2(-left.Y, left.X) * half;
             int n = 0;
-            corners[n++] = side[i] > 0 ? inner[i] : from + left;
-            corners[n++] = side[end] > 0 ? inner[end] : to + left;
-            if (side[end] != 0)
+            corners[n++] = Left(i, from);
+            corners[n++] = Left(end, to);
+            if (side[end] is 1 or -1)
             {
-                corners[n++] = to;
+                corners[n++] = to; // the wedge's centre: its edges cancel this end's two halves
             }
 
-            corners[n++] = side[end] < 0 ? inner[end] : to - left;
-            corners[n++] = side[i] < 0 ? inner[i] : from - left;
-            if (side[i] != 0)
+            corners[n++] = Right(end, to);
+            corners[n++] = Right(i, from);
+            if (side[i] is 1 or -1)
             {
                 corners[n++] = from;
             }
 
             Polygon(rasterizer, transform, corners[..n]);
+
+            // At a joint: the inner corner on its side, the outer mitre (the inner one mirrored) on the other side of
+            // a flat joint, else the square end.
+            Vector2 Left(int joint, Vector2 at) =>
+                side[joint] > 0 ? inner[joint] : side[joint] == -2 ? (2 * at) - inner[joint] : at + left;
+
+            Vector2 Right(int joint, Vector2 at) =>
+                side[joint] < 0 ? inner[joint] : side[joint] == 2 ? (2 * at) - inner[joint] : at - left;
         }
 
         // Round corners: at each, the wedge on the outer side between the two rectangles' ends. Its straight edges
         // lie on those ends and cancel them, so the outer edge of the stroke is one unbroken line.
         for (int i = closed ? 0 : 1; i < (closed ? count : count - 1); i++)
         {
+            if (side[i] is 2 or -2)
+            {
+                continue; // mitred
+            }
+
             Vector2 before = figure[(i - 1 + count) % count], at = figure[i], after = figure[(i + 1) % count];
             Vector2 inward = Vector2.Normalize(at - before), outward = Vector2.Normalize(after - at);
             float turn = MathF.Atan2((inward.X * outward.Y) - (inward.Y * outward.X), Vector2.Dot(inward, outward));
@@ -188,10 +235,10 @@ internal static class Stroker
 
     /// <summary>
     /// Where the inner edges of the segments into and out of <paramref name="at"/> meet, and on which side of them (1 for
-    /// the left, -1 the right); side 0 where they don't meet within half of either segment, which then end square and
-    /// overlap.
+    /// the left, -1 the right; 2 or -2 when the turn is gentle enough, by <paramref name="flat"/>, to mitre the outer
+    /// side too); side 0 where they don't meet within half of either segment, which then end square and overlap.
     /// </summary>
-    private static (Vector2 Point, sbyte Side) Miter(Vector2 before, Vector2 at, Vector2 after, float half)
+    private static (Vector2 Point, sbyte Side) Miter(Vector2 before, Vector2 at, Vector2 after, float half, float flat)
     {
         Vector2 inward = at - before, outward = after - at;
         float lengthIn = inward.Length(), lengthOut = outward.Length();
@@ -208,15 +255,23 @@ internal static class Stroker
         Vector2 normalIn = new Vector2(-inward.Y, inward.X) * which, normalOut = new Vector2(-outward.Y, outward.X) * which;
         Vector2 point = at + ((normalIn + normalOut) * (half / (1 + Vector2.Dot(normalIn, normalOut))));
         float back = Vector2.Dot(at - point, inward), on = Vector2.Dot(point - at, outward);
-        return back <= 0.5f * lengthIn && on <= 0.5f * lengthOut ? (point, which) : (default, 0);
+        if (!(back <= 0.5f * lengthIn && on <= 0.5f * lengthOut))
+        {
+            return (default, 0);
+        }
+
+        // cos(a / 2) = sqrt((1 + cos a) / 2): above the bound, the outer mitre is as good as round.
+        return MathF.Sqrt((1 + dot) / 2) > flat ? (point, (sbyte)(2 * which)) : (point, which);
     }
+
+    private static bool Same(Vector2 a, Vector2 b) => (a - b).LengthSquared() == 0;
 
     /// <summary>The rectangle a pen of half-width <paramref name="half"/> sweeps from one point to the next.</summary>
     private static void Rectangle(Rasterizer rasterizer, Vector2 from, Vector2 to, float half, in Matrix3x2 transform)
     {
         Vector2 along = to - from;
         float length = along.Length();
-        if (!(length > 0))
+        if (!(along.LengthSquared() > 0))
         {
             return;
         }

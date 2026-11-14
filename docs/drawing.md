@@ -55,7 +55,8 @@ with a round pen: round corners and round ends, joined back to the start only wh
 bold strokes a glyph as well as filling it (PDF's `2 Tr`), about 0.03 em wide.
 
 Widths are in the shape's units and scale with the transform, as PDF's line width does. `MinimumStrokeWidth`, 1 pixel
-by default, keeps hairlines (width 0) visible, as PDF viewers draw them. A translucent stroke has no darker spots
+by default, keeps hairlines (width 0) visible, as PDF viewers draw them: a pen narrower than that in every direction is
+drawn that many pixels wide, however the transform stretches. A translucent stroke has no darker spots
 where its pieces overlap. Miter and bevel corners and dashes aren't supported.
 
 ## Images
@@ -86,8 +87,8 @@ Every pixel layout works; grey images take each colour's Rec. 709 luma.
 ## Limits
 
 A shape is the caller's data, as an image's size is. Drawing takes time in proportion to the lines and the rows they
-cross. Its working memory is at most 4 MB however large the canvas, reused from one call to the next; a page of
-glyphs allocates nothing. A program drawing outlines from
+cross. Its working memory is at most 4 MB however large the canvas, plus 16 bytes per line of the largest shape
+drawn, reused from one call to the next; a page of glyphs allocates nothing. A program drawing outlines from
 untrusted files should limit `Shape.SegmentCount`. Coordinates must be finite; beyond a million pixels they're clamped,
 and a curve is cut into at most 1024 lines. `SetClip` limits drawing to a rectangle.
 

@@ -294,6 +294,79 @@ public class CanvasTests
     }
 
     [Fact]
+    public void Long_edges_render_alike_whatever_the_band_or_clip()
+    {
+        // Random polygons with edges across the whole canvas: drawn whole (in bands) and as two clipped halves, every
+        // pixel agrees within a rounding step, however far down the edges run.
+        var random = new Random(3);
+        for (int round = 0; round < 10; round++)
+        {
+            var shape = new Shape().MoveTo(Next(), Next());
+            for (int i = 0; i < 6; i++)
+            {
+                shape.LineTo(Next(), Next());
+            }
+
+            shape.Close();
+            using Image banded = Draw(shape, clipped: false);
+            using Image pieces = Draw(shape, clipped: true);
+            byte[] a = banded.GetPixelBytes().ToArray(), b = pieces.GetPixelBytes().ToArray();
+            for (int i = 0; i < a.Length; i++)
+            {
+                Assert.InRange(a[i] - b[i], -1, 1);
+            }
+        }
+
+        float Next() => (float)(random.NextDouble() * 1300) - 50;
+
+        static Image Draw(Shape shape, bool clipped)
+        {
+            var image = new Image(1200, 1000, PixelFormat.L8);
+            using var canvas = new Canvas(image);
+            if (clipped)
+            {
+                canvas.SetClip(0, 0, 1200, 437);
+                canvas.Fill(shape, new Rgba32(255, 255, 255), FillRule.EvenOdd);
+                canvas.SetClip(0, 437, 1200, 563);
+            }
+
+            canvas.Fill(shape, new Rgba32(255, 255, 255), FillRule.EvenOdd);
+            return image;
+        }
+    }
+
+    [Fact]
+    public void A_long_edge_is_exact_at_its_far_end()
+    {
+        // One edge from (100.3, 0) to (1100.7, 1000), everything left of it filled: the last rows' coverage, against
+        // the area worked out row by row, finely.
+        using var image = new Image(1200, 1000, PixelFormat.Rgba32);
+        using (var canvas = new Canvas(image))
+        {
+            canvas.Fill(new Shape().MoveTo(-10, 0).LineTo(100.3f, 0).LineTo(1100.7f, 1000).LineTo(-10, 1000).Close(), new Rgba32(255, 255, 255));
+        }
+
+        double worst = 0;
+        for (int y = 900; y < 1000; y++)
+        {
+            Span<Rgba32> row = image.GetRow<Rgba32>(y);
+            for (int x = 990; x < 1110; x++)
+            {
+                double area = 0;
+                for (int s = 0; s < 400; s++)
+                {
+                    double edge = 100.3 + ((y + ((s + 0.5) / 400)) * 1.0004);
+                    area += Math.Clamp(edge - x, 0, 1) / 400;
+                }
+
+                worst = Math.Max(worst, Math.Abs((row[x].A / 255.0) - area));
+            }
+        }
+
+        Assert.True(worst <= 1.0 / 255, $"Off by {worst * 255:F2}/255.");
+    }
+
+    [Fact]
     public void Shapes_check_their_input()
     {
         Assert.Throws<InvalidOperationException>(() => new Shape().LineTo(1, 1));
@@ -325,9 +398,18 @@ public class CanvasTests
         Assert.Throws<ArgumentOutOfRangeException>(() => canvas.FillRectangle(0, float.NaN, 1, 1, White));
         Assert.Throws<ArgumentOutOfRangeException>(() => canvas.Fill(Shape.Rectangle(0, 0, 1, 1), White, (FillRule)5));
         Assert.Throws<ArgumentOutOfRangeException>(() => canvas.SetClip(0, 0, -1, 1));
+        Assert.Throws<ArgumentException>(() => canvas.DrawImage(rgb, 0, 0, 2, 2)); // onto itself
+
+        // A transform that overflows a float is refused, whether it ends in an infinity or NaN.
+        canvas.Transform = Matrix3x2.CreateScale(1e30f);
+        Assert.Throws<ArgumentException>(() => canvas.FillRectangle(0, 0, 3e10f, 1, White));
+        Assert.Throws<ArgumentException>(() => canvas.Fill(Shape.Rectangle(0, 0, 3e10f, 1), White));
+        canvas.Transform = Matrix3x2.Identity;
 
         rgb.Dispose();
         Assert.Throws<ObjectDisposedException>(() => canvas.Fill(Shape.Rectangle(0, 0, 1, 1), White));
+        canvas.SetClip(1, 1, 0, 0);
+        Assert.Throws<ObjectDisposedException>(() => canvas.Clear(White));
     }
 
     [Fact]

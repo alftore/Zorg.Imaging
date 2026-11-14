@@ -24,14 +24,16 @@ pipeline, a 12 MP PNG decode, and JPEG and PNG encodes of a 1000 x 750 photo. Ev
 Three changes made the plain page a third faster: `Clear` copies a whole row at a time instead of 3 bytes at a time,
 the 8-bit layouts get their own blending, and rows of coverage reach the painter through a generic struct instead of a
 delegate, so a page of glyphs allocates nothing (it was 460 KB). Tall fills now work in bands of at most 4 MB.
-Bold gained little, as the gain went on exactness: a stroke's segment now ends at its inner corner instead of
-overlapping the next one, since an overlap was counted twice in the pixels it crossed (a stroked star had 0.3 % too
-much ink; now it agrees with cairo within 0.05 %). BenchmarkDotNet, one thread:
+Strokes now end each segment at its inner corner instead of overlapping the next one, since an overlap was counted
+twice in the pixels it crossed (a stroked star had 0.3 % too much ink; now it agrees with cairo within 0.05 %). Where
+a corner turns so little that a mitre strays less than a quarter of the tolerance from a round corner, as where a
+curve was cut into lines, the outer side is mitred too and the round wedge left out: that took synthetic bold from
+81.5 ms to 55 ms. BenchmarkDotNet, one thread:
 
 | | Before | After | Skia |
 |---|---:|---:|---:|
 | Page: clear, 3,000 glyph fills, 50 rules | 22.8 ms, 464 KB | 14.7 ms, 0 B | 15.6 ms |
-| The same with synthetic bold | 83.8 ms, 2.7 MB | 81.5 ms, 0 B | 48.8 ms |
+| The same with synthetic bold | 83.8 ms, 2.7 MB | 55.1 ms, 0 B | 48.7 ms |
 
 ## 2026-11-14: the canvas
 

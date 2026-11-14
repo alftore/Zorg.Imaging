@@ -109,7 +109,8 @@ public sealed class Canvas : IDisposable
 
     /// <summary>
     /// The narrowest a stroke is drawn, in pixels: 1 by default, so a hairline rule (width 0, as PDF's <c>0 w</c>) stays
-    /// visible, as PDF viewers draw it. 0 draws every stroke at its own width, however thin.
+    /// visible, as PDF viewers draw it. A pen the transforms make narrower than this in every direction is drawn this
+    /// many pixels wide, round, whichever way the transforms stretch. 0 draws every stroke at its own width, however thin.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value is negative, above 1000 or not a number.</exception>
     /// <example><code>canvas.MinimumStrokeWidth = 0.5f;</code></example>
@@ -155,6 +156,7 @@ public sealed class Canvas : IDisposable
     /// <example><code>canvas.Clear(new Rgba32(255, 255, 255));</code></example>
     public void Clear(Rgba32 color)
     {
+        _ = Image.GetPixelBytes();
         var painter = new Painter(Image, color);
         if (color.A != 255 && !painter.HasAlpha)
         {
@@ -230,6 +232,7 @@ public sealed class Canvas : IDisposable
     /// <param name="height">The height.</param>
     /// <param name="color">The colour; its alpha makes the fill translucent.</param>
     /// <exception cref="ArgumentOutOfRangeException">A value isn't finite.</exception>
+    /// <exception cref="ArgumentException">The transform takes the rectangle beyond what a float can hold.</exception>
     /// <exception cref="ObjectDisposedException">The image has been disposed.</exception>
     /// <example><code>canvas.FillRectangle(10, 10, 100, 20, new Rgba32(240, 240, 240));</code></example>
     public void FillRectangle(float x, float y, float width, float height, Rgba32 color)
@@ -249,10 +252,8 @@ public sealed class Canvas : IDisposable
         }
 
         _rasterizer.Reset();
-        Vector2 a = Vector2.Transform(new Vector2(x, y), _transform), b = Vector2.Transform(new Vector2(x + width, y), _transform);
-        Vector2 c = Vector2.Transform(new Vector2(x + width, y + height), _transform), d = Vector2.Transform(new Vector2(x, y + height), _transform);
-        Vector2 low = new(-Rasterizer.Limit), high = new(Rasterizer.Limit);
-        (a, b, c, d) = (Vector2.Clamp(a, low, high), Vector2.Clamp(b, low, high), Vector2.Clamp(c, low, high), Vector2.Clamp(d, low, high));
+        Vector2 a = Rasterizer.ToPixels(new Vector2(x, y), _transform), b = Rasterizer.ToPixels(new Vector2(x + width, y), _transform);
+        Vector2 c = Rasterizer.ToPixels(new Vector2(x + width, y + height), _transform), d = Rasterizer.ToPixels(new Vector2(x, y + height), _transform);
         _rasterizer.AddLine(a, b);
         _rasterizer.AddLine(b, c);
         _rasterizer.AddLine(c, d);
@@ -281,15 +282,23 @@ public sealed class Canvas : IDisposable
             }
         }
 
-        width = Width(width, _transform);
+        (float pen, bool inPixels) = Pen(width, _transform);
         _ = Image.GetPixelBytes();
-        if (color.A == 0)
+        if (color.A == 0 || pen == 0)
         {
             return;
         }
 
         _rasterizer.Reset();
-        Stroker.AddLine(_rasterizer, new Vector2(x1, y1), new Vector2(x2, y2), width, _transform);
+        Vector2 from = new(x1, y1), to = new(x2, y2);
+        if (inPixels)
+        {
+            Stroker.AddLine(_rasterizer, Rasterizer.ToPixels(from, _transform), Rasterizer.ToPixels(to, _transform), pen, Matrix3x2.Identity);
+        }
+        else
+        {
+            Stroker.AddLine(_rasterizer, from, to, pen, _transform);
+        }
         Paint(color, FillRule.NonZero);
     }
 
@@ -322,15 +331,15 @@ public sealed class Canvas : IDisposable
         ArgumentNullException.ThrowIfNull(shape);
         Finite(transform, nameof(transform));
         Matrix3x2 whole = transform * _transform;
-        width = Width(width, whole);
+        (float pen, bool inPixels) = Pen(width, whole);
         _ = Image.GetPixelBytes();
-        if (color.A == 0 || shape.IsEmpty)
+        if (color.A == 0 || shape.IsEmpty || pen == 0)
         {
             return;
         }
 
         _rasterizer.Reset();
-        Stroker.AddShape(_rasterizer, shape, whole, width, _tolerance);
+        Stroker.AddShape(_rasterizer, shape, whole, pen, _tolerance, inPixels);
         Paint(color, FillRule.NonZero);
     }
 
@@ -396,6 +405,11 @@ public sealed class Canvas : IDisposable
 
         _ = image.GetPixelBytes();
         _ = Image.GetPixelBytes();
+        if (ReferenceEquals(image, Image))
+        {
+            throw new ArgumentException("An image can't be drawn onto itself; draw a Clone of it.", nameof(image));
+        }
+
         if (!image.ColorSpace.Equals(Image.ColorSpace))
         {
             throw new ArgumentException($"The image is {image.ColorSpace} and the canvas {Image.ColorSpace}. Call ToSrgb on the image first.", nameof(image));
@@ -453,15 +467,18 @@ public sealed class Canvas : IDisposable
     }
 
     /// <summary>The width to stroke with, in shape units: at least the minimum once the transform has scaled it.</summary>
-    private float Width(float width, in Matrix3x2 transform)
+    /// <summary>
+    /// The pen to stroke with: the width in shape units, or, when the transform makes it narrower than the minimum in
+    /// every direction, the minimum in pixels, so a hairline is a pixel wide whichever way the transform stretches.
+    /// </summary>
+    private (float Width, bool InPixels) Pen(float width, in Matrix3x2 transform)
     {
         if (!(width >= 0 && float.IsFinite(width)))
         {
             throw new ArgumentOutOfRangeException(nameof(width), width, "The width must be finite and not negative.");
         }
 
-        float scale = Stroker.Scale(transform);
-        return scale > 0 && width * scale < _minimumStrokeWidth ? _minimumStrokeWidth / scale : width;
+        return width * Stroker.Stretch(transform) < _minimumStrokeWidth ? (_minimumStrokeWidth, true) : (width, false);
     }
 
     private void Paint(Rgba32 color, FillRule rule)

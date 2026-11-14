@@ -344,8 +344,9 @@ public sealed class ImagePipeline
     {
         using Parallelism.Scope scope = Parallelism.Use(_parallelism);
         // When a resize comes before anything that needs every pixel (a crop), the decoder learns its target and may
-        // decode smaller (JPEG shrink-on-load).
-        DecodeOptions options = ShrinkTarget(_steps) is { } target ? _options.WithShrinkTarget(target) : _options;
+        // decode smaller (JPEG shrink-on-load). The steps decide alone: DecodeOptions.ShrinkTo is for Image.Decode.
+        Func<int, int, (int Width, int Height)>? target = ShrinkTarget(_steps);
+        DecodeOptions options = target is null && _options.ShrinkTo is null ? _options : _options.WithShrinkTarget(target);
         (Image image, bool owned) = await _source.OpenAsync(options, cancellationToken).ConfigureAwait(false);
         try
         {

@@ -83,12 +83,12 @@ public sealed class DecodeOptions
     }
 
     /// <summary>
-    /// The box the image will be fitted into afterwards, in the upright orientation, or <see langword="null"/> (the
-    /// default) to decode at full size. A decoder that can decode smaller cheaply then does: JPEG at 1/2, 1/4 or 1/8 of
+    /// The box the image will be fitted into afterwards, in the upright orientation (as stored, when
+    /// <see cref="ApplyOrientation"/> is off), or <see langword="null"/> (the default) to decode at full size. A decoder that can decode smaller cheaply then does: JPEG at 1/2, 1/4 or 1/8 of
     /// its size, staying at least twice the fitted size so a resize keeps its quality, as <see cref="ImagePipeline"/>
     /// does before a <c>Fit</c>. Codecs from other packages see it as <see cref="CodecContext.ShrinkTo"/>. Other formats
     /// decode at full size: decoding never resizes, so the result is whatever size the decoder chose. Fit it with
-    /// <see cref="Image.Fit"/>.
+    /// <see cref="Image.Fit"/>. <see cref="ImagePipeline"/> ignores it: its own steps say what size it needs.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">A side is less than 1.</exception>
     /// <example>
@@ -144,7 +144,6 @@ public sealed class DecodeOptions
         ApplyOrientation = ApplyOrientation,
         MaxDegreeOfParallelism = MaxDegreeOfParallelism,
         Codecs = Codecs,
-        ShrinkTo = ShrinkTo,
-        ShrinkTarget = target,
+        ShrinkTarget = target, // not ShrinkTo: the target given replaces it, even when null
     };
 }
