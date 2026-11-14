@@ -69,6 +69,8 @@ using (var grey = new Image(1, 1, PixelFormat.L8))
     rgb.GetRow<Rgb24>(0)[0] = new Rgb24(1, 2, 3);
     grey.GetRow<L8>(0)[0] = new L8(9);
     Check("image other pixel types", bgra.GetPixelBytes()[0] == 3 && rgb.Stride == 3 && grey.GetPixelBytes()[0] == 9);
+    using Image converted = bgra.Convert(PixelFormat.Rgb24);
+    Check("image convert", bgra.IsOpaque() && converted.GetRow<Rgb24>(0)[0] == new Rgb24(1, 2, 3));
 }
 
 // PNG: encode, decode synchronously and through a stream that can't seek, and refuse damage.

@@ -5,3 +5,5 @@ static Zorg.Imaging.Image.Identify(System.ReadOnlyMemory<byte> data, Zorg.Imagin
 static Zorg.Imaging.ImagePipeline.Load(System.ReadOnlyMemory<byte> data) -> Zorg.Imaging.ImagePipeline!
 Zorg.Imaging.DecodeOptions.ShrinkTo.get -> (int Width, int Height)?
 Zorg.Imaging.DecodeOptions.ShrinkTo.init -> void
+Zorg.Imaging.Image.Convert(Zorg.Imaging.PixelFormat format) -> Zorg.Imaging.Image!
+Zorg.Imaging.Image.IsOpaque() -> bool

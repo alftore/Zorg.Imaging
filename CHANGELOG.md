@@ -5,7 +5,9 @@
 Added:
 
 - `Image.Decode`, `Image.Identify`, `AnimationReader.Open` and `ImagePipeline.Load` take a `ReadOnlyMemory<byte>` too, for a file that is part of a larger buffer: no copy into its own array. Existing `byte[]` calls are unchanged.
-- `DecodeOptions.ShrinkTo`: shrink-on-load without the pipeline. Given the box the image will be fitted into, a JPEG (or a codec from another package that can) decodes at 1/2, 1/4 or 1/8 size, still at least twice the box. A 12 MP JPEG for a 400 x 300 thumbnail decodes in 36 ms instead of 63 (one core). Other formats decode at full size.
+- `DecodeOptions.ShrinkTo`: shrink-on-load without the pipeline. Given the box the image will be fitted into, a JPEG (or a codec from another package that can) decodes at 1/2, 1/4 or 1/8 size, still at least twice the box. A 12 MP JPEG for a 400 x 300 thumbnail decodes and fits in 43 ms instead of 132 (one core). Other formats decode at full size.
+- `Image.Convert(PixelFormat)` converts the pixels to another layout: 8 to 16 bits and back exactly, colour to grey by Rec. 709 luma. Dropping alpha works only when every pixel is opaque; otherwise it throws and points at `Flatten`, so colour never shifts unasked. `Rgba32` to `Rgb24` takes 6 ms for 12 MP.
+- `Image.IsOpaque()` tells whether any pixel is transparent or translucent, for files whose alpha channel is there but unused (`ImageInfo.HasAlpha` says only that the file could hold transparency). About 3 ms for 12 MP.
 
 ## 0.3.0
 

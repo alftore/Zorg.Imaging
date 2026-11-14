@@ -8,6 +8,27 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-14: shrink-on-load without the pipeline, `Convert` and `IsOpaque`
+
+New calls for programs that decode once and handle the pixels themselves, such as a PDF writer. Nothing the library
+already did runs differently. One core, a 4000 x 3000 image, best of seven runs:
+
+| | Time |
+|---|---:|
+| JPEG to 400 x 300: `Decode`, then `Fit` | 132 ms |
+| The same with `DecodeOptions.ShrinkTo = (400, 300)` (decodes at 1/4) | 43 ms |
+| `IsOpaque()`, `Rgba32` / `Rgba64` | 2.6 / 5.2 ms |
+| `Convert`, `Rgba32` to `Rgb24` (alpha checked in the same pass) | 5.9 ms |
+| `Convert`, `Rgba32` to `Bgra32` | 7.0 ms |
+| `Convert`, `Rgba32` to `Rgba64` | 43 ms |
+| `Convert`, `Rgba64` to `Rgb24` | 54 ms |
+| `Convert`, `Rgba32` to `L8` | 64 ms |
+| For scale: decoding the same picture from PNG | 167 ms |
+
+The common 8-bit pairs have vector paths; the rest go through 16-bit RGBA one row at a time. The first version of the
+vector paths took 11 ms for `Rgba32` to `Rgb24`: slicing the spans for every 16 bytes cost more than the shuffle.
+Loading and storing through a reference, with the bounds checked once per call, halved it.
+
 ## 2026-11-14: 256 colours in Oklab, with transparency, and faster
 
 Pictures with partly transparent pixels are now reduced in Oklab too: each colour as six lanes, its Oklab over black
