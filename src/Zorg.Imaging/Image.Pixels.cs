@@ -78,6 +78,13 @@ public sealed partial class Image : IDisposable
     internal Metadata.SourceMetadata? SourceMetadata { get; set; }
 
     /// <summary>
+    /// Set when the decoder kept a CMYK file's inks (<see cref="DecodeOptions.KeepInks"/>): the pixels are C, M, Y and K
+    /// in the four bytes of each <see cref="PixelFormat.Rgba32"/> pixel, and this is the file's CMYK ICC profile, empty
+    /// when it has none.
+    /// </summary>
+    internal byte[]? InkProfile { get; set; }
+
+    /// <summary>
     /// The metadata the image was decoded with (EXIF, XMP and IPTC, and the facts most wanted from them), or
     /// <see langword="null"/> when the file had none or the image was made in code. Operations carry it to the images
     /// they make. Encoders write it back only when their <see cref="MetadataOptions"/> say so.

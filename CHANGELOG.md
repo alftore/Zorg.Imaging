@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Added:
+
+- `Image.DecodeCmyk` decodes a CMYK JPEG (YCCK included) or separated TIFF as its inks instead of sRGB: a `CmykImage` of four planes, 0 no ink to 255 full, with the file's CMYK profile, for print work such as a PDF's `DeviceCMYK`. `Map` resizes, crops or turns every plane alike, `ToInterleaved` gives C, M, Y, K per pixel and `ToSrgb` converts for the screen. Shrink-on-load and orientation work as for `Decode`, and it takes the same time. See [docs/cmyk.md](docs/cmyk.md).
+
 ## 0.4.0
 
 What a program that handles the pixels itself needs, asked for by Zorg.Pdf: reading an image out of a larger buffer without copying it, shrink-on-load without the pipeline, converting between pixel layouts, and telling whether an alpha channel is used. And a canvas, new and experimental, for page previews, charts and badges. Everything the library already did gives the same output at the same speed as 0.3.0.

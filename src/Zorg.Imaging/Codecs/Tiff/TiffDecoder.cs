@@ -34,6 +34,7 @@ internal static class TiffDecoder
         ReadOnlyMemory<byte> file = await ReadAllAsync(reader, options.Limits, cancellationToken).ConfigureAwait(false);
         TiffDirectory directory = TiffDirectory.Read(file.Span, options.Limits);
         Image image = Decode(file, directory, options);
+        bool inks = options.KeepInks && directory.Photometric == TiffDirectory.Separated;
         if (options.ApplyOrientation && directory.Orientation is > 1 and <= 8)
         {
             try
@@ -49,6 +50,7 @@ internal static class TiffDecoder
             }
         }
 
+        image.InkProfile = inks ? directory.IccProfile ?? [] : null;
         return image;
     }
 
@@ -317,6 +319,11 @@ internal static class TiffDecoder
             natural = alpha ? PixelFormat.Rgba32 : PixelFormat.Rgb24;
         }
 
+        if (options.KeepInks && d.Photometric == TiffDirectory.Separated)
+        {
+            return Inks(pixels, d, width, height, samples, sixteen);
+        }
+
         // Read every pixel as 16-bit RGBA, straight alpha, then write it in the format asked for.
         var result = new Image(width, height, natural) { ColorSpace = colorSpace };
         try
@@ -392,6 +399,29 @@ internal static class TiffDecoder
             using (result)
             {
                 return Convert(result, options.PixelFormat);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>A separated (CMYK) TIFF's inks as they are, C, M, Y and K in four bytes, 0 no ink to 255 full.</summary>
+    private static Image Inks(byte[] pixels, TiffDirectory d, int width, int height, int samples, bool sixteen)
+    {
+        int maximum = sixteen ? 65535 : d.Bits < 8 ? (1 << d.Bits) - 1 : 255;
+        int sampleBytes = sixteen ? 2 : 1;
+        var result = new Image(width, height, PixelFormat.Rgba32);
+        for (int y = 0; y < height; y++)
+        {
+            ReadOnlySpan<byte> source = pixels.AsSpan((int)((long)y * width * samples * sampleBytes), width * samples * sampleBytes);
+            Span<byte> row = result.GetRowBytes(y);
+            for (int x = 0; x < width; x++)
+            {
+                for (int s = 0; s < 4; s++)
+                {
+                    int v = Sample(source, samples, sixteen, x, s);
+                    row[(4 * x) + s] = (byte)(maximum == 255 ? v : ((v * 255) + (maximum / 2)) / maximum);
+                }
             }
         }
 

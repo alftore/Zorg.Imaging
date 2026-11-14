@@ -104,6 +104,7 @@ internal static class TiffHeaderReader
             HasIccProfile = icc,
             HasExif = exif,
             ColorSpace = options.ReadColorSpace && !icc ? ColorSpace.Srgb : null,
+            IsCmyk = photometric == 5,
         };
     }
 }

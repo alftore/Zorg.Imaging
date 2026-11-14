@@ -16,8 +16,9 @@ namespace Zorg.Imaging.Codecs.Jpeg;
 /// three components are YCbCr of the inverted C, M and Y; without the marker the values are ink as they are.
 /// </para>
 /// <para>
-/// There is no CMYK pixel format, so the result is always sRGB: converted by the profile's own perceptual table, which
-/// is what the profile says the colours are, or by the device formula when there is no profile to say.
+/// There is no CMYK pixel format, so the result is sRGB: converted by the profile's own perceptual table, which is what
+/// the profile says the colours are, or by the device formula when there is no profile to say. For
+/// <see cref="Image.DecodeCmyk"/> it is the inks themselves, in the four bytes of each pixel.
 /// </para>
 /// </remarks>
 internal sealed class JpegCmyk
@@ -26,11 +27,15 @@ internal sealed class JpegCmyk
     private readonly IccLookup? _profile;
     private readonly Quantizer _encode = TransferFunction.For(ColorSpace.Srgb).Encoder(sixteen: false);
 
-    private JpegCmyk(Storage storage, IccLookup? profile)
+    private JpegCmyk(Storage storage, IccLookup? profile, bool keepInks)
     {
         _storage = storage;
         _profile = profile;
+        KeepInks = keepInks;
     }
+
+    /// <summary>Whether <see cref="WriteRow"/> writes the inks themselves, C, M, Y, K in four bytes, instead of sRGB.</summary>
+    public bool KeepInks { get; }
 
     /// <summary>How the four components hold the inks.</summary>
     public enum Storage
@@ -46,7 +51,7 @@ internal sealed class JpegCmyk
     }
 
     /// <summary>The conversion for a file's Adobe transform (-1 when it has no Adobe marker) and its ICC profile.</summary>
-    public static JpegCmyk For(int adobeTransform, ReadOnlySpan<byte> profile)
+    public static JpegCmyk For(int adobeTransform, ReadOnlySpan<byte> profile, bool keepInks = false)
     {
         Storage storage = adobeTransform switch
         {
@@ -56,12 +61,12 @@ internal sealed class JpegCmyk
         };
 
         IccLookup? lookup = null;
-        if (!profile.IsEmpty && IccProfileReader.Read(profile) is { LutChannels: 4, Lut: { } lut })
+        if (!keepInks && !profile.IsEmpty && IccProfileReader.Read(profile) is { LutChannels: 4, Lut: { } lut })
         {
             lookup = IccLookup.Build(lut, ColourMath.Invert(ColourMath.RgbToPcs(ColourMath.Chromaticities(1)!)));
         }
 
-        return new JpegCmyk(storage, lookup);
+        return new JpegCmyk(storage, lookup, keepInks);
     }
 
     /// <summary>Whether a profile does the conversion (otherwise the device formula).</summary>
@@ -70,6 +75,17 @@ internal sealed class JpegCmyk
     /// <summary>Writes one row: four planes' samples in, pixels in <paramref name="format"/> out.</summary>
     public void WriteRow(byte[][] rows, Span<byte> output, PixelFormat format, int width)
     {
+        if (KeepInks)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                (int c, int m, int y, int k) = Inks(rows[0][x], rows[1][x], rows[2][x], rows[3][x]);
+                (output[4 * x], output[(4 * x) + 1], output[(4 * x) + 2], output[(4 * x) + 3]) = ((byte)c, (byte)m, (byte)y, (byte)k);
+            }
+
+            return;
+        }
+
         Span<float> device = stackalloc float[4];
         for (int x = 0; x < width; x++)
         {
