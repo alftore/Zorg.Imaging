@@ -8,12 +8,23 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-14: the everyday paths after the new calls and the canvas
+
+One core, best of nine, `main` and the branch alternated twice: a 12 MP JPEG to a 400 x 300 thumbnail through the
+pipeline, a 12 MP PNG decode, and JPEG and PNG encodes of a 1000 x 750 photo. Every number is within run-to-run noise:
+
+| | Thumbnail | PNG decode | JPEG encode | PNG encode |
+|---|---:|---:|---:|---:|
+| Before, two runs (ms) | 44.3, 43.5 | 161.5, 165.2 | 12.6, 13.0 | 76.6, 80.8 |
+| After, two runs (ms) | 41.5, 43.3 | 162.9, 160.8 | 12.7, 12.8 | 77.2, 77.2 |
+
 ## 2026-11-14: the canvas
 
 An A4 page at 150 dpi (1240 x 1754, `Rgb24`): cleared to white, 3,000 fills of a 21-pixel letter of quadratic curves
 with a counter, and 50 rules. 22 ms on one thread, best of seven. With every glyph also stroked 0.03 em wide for synthetic bold, 88 ms:
 each curve is cut into short lines, and each line gets a rectangle and each corner a wedge. The core DLL grew 14 KiB (656 to 670); the AOT smoke
-binary, which doesn't draw, stayed at 3398 KiB, since trimming leaves the canvas out.
+binary, which doesn't draw, stayed at 3398 KiB, since trimming leaves the canvas out. Once the smoke test also draws a shape, a stroke and
+an image, it is 3438 KiB: 40 KiB for a program that uses the canvas.
 
 ## 2026-11-14: shrink-on-load without the pipeline, `Convert` and `IsOpaque`
 
