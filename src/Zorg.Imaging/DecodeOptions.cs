@@ -137,6 +137,23 @@ public sealed class DecodeOptions
 
     private readonly Func<int, int, (int Width, int Height)>? _shrinkToTarget;
 
+    /// <summary>
+    /// For <see cref="Image.DecodeCmyk"/>: a CMYK file's pixels come out as its inks, C, M, Y and K in the four bytes of
+    /// an <see cref="PixelFormat.Rgba32"/> image, 0 no ink to 255 full, with <see cref="Image.InkProfile"/> set.
+    /// </summary>
+    internal bool KeepInks { get; init; }
+
+    internal DecodeOptions WithInks() => new()
+    {
+        Limits = Limits,
+        ApplyOrientation = ApplyOrientation,
+        MaxDegreeOfParallelism = MaxDegreeOfParallelism,
+        Codecs = Codecs,
+        ShrinkTo = ShrinkTo,
+        ShrinkTarget = ShrinkTarget,
+        KeepInks = true,
+    };
+
     internal DecodeOptions WithShrinkTarget(Func<int, int, (int Width, int Height)>? target) => new()
     {
         Limits = Limits,
@@ -145,5 +162,6 @@ public sealed class DecodeOptions
         MaxDegreeOfParallelism = MaxDegreeOfParallelism,
         Codecs = Codecs,
         ShrinkTarget = target, // not ShrinkTo: the target given replaces it, even when null
+        KeepInks = KeepInks,
     };
 }

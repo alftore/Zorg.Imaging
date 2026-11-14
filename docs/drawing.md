@@ -1,12 +1,7 @@
 # Drawing
 
 `Canvas` draws shapes, lines and images into an `Image`, anti-aliased by exact pixel coverage. It is made for
-previews of pages (PDF), charts and badges. It is new: the API may change, or move to a package of its own, so using it
-needs the diagnostic `ZORGDRAW` suppressed.
-
-```xml
-<NoWarn>$(NoWarn);ZORGDRAW</NoWarn>
-```
+previews of pages (PDF), charts and badges.
 
 ```csharp
 using System.Numerics;

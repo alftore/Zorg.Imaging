@@ -77,7 +77,8 @@ internal static class JpegOutput
         int width = JpegFrame.DivideUp((long)frame.Width * scale, 8);
         int height = JpegFrame.DivideUp((long)frame.Height * scale, 8);
         bool grey = frame.Components.Length == 1;
-        PixelFormat format = requested != PixelFormat.None ? requested : grey ? PixelFormat.L8 : PixelFormat.Rgb24;
+        PixelFormat format = cmyk is { KeepInks: true } ? PixelFormat.Rgba32
+            : requested != PixelFormat.None ? requested : grey ? PixelFormat.L8 : PixelFormat.Rgb24;
         var image = new Image(width, height, format);
         try
         {

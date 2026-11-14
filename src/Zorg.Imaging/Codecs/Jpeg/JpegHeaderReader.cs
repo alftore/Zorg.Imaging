@@ -100,6 +100,7 @@ internal static class JpegHeaderReader
                     HasExif = hasExif,
                     HasIccProfile = hasIcc,
                     ColorSpace = colorSpace,
+                    IsCmyk = scratch[5] == 4,
                 };
             }
 

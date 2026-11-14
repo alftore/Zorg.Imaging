@@ -92,6 +92,9 @@ public sealed class ImageInfo
     /// <example><code>bool exif = info.HasExif;</code></example>
     public bool HasExif { get; init; }
 
+    /// <summary>Whether the pixels are CMYK ink (a four-component JPEG or a separated TIFF), for <see cref="Image.DecodeCmyk"/>.</summary>
+    internal bool IsCmyk { get; init; }
+
     private bool SwapsAxes => Orientation is >= 5 and <= 8;
 
     /// <summary>Returns the format and display size, such as <c>JPEG 3024x4032</c>.</summary>

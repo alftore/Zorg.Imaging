@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics.CodeAnalysis;
 
 namespace Zorg.Imaging.Drawing;
 
@@ -17,7 +16,6 @@ namespace Zorg.Imaging.Drawing;
 /// canvas.Fill(triangle, new Rgba32(200, 0, 0));
 /// </code>
 /// </example>
-[Experimental(Canvas.Diagnostic)]
 public sealed class Shape
 {
     internal const byte Move = 0;

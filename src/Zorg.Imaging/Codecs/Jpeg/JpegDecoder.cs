@@ -171,10 +171,13 @@ internal static class JpegDecoder
         reader.Finish();
         ColorSpace colorSpace = state.ResolveColorSpace();
         JpegCmyk? cmyk = null;
+        byte[]? inkProfile = null;
         if (state.Frame.Components.Length == 4)
         {
-            // There is no CMYK pixel format: the pixels come out as sRGB, through the profile when there is one.
-            cmyk = JpegCmyk.For(state.AdobeTransform, colorSpace.IccProfile.Span);
+            // There is no CMYK pixel format: the pixels come out as sRGB, through the profile when there is one, or,
+            // for Image.DecodeCmyk, as the inks themselves.
+            cmyk = JpegCmyk.For(state.AdobeTransform, colorSpace.IccProfile.Span, options.KeepInks);
+            inkProfile = options.KeepInks ? colorSpace.IccProfile.ToArray() : null;
             colorSpace = ColorSpace.Srgb;
         }
 
@@ -193,6 +196,7 @@ internal static class JpegDecoder
 
             Image result = image;
             image = null;
+            result.InkProfile = inkProfile;
             return result;
         }
         finally
