@@ -41,3 +41,5 @@ Zorg.Imaging.Image.IsOpaque() -> bool
 [ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Stroke(Zorg.Imaging.Drawing.Shape! shape, float width, Zorg.Imaging.Rgba32 color) -> void
 [ZORGDRAW]Zorg.Imaging.Drawing.Canvas.Stroke(Zorg.Imaging.Drawing.Shape! shape, float width, Zorg.Imaging.Rgba32 color, in System.Numerics.Matrix3x2 transform) -> void
 [ZORGDRAW]Zorg.Imaging.Drawing.Canvas.StrokeLine(float x1, float y1, float x2, float y2, float width, Zorg.Imaging.Rgba32 color) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.DrawImage(Zorg.Imaging.Image! image, float x, float y, float width, float height, Zorg.Imaging.Resampler? resampler = null, double opacity = 1) -> void
+[ZORGDRAW]Zorg.Imaging.Drawing.Canvas.DrawImage(Zorg.Imaging.Image! image, in System.Numerics.Matrix3x2 transform, Zorg.Imaging.Resampler? resampler = null, double opacity = 1) -> void

@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
-using System.Runtime.InteropServices;
 
 namespace Zorg.Imaging.Drawing;
 
@@ -320,6 +319,113 @@ public sealed class Canvas : IDisposable
         Paint(color, FillRule.NonZero);
     }
 
+    /// <summary>Draws an image into a rectangle, stretched to fill it.</summary>
+    /// <param name="image">The image to draw. It isn't changed.</param>
+    /// <param name="x">The rectangle's left edge, before <see cref="Transform"/>.</param>
+    /// <param name="y">The rectangle's top edge.</param>
+    /// <param name="width">The rectangle's width.</param>
+    /// <param name="height">The rectangle's height.</param>
+    /// <param name="resampler">
+    /// How a smaller image is made first, when the rectangle is smaller than the image; <see langword="null"/> for
+    /// <see cref="Resampler.Lanczos3"/>, in linear light as <see cref="Image.Resize"/> does. Otherwise pixels are sampled
+    /// bilinearly, or, with <see cref="Resampler.Nearest"/>, as blocks.
+    /// </param>
+    /// <param name="opacity">How opaque the image is drawn, more than 0 and at most 1.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="image"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A value isn't finite, or <paramref name="opacity"/> is out of range.</exception>
+    /// <exception cref="ArgumentException"><paramref name="image"/> has another colour space than the canvas.</exception>
+    /// <exception cref="ObjectDisposedException">Either image has been disposed.</exception>
+    /// <example><code>canvas.DrawImage(photo, 40, 300, 200, 150);</code></example>
+    [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Four floats and a Matrix3x2 can't be mistaken for each other.")]
+    public void DrawImage(Image image, float x, float y, float width, float height, Resampler? resampler = null, double opacity = 1)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        foreach (float value in (ReadOnlySpan<float>)[x, y, width, height])
+        {
+            if (!float.IsFinite(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(x), value, "The rectangle must be finite.");
+            }
+        }
+
+        _ = image.GetPixelBytes();
+        DrawImage(image, Matrix3x2.CreateScale(width / image.Width, height / image.Height) * Matrix3x2.CreateTranslation(x, y), resampler, opacity);
+    }
+
+    /// <summary>
+    /// Draws an image through a transform from its pixels (0 to its width across, 0 to its height down) to the canvas's
+    /// units: scaled, turned, sheared or mirrored, with anti-aliased edges.
+    /// </summary>
+    /// <param name="image">The image to draw. It isn't changed.</param>
+    /// <param name="transform">From the image's pixels to the canvas's units, applied before <see cref="Transform"/>.</param>
+    /// <param name="resampler">
+    /// How a smaller image is made first, when the transform shrinks it; <see langword="null"/> for
+    /// <see cref="Resampler.Lanczos3"/>. Otherwise pixels are sampled bilinearly, or, with <see cref="Resampler.Nearest"/>,
+    /// as blocks.
+    /// </param>
+    /// <param name="opacity">How opaque the image is drawn, more than 0 and at most 1.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="image"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An element of <paramref name="transform"/> isn't finite, or <paramref name="opacity"/> is out of range.</exception>
+    /// <exception cref="ArgumentException"><paramref name="image"/> has another colour space than the canvas, or the transform overflows a float.</exception>
+    /// <exception cref="ObjectDisposedException">Either image has been disposed.</exception>
+    /// <example><code>canvas.DrawImage(logo, Matrix3x2.CreateRotation(0.2f) * Matrix3x2.CreateTranslation(100, 50));</code></example>
+    [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Four floats and a Matrix3x2 can't be mistaken for each other.")]
+    public void DrawImage(Image image, in Matrix3x2 transform, Resampler? resampler = null, double opacity = 1)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        Finite(transform, nameof(transform));
+        if (!(opacity > 0 && opacity <= 1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(opacity), opacity, "The opacity must be more than 0 and at most 1.");
+        }
+
+        _ = image.GetPixelBytes();
+        _ = Image.GetPixelBytes();
+        if (!image.ColorSpace.Equals(Image.ColorSpace))
+        {
+            throw new ArgumentException($"The image is {image.ColorSpace} and the canvas {Image.ColorSpace}. Call ToSrgb on the image first.", nameof(image));
+        }
+
+        Matrix3x2 whole = transform * _transform;
+        bool nearest = ReferenceEquals(resampler, Resampler.Nearest);
+
+        // Shrinking: make a smaller image first, about the size it will cover, so no pixel is skipped.
+        float across = new Vector2(whole.M11, whole.M12).Length() * image.Width;
+        float down = new Vector2(whole.M21, whole.M22).Length() * image.Height;
+        int width = image.Width, height = image.Height;
+        if (!nearest && (across < width * 0.99f || down < height * 0.99f))
+        {
+            width = (int)Math.Clamp(MathF.Ceiling(Math.Min(across, width)), 1, width);
+            height = (int)Math.Clamp(MathF.Ceiling(Math.Min(down, height)), 1, height);
+        }
+
+        Image? smaller = width == image.Width && height == image.Height ? null : image.Resize(width, height, resampler);
+        try
+        {
+            Image source = smaller ?? image;
+            Matrix3x2 place = Matrix3x2.CreateScale((float)image.Width / width, (float)image.Height / height) * whole;
+            if (!Matrix3x2.Invert(place, out Matrix3x2 back))
+            {
+                return; // squashed to a line: covers nothing
+            }
+
+            _rasterizer.Reset();
+            Vector2 a = Rasterizer.ToPixels(Vector2.Zero, place), b = Rasterizer.ToPixels(new Vector2(width, 0), place);
+            Vector2 c = Rasterizer.ToPixels(new Vector2(width, height), place), d = Rasterizer.ToPixels(new Vector2(0, height), place);
+            _rasterizer.AddLine(a, b);
+            _rasterizer.AddLine(b, c);
+            _rasterizer.AddLine(c, d);
+            _rasterizer.AddLine(d, a);
+            var painter = new ImagePainter(source, Image.PixelFormat, back, nearest, (float)opacity);
+            Image target = Image;
+            _rasterizer.Render(_clipLeft, _clipTop, _clipRight, _clipBottom, FillRule.NonZero, (row, left, coverage) => painter.Blend(target.GetRowBytes(row), row, left, coverage));
+        }
+        finally
+        {
+            smaller?.Dispose();
+        }
+    }
+
     /// <summary>Returns the canvas's working memory to the pool. The image stays as drawn.</summary>
     /// <example><code>canvas.Dispose();</code></example>
     public void Dispose() => _rasterizer.Dispose();
@@ -415,57 +521,73 @@ public sealed class Canvas : IDisposable
             }
         }
 
-        private Vector4 Read(ReadOnlySpan<byte> row, int at)
-        {
-            const float Byte = 1f / 255, Word = 1f / 65535;
-            ReadOnlySpan<ushort> wide = _format is PixelFormat.L16 or PixelFormat.Rgb48 or PixelFormat.Rgba64
-                ? MemoryMarshal.Cast<byte, ushort>(row.Slice(at, _solid.Length))
-                : default;
-            return _format switch
-            {
-                PixelFormat.L8 => new Vector4(row[at] * Byte, row[at] * Byte, row[at] * Byte, 1),
-                PixelFormat.L16 => new Vector4(wide[0] * Word, wide[0] * Word, wide[0] * Word, 1),
-                PixelFormat.Rgb24 => new Vector4(row[at], row[at + 1], row[at + 2], 255) * Byte,
-                PixelFormat.Rgba32 => new Vector4(row[at], row[at + 1], row[at + 2], row[at + 3]) * Byte,
-                PixelFormat.Bgra32 => new Vector4(row[at + 2], row[at + 1], row[at], row[at + 3]) * Byte,
-                PixelFormat.Rgb48 => new Vector4(wide[0], wide[1], wide[2], 65535) * Word,
-                _ => new Vector4(wide[0], wide[1], wide[2], wide[3]) * Word,
-            };
-        }
+        private Vector4 Read(ReadOnlySpan<byte> row, int at) => Pixels.Read(_format, row, at);
 
-        private void Write(Span<byte> row, int at, Vector4 p)
+        private void Write(Span<byte> row, int at, Vector4 p) => Pixels.Write(_format, row, at, p);
+    }
+
+    /// <summary>Blends an image, sampled through the inverse transform at each pixel's centre, into rows of the canvas.</summary>
+    private sealed class ImagePainter(Image source, PixelFormat target, Matrix3x2 back, bool nearest, float opacity)
+    {
+        private readonly int _size = Image.GetBytesPerPixel(target);
+        private readonly bool _grey = target is PixelFormat.L8 or PixelFormat.L16;
+
+        public void Blend(Span<byte> row, int y, int left, ReadOnlySpan<float> coverage)
         {
-            Span<ushort> wide = _format is PixelFormat.L16 or PixelFormat.Rgb48 or PixelFormat.Rgba64
-                ? MemoryMarshal.Cast<byte, ushort>(row.Slice(at, _solid.Length))
-                : default;
-            switch (_format)
+            for (int i = 0; i < coverage.Length; i++)
             {
-                case PixelFormat.L8:
-                    row[at] = To8(p.X);
-                    break;
-                case PixelFormat.L16:
-                    wide[0] = To16(p.X);
-                    break;
-                case PixelFormat.Rgb24:
-                    (row[at], row[at + 1], row[at + 2]) = (To8(p.X), To8(p.Y), To8(p.Z));
-                    break;
-                case PixelFormat.Rgba32:
-                    (row[at], row[at + 1], row[at + 2], row[at + 3]) = (To8(p.X), To8(p.Y), To8(p.Z), To8(p.W));
-                    break;
-                case PixelFormat.Bgra32:
-                    (row[at + 2], row[at + 1], row[at], row[at + 3]) = (To8(p.X), To8(p.Y), To8(p.Z), To8(p.W));
-                    break;
-                case PixelFormat.Rgb48:
-                    (wide[0], wide[1], wide[2]) = (To16(p.X), To16(p.Y), To16(p.Z));
-                    break;
-                default:
-                    (wide[0], wide[1], wide[2], wide[3]) = (To16(p.X), To16(p.Y), To16(p.Z), To16(p.W));
-                    break;
+                float cover = coverage[i];
+                if (cover <= 0)
+                {
+                    continue;
+                }
+
+                Vector2 at = Vector2.Transform(new Vector2(left + i + 0.5f, y + 0.5f), back);
+                Vector4 colour = nearest ? Nearest(at) : Bilinear(at);
+                if (_grey)
+                {
+                    float luma = (0.2126f * colour.X) + (0.7152f * colour.Y) + (0.0722f * colour.Z);
+                    colour = new Vector4(luma, luma, luma, colour.W);
+                }
+
+                int offset = (left + i) * _size;
+                float alpha = colour.W * Math.Min(cover, 1) * opacity;
+                if (alpha >= 1)
+                {
+                    Pixels.Write(target, row, offset, colour);
+                    continue;
+                }
+
+                Vector4 under = Pixels.Read(target, row, offset);
+                float behind = under.W * (1 - alpha);
+                float total = alpha + behind;
+                Vector3 mixed = total > 0
+                    ? ((new Vector3(colour.X, colour.Y, colour.Z) * alpha) + (new Vector3(under.X, under.Y, under.Z) * behind)) / total
+                    : Vector3.Zero;
+                Pixels.Write(target, row, offset, new Vector4(mixed, total));
             }
         }
 
-        private static byte To8(float v) => (byte)Math.Clamp((v * 255) + 0.5f, 0, 255);
+        private Vector4 Pixel(int x, int y)
+        {
+            x = Math.Clamp(x, 0, source.Width - 1);
+            y = Math.Clamp(y, 0, source.Height - 1);
+            return Pixels.Read(source.PixelFormat, source.GetRowBytes(y), x * source.BytesPerPixel);
+        }
 
-        private static ushort To16(float v) => (ushort)Math.Clamp((v * 65535) + 0.5f, 0, 65535);
+        private Vector4 Nearest(Vector2 at) => Pixel((int)MathF.Floor(at.X), (int)MathF.Floor(at.Y));
+
+        /// <summary>Bilinear between the four nearest pixel centres, premultiplied so transparent pixels lend no colour.</summary>
+        private Vector4 Bilinear(Vector2 at)
+        {
+            float u = at.X - 0.5f, v = at.Y - 0.5f;
+            int x0 = (int)MathF.Floor(u), y0 = (int)MathF.Floor(v);
+            float fx = u - x0, fy = v - y0;
+            Vector4 sum = (Premultiplied(Pixel(x0, y0)) * (1 - fx) * (1 - fy)) + (Premultiplied(Pixel(x0 + 1, y0)) * fx * (1 - fy))
+                + (Premultiplied(Pixel(x0, y0 + 1)) * (1 - fx) * fy) + (Premultiplied(Pixel(x0 + 1, y0 + 1)) * fx * fy);
+            return sum.W > 0 ? new Vector4(new Vector3(sum.X, sum.Y, sum.Z) / sum.W, sum.W) : Vector4.Zero;
+        }
+
+        private static Vector4 Premultiplied(Vector4 p) => new(p.X * p.W, p.Y * p.W, p.Z * p.W, p.W);
     }
 }

@@ -1,8 +1,8 @@
 # Drawing
 
-`Canvas` draws filled shapes into an `Image`, anti-aliased by exact pixel coverage. It is made for previews of pages
-(PDF), charts and badges: shapes, rectangles, lines and outlines, and later placed images. It is new: the API may change, or
-move to a package of its own, so using it needs the diagnostic `ZORGDRAW` suppressed.
+`Canvas` draws shapes, lines and images into an `Image`, anti-aliased by exact pixel coverage. It is made for
+previews of pages (PDF), charts and badges. It is new: the API may change, or move to a package of its own, so using it
+needs the diagnostic `ZORGDRAW` suppressed.
 
 ```xml
 <NoWarn>$(NoWarn);ZORGDRAW</NoWarn>
@@ -22,6 +22,7 @@ canvas.Fill(triangle, new Rgba32(200, 30, 30));
 canvas.Fill(Shape.Ellipse(280, 150, 80, 60), new Rgba32(30, 90, 200, 180)); // translucent
 canvas.StrokeLine(20, 260, 380, 260, 0, new Rgba32(0, 0, 0)); // a hairline rule
 canvas.Stroke(triangle, 4, new Rgba32(0, 0, 0)); // its outline, with round corners
+canvas.DrawImage(photo, 220, 20, 160, 100); // a photo, shrunk to fit
 
 page.SaveAsPng(output);
 ```
@@ -57,6 +58,14 @@ Widths are in the shape's units and scale with the transform, as PDF's line widt
 by default, keeps hairlines (width 0) visible, as PDF viewers draw them. A translucent stroke has no darker spots
 where its pieces overlap. Miter and bevel corners and dashes aren't supported.
 
+## Images
+
+`DrawImage` places an image into a rectangle, or through any transform from its pixels: scaled, turned, sheared or
+mirrored, with anti-aliased edges. When the image is drawn smaller than it is, it is first resized with `Resize`
+(Lanczos3 in linear light by default, or the resampler given), so no detail is skipped; then each pixel is sampled
+bilinearly, without letting transparent pixels lend their colour. `Resampler.Nearest` draws pixels as blocks instead,
+for pixel art and enlarged screenshots. The image must have the canvas's colour space.
+
 ## How it looks
 
 Each pixel is covered by exactly the share of its area the shape covers, so a black edge across half a pixel gives grey
@@ -80,5 +89,4 @@ and a curve is cut into at most 1024 lines. `SetClip` limits drawing to a rectan
 ## Not included
 
 Text and fonts (the caller has the glyph outlines), gradients, patterns, dashes, miter corners, clip paths, blend modes
-and layers.
-Each would be a design decision of its own.
+and layers. Each would be a design decision of its own.
