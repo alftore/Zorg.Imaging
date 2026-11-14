@@ -119,7 +119,7 @@ internal static class DecoderFuzz
         }
     }
 
-    /// <summary><see cref="Image.Identify"/> never throws for bad input: it reports it in the result.</summary>
+    /// <summary><see cref="Image.Identify(byte[], IdentifyOptions?)"/> never throws for bad input: it reports it in the result.</summary>
     public static void CheckIdentify(byte[] data, string what)
     {
         Exception? error = Record.Exception(() => Image.Identify(data));

@@ -7,7 +7,7 @@ using Zorg.Imaging.Metadata;
 
 namespace Zorg.Imaging.Codecs.Png;
 
-/// <summary>Reads the PNG (and APNG) headers for <see cref="Image.Identify"/>, from IHDR up to the first IDAT.</summary>
+/// <summary>Reads the PNG (and APNG) headers for <see cref="Image.Identify(byte[], IdentifyOptions?)"/>, from IHDR up to the first IDAT.</summary>
 internal static class PngHeaderReader
 {
     private const uint Ihdr = 0x49484452;

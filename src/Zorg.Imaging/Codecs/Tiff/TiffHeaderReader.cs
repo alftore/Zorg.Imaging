@@ -7,7 +7,7 @@ using Zorg.Imaging.Formats;
 namespace Zorg.Imaging.Codecs.Tiff;
 
 /// <summary>
-/// Reads a TIFF's first directory for <see cref="Image.Identify"/>: it skips ahead to the directory and reads only the
+/// Reads a TIFF's first directory for <see cref="Image.Identify(byte[], IdentifyOptions?)"/>: it skips ahead to the directory and reads only the
 /// values kept in the entries themselves (size, samples, photometric interpretation, extra samples, orientation), so
 /// even a directory at the end of a large file costs the skip and a few hundred bytes.
 /// </summary>

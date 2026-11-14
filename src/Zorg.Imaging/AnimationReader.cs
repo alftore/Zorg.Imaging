@@ -20,7 +20,7 @@ namespace Zorg.Imaging;
 /// <para>
 /// Frames come out as <see cref="PixelFormat.Rgba32"/> unless <see cref="DecodeOptions.PixelFormat"/> asks for another.
 /// A still image, an APNG (its first frame, for now) or a GIF or WebP that isn't animated gives one frame of duration
-/// zero, decoded as <see cref="Image.Decode"/> would.
+/// zero, decoded as <see cref="Image.Decode(byte[], DecodeOptions?)"/> would.
 /// </para>
 /// </remarks>
 /// <example>
@@ -96,6 +96,21 @@ public sealed class AnimationReader : IDisposable
     public static AnimationReader Open(byte[] data, DecodeOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(data);
+        return Open(data.AsMemory(), options);
+    }
+
+    /// <summary>Opens an image file held in a slice of memory.</summary>
+    /// <param name="data">The whole file. It isn't copied, so don't change it while frames are read.</param>
+    /// <param name="options">The limits and options, or <see langword="null"/> for <see cref="DecodeOptions.Default"/>.</param>
+    /// <returns>A reader at the first frame, whose frames <see cref="ReadFrame"/> gives.</returns>
+    /// <exception cref="UnsupportedImageFormatException">The data isn't an image format this version can decode.</exception>
+    /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
+    /// <exception cref="ImageLimitException">The canvas is larger than <see cref="ImageLimits"/> allows.</exception>
+    /// <remarks>The same as <see cref="Open(byte[], DecodeOptions?)"/>, for a file that is part of a larger buffer.</remarks>
+    /// <example><code>AnimationReader reader = AnimationReader.Open(buffer.AsMemory(offset, length));</code></example>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "No argument converts equally well to byte[] and ReadOnlyMemory<byte>: arrays and collection expressions pick byte[], slices and Memory<byte> this one.")]
+    public static AnimationReader Open(ReadOnlyMemory<byte> data, DecodeOptions? options = null)
+    {
         ValueTask<AnimationReader> task = OpenCoreAsync(DataReader.FromMemory(data), options ?? DecodeOptions.Default, sync: true, CancellationToken.None);
         Debug.Assert(task.IsCompleted, "Opening over memory must complete synchronously.");
         return task.GetAwaiter().GetResult();
@@ -130,7 +145,7 @@ public sealed class AnimationReader : IDisposable
         return await OpenCoreAsync(DataReader.FromStream(stream), options ?? DecodeOptions.Default, sync: false, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Reads the next frame of a reader made by <see cref="Open"/>.</summary>
+    /// <summary>Reads the next frame of a reader made by <see cref="Open(byte[], DecodeOptions?)"/>.</summary>
     /// <returns>The frame, which the caller disposes, or <see langword="null"/> after the last.</returns>
     /// <exception cref="InvalidOperationException">The reader was made by <see cref="OpenAsync"/>; use <see cref="ReadFrameAsync"/>.</exception>
     /// <exception cref="ImageFormatException">The file is damaged.</exception>

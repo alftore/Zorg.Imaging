@@ -14,7 +14,7 @@ namespace Zorg.Imaging.Formats;
 /// size, which it checks against <see cref="ImageLimits"/> first, and by the length of the input.
 /// </para>
 /// <para>
-/// Over memory every method completes synchronously, which <see cref="Image.Decode"/> relies on. A stream is read in
+/// Over memory every method completes synchronously, which <see cref="Image.Decode(byte[], DecodeOptions?)"/> relies on. A stream is read in
 /// blocks through an internal buffer, so small reads don't each reach the stream.
 /// </para>
 /// </remarks>

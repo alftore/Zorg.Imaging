@@ -3,7 +3,7 @@ using System.Globalization;
 
 namespace Zorg.Imaging;
 
-/// <summary>What an image's headers say about it, read by <see cref="Image.Identify"/> without decoding any pixels.</summary>
+/// <summary>What an image's headers say about it, read by <see cref="Image.Identify(byte[], IdentifyOptions?)"/> without decoding any pixels.</summary>
 /// <example>
 /// <code>
 /// IdentifyResult result = Image.Identify(bytes);

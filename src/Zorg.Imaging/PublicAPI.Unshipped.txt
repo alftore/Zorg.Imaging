@@ -1,1 +1,5 @@
 #nullable enable
+static Zorg.Imaging.AnimationReader.Open(System.ReadOnlyMemory<byte> data, Zorg.Imaging.DecodeOptions? options = null) -> Zorg.Imaging.AnimationReader!
+static Zorg.Imaging.Image.Decode(System.ReadOnlyMemory<byte> data, Zorg.Imaging.DecodeOptions? options = null) -> Zorg.Imaging.Image!
+static Zorg.Imaging.Image.Identify(System.ReadOnlyMemory<byte> data, Zorg.Imaging.IdentifyOptions? options = null) -> Zorg.Imaging.IdentifyResult!
+static Zorg.Imaging.ImagePipeline.Load(System.ReadOnlyMemory<byte> data) -> Zorg.Imaging.ImagePipeline!

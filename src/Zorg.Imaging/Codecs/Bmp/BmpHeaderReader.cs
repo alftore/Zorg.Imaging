@@ -5,7 +5,7 @@ using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Bmp;
 
-/// <summary>Reads the BMP headers for <see cref="Image.Identify"/>.</summary>
+/// <summary>Reads the BMP headers for <see cref="Image.Identify(byte[], IdentifyOptions?)"/>.</summary>
 internal static class BmpHeaderReader
 {
     /// <summary>Reads the headers. The reader is at offset 0, before the signature.</summary>

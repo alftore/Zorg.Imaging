@@ -8,7 +8,7 @@ using Zorg.Imaging.Metadata;
 namespace Zorg.Imaging.Codecs.Jpeg;
 
 /// <summary>
-/// Reads the JPEG headers for <see cref="Image.Identify"/>, from ITU-T T.81 (marker syntax, frame header) and JFIF.
+/// Reads the JPEG headers for <see cref="Image.Identify(byte[], IdentifyOptions?)"/>, from ITU-T T.81 (marker syntax, frame header) and JFIF.
 /// </summary>
 internal static class JpegHeaderReader
 {

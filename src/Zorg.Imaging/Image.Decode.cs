@@ -25,7 +25,7 @@ public sealed partial class Image
     /// <remarks>
     /// The pixels are turned upright from the file's EXIF orientation unless <see cref="DecodeOptions.ApplyOrientation"/>
     /// is off. Colour values are as stored: colour profiles and gamma aren't applied yet. To check a file without
-    /// decoding it, use <see cref="Identify"/>, which never throws for bad input.
+    /// decoding it, use <see cref="Identify(byte[], IdentifyOptions?)"/>, which never throws for bad input.
     /// </remarks>
     /// <example>
     /// <code>
@@ -36,6 +36,21 @@ public sealed partial class Image
     public static Image Decode(byte[] data, DecodeOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(data);
+        return Decode(data.AsMemory(), options);
+    }
+
+    /// <summary>Decodes an image file held in a slice of memory.</summary>
+    /// <param name="data">The whole file. It isn't copied, so don't change it while decoding.</param>
+    /// <param name="options">The limits and options, or <see langword="null"/> for <see cref="DecodeOptions.Default"/>.</param>
+    /// <returns>The image, which the caller disposes.</returns>
+    /// <exception cref="UnsupportedImageFormatException">The data isn't an image format this version can decode.</exception>
+    /// <exception cref="ImageFormatException">The file is damaged or ends early.</exception>
+    /// <exception cref="ImageLimitException">The image is larger than <see cref="ImageLimits"/> allows.</exception>
+    /// <remarks>The same as <see cref="Decode(byte[], DecodeOptions?)"/>, for a file that is part of a larger buffer.</remarks>
+    /// <example><code>using Image image = Image.Decode(buffer.AsMemory(offset, length));</code></example>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "No argument converts equally well to byte[] and ReadOnlyMemory<byte>: arrays and collection expressions pick byte[], slices and Memory<byte> this one.")]
+    public static Image Decode(ReadOnlyMemory<byte> data, DecodeOptions? options = null)
+    {
         options ??= DecodeOptions.Default;
 
         // Over memory every read completes at once, so the task has already finished.

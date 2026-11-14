@@ -24,7 +24,7 @@ internal static class ImageErrors
 
     extension(ImageException exception)
     {
-        /// <summary>The status that <see cref="Image.Identify"/> reports for this exception.</summary>
+        /// <summary>The status that <see cref="Image.Identify(byte[], IdentifyOptions?)"/> reports for this exception.</summary>
         public IdentifyStatus Status => exception switch
         {
             ImageLimitException => IdentifyStatus.ExceedsLimits,

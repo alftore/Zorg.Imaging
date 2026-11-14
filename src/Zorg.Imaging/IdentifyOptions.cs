@@ -2,7 +2,7 @@ using System;
 
 namespace Zorg.Imaging;
 
-/// <summary>Options for <see cref="Image.Identify"/> and <see cref="Image.IdentifyAsync"/>.</summary>
+/// <summary>Options for <see cref="Image.Identify(byte[], IdentifyOptions?)"/> and <see cref="Image.IdentifyAsync"/>.</summary>
 /// <example>
 /// <code>
 /// var options = new IdentifyOptions { CountFrames = true };

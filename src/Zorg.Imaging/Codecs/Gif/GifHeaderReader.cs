@@ -6,7 +6,7 @@ using Zorg.Imaging.Formats;
 
 namespace Zorg.Imaging.Codecs.Gif;
 
-/// <summary>Reads the GIF headers for <see cref="Image.Identify"/>: the first frame, or every frame when counting.</summary>
+/// <summary>Reads the GIF headers for <see cref="Image.Identify(byte[], IdentifyOptions?)"/>: the first frame, or every frame when counting.</summary>
 internal static class GifHeaderReader
 {
     private const byte Extension = 0x21;

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Added:
+
+- `Image.Decode`, `Image.Identify`, `AnimationReader.Open` and `ImagePipeline.Load` take a `ReadOnlyMemory<byte>` too, for a file that is part of a larger buffer: no copy into its own array. Existing `byte[]` calls are unchanged.
+
 ## 0.3.0
 
 256-colour PNG and GIF look better: colours are chosen the way the eye judges them, and scored with SSIMULACRA 2.1, a perceptual metric, they are now ahead of pngquant and libvips, at about the same speed as 0.2.0. AVIF and HEIC through `Zorg.Imaging.SystemCodecs` gain thumbnails decoded at reduced size, and their EXIF and XMP.

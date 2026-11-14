@@ -2,7 +2,7 @@ using System;
 
 namespace Zorg.Imaging;
 
-/// <summary>Options for <see cref="Image.Decode"/> and <see cref="Image.DecodeAsync"/>.</summary>
+/// <summary>Options for <see cref="Image.Decode(byte[], DecodeOptions?)"/> and <see cref="Image.DecodeAsync"/>.</summary>
 /// <example>
 /// <code>
 /// var options = new DecodeOptions { PixelFormat = PixelFormat.Rgba32 };

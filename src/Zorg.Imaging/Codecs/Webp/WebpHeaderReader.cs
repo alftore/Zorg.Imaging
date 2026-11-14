@@ -8,7 +8,7 @@ using Zorg.Imaging.Metadata;
 namespace Zorg.Imaging.Codecs.Webp;
 
 /// <summary>
-/// Reads the WebP headers for <see cref="Image.Identify"/>, from RFC 9649 (container and lossless) and RFC 6386 (VP8
+/// Reads the WebP headers for <see cref="Image.Identify(byte[], IdentifyOptions?)"/>, from RFC 9649 (container and lossless) and RFC 6386 (VP8
 /// frame header).
 /// </summary>
 internal static class WebpHeaderReader
