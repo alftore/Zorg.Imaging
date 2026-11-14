@@ -1,12 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+256-colour PNG and GIF look better: colours are chosen the way the eye judges them, and scored with SSIMULACRA 2.1, a perceptual metric, they are now ahead of pngquant and libvips, at about the same speed as 0.2.0. AVIF and HEIC through `Zorg.Imaging.SystemCodecs` gain thumbnails decoded at reduced size, and their EXIF and XMP.
+
+Added:
 
 - `Zorg.Imaging.SystemCodecs` decodes thumbnails at 1/2, 1/4 or 1/8 size when the pipeline shrinks the picture anyway, as JPEG does: a 48 MP phone photo no longer needs its full-size pixels to make a thumbnail.
 - `Zorg.Imaging.SystemCodecs` passes the file's EXIF and XMP on: `image.Metadata` reads them, and encoders keep them only when `MetadataOptions` asks (stripped by default).
 - `ImageCodec.AttachMetadata`, for codecs to pass a file's EXIF and XMP on.
-- 256-colour PNG (`MaxColors`) and GIF choose and match colours in Oklab, a space where distance follows what the eye sees, instead of plain sRGB; colours with transparency are compared as they show over black and over white. Scored with SSIMULACRA 2.1, a perceptual metric, photos are 2 to 3 points better and cut-outs about 1, now ahead of pngquant (+1.5 on average) and libvips (+1.75). PSNR is about 1 dB lower and files 1 to 2% larger. Encoding takes the same time as before on average with dithering and a quarter less without: opaque pictures are faster, pictures with transparency up to a quarter slower (small icons more).
-- Fixed: an AVIF or HEIC file whose colour is marked "unspecified" (CICP 2) is read as sRGB; before, saving it as JPEG or WebP failed.
+
+Changed:
+
+- 256-colour PNG (`MaxColors`) and GIF choose and match colours in Oklab, a space where distance follows what the eye sees, instead of plain sRGB; colours with transparency are compared as they show over black and over white. Photos score 2 to 3 points better and cut-outs about 1, now ahead of pngquant (+1.5 on average over 168 test images) and libvips (+1.75). PSNR is about 1 dB lower and files 1 to 2% larger. Encoding takes the same time as before on average with dithering and a quarter less without: opaque pictures are faster, pictures with transparency up to a quarter slower (small icons more). The before-and-after numbers are in [docs/performance.md](docs/performance.md).
+- Lossless WebP leaves out the image mapping tiles to codes when every tile uses the same ones: a few bytes smaller, same pixels.
+
+Fixed:
+
+- An AVIF or HEIC file whose colour is marked "unspecified" (CICP 2) is read as sRGB; before, saving it as JPEG or WebP failed.
+
+Other:
+
+- Lossy output is now also compared with the C tools by SSIMULACRA 2.1, built into the Linux test container's `metric` target; it agrees with CID22's human ratings as published. Lossy WebP is 9% smaller than cwebp at equal SSIMULACRA 2.
 
 ## 0.2.0
 
