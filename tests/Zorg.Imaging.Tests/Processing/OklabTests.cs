@@ -17,10 +17,10 @@ public class OklabTests
     {
         // Reference values from Björn Ottosson's description of Oklab, for sRGB primaries, white and black.
         Vector128<float> lanes = Oklab.FromArgb(argb);
-        Assert.Equal(255, lanes.GetElement(0));
-        Assert.Equal(l * 255, lanes.GetElement(1), 0.05);
-        Assert.Equal((a * 255) + 128, lanes.GetElement(2), 0.05);
-        Assert.Equal((b * 255) + 128, lanes.GetElement(3), 0.05);
+        Assert.Equal(l * 255, lanes.GetElement(0), 0.05);
+        Assert.Equal((a * 255) + 128, lanes.GetElement(1), 0.05);
+        Assert.Equal((b * 255) + 128, lanes.GetElement(2), 0.05);
+        Assert.Equal(0, lanes.GetElement(3));
     }
 
     [Fact]
@@ -34,7 +34,8 @@ public class OklabTests
                 for (uint b = 0; b < 256; b += 3)
                 {
                     uint argb = 0xFF000000u | (r << 16) | (g << 8) | b;
-                    Assert.Equal(argb, Oklab.ToArgb(Oklab.FromArgb(argb)));
+                    Vector128<float> lanes = Oklab.FromArgb(argb);
+                    Assert.Equal(argb, Oklab.ToArgb(lanes.GetElement(0), lanes.GetElement(1), lanes.GetElement(2)));
                 }
             }
         }
@@ -50,7 +51,7 @@ public class OklabTests
                 for (uint b = 0; b < 256; b += 15)
                 {
                     Vector128<float> lanes = Oklab.FromArgb(0xFF000000u | (r << 16) | (g << 8) | b);
-                    for (int lane = 1; lane < 4; lane++)
+                    for (int lane = 0; lane < 3; lane++)
                     {
                         Assert.InRange(lanes.GetElement(lane), 0f, 255f);
                     }
@@ -66,6 +67,6 @@ public class OklabTests
         Vector128<float> low = Oklab.FromArgb(0xFF404040u);
         Vector128<float> high = Oklab.FromArgb(0xFF414141u);
         Vector128<float> mid = Oklab.FromRgb(Vector128.Create(255f, 64.5f, 64.5f, 64.5f));
-        Assert.InRange(mid.GetElement(1), low.GetElement(1), high.GetElement(1));
+        Assert.InRange(mid.GetElement(0), low.GetElement(0), high.GetElement(0));
     }
 }

@@ -8,35 +8,40 @@ namespace Zorg.Imaging.Tests.Processing;
 public class RgbaQuantizerTests
 {
     [Theory]
-    [InlineData(1, 1, false)]
-    [InlineData(2, 2, false)]
-    [InlineData(16, 3, false)]
-    [InlineData(255, 4, false)]
-    [InlineData(256, 5, false)]
-    [InlineData(64, 6, true)]
-    [InlineData(256, 7, true)]
-    public void The_cached_search_finds_what_a_full_scan_finds(int colours, int seed, bool overPage)
+    [InlineData(1, 1, false, 5)]
+    [InlineData(2, 2, false, 5)]
+    [InlineData(16, 3, false, 6)]
+    [InlineData(255, 4, false, 5)]
+    [InlineData(256, 5, false, 6)]
+    [InlineData(64, 6, true, 5)]
+    [InlineData(256, 7, true, 5)]
+    public void The_cached_search_finds_what_a_full_scan_finds(int colours, int seed, bool overPage, int bits)
     {
         var random = new Random(seed);
-        var palette = new Vector128<float>[colours];
+        var space = new RgbaQuantizer.Space(overPage);
+        var palette = new Vector256<float>[colours];
         for (int i = 0; i < colours; i++)
         {
             // Some repeated colours, so ties are tested; translucent ones when compared over a page.
             uint alpha = overPage ? (uint)random.Next(1, 256) : 255u;
             uint colour = (alpha << 24) | ((uint)random.Next(256) << 16) | ((uint)(random.Next(16) * 16) << 8) | (uint)random.Next(256);
-            palette[i] = i > 0 && random.Next(8) == 0 ? palette[random.Next(i)] : RgbaQuantizer.Premultiply(colour);
+            palette[i] = i > 0 && random.Next(8) == 0 ? palette[random.Next(i)] : space.FromArgb(colour);
         }
 
-        var nearest = new RgbaQuantizer.NearestColour(palette, overPage);
+        var nearest = new RgbaQuantizer.NearestColour(palette, space.Lanes, bits);
         for (int round = 0; round < 20_000; round++)
         {
+            // Whole colours, and fractional ones as error diffusion makes them.
             uint alpha = overPage ? (uint)random.Next(1, 256) : 255u;
-            Vector128<float> p = RgbaQuantizer.Premultiply((alpha << 24) | ((uint)random.Next(256) << 16) | ((uint)random.Next(256) << 8) | (uint)random.Next(256));
+            uint colour = (alpha << 24) | ((uint)random.Next(256) << 16) | ((uint)random.Next(256) << 8) | (uint)random.Next(256);
+            Vector128<float> carried = RgbaQuantizer.Premultiply(colour) + Vector128.Create(0, (float)random.NextDouble() - 0.5f, (float)random.NextDouble() - 0.5f, (float)random.NextDouble() - 0.5f);
+            carried = Vector128.Min(Vector128.Max(carried, Vector128<float>.Zero), Vector128.Create(255f, alpha, alpha, alpha));
+            Vector256<float> p = round % 2 == 0 ? space.FromArgb(colour) : space.FromPremultiplied(carried);
             int best = 0;
             float least = float.MaxValue;
             for (int i = 0; i < colours; i++)
             {
-                float d = Distance(palette[i], p, overPage);
+                float d = Distance(palette[i], p, space.Lanes);
                 if (d < least)
                 {
                     (least, best) = (d, i);
@@ -66,13 +71,11 @@ public class RgbaQuantizerTests
 
         RgbaQuantizer.Result result = RgbaQuantizer.Run(argb, Width, Height, 64, dither: 0);
 
-        // Opaque pictures are matched in Oklab; any with alpha, premultiplied over black and white.
-        bool overPage = Array.Exists(argb, p => p < 0xFF000000u);
-        Func<uint, Vector128<float>> space = overPage ? RgbaQuantizer.Premultiply : Oklab.FromArgb;
-        var palette = new Vector128<float>[result.Palette.Length];
+        var space = new RgbaQuantizer.Space(translucent);
+        var palette = new Vector256<float>[result.Palette.Length];
         for (int k = 0; k < palette.Length; k++)
         {
-            palette[k] = space(result.Palette[k]);
+            palette[k] = space.FromArgb(result.Palette[k]);
         }
 
         for (int i = 0; i < argb.Length; i++)
@@ -83,12 +86,12 @@ public class RgbaQuantizerTests
                 continue;
             }
 
-            Vector128<float> p = space(argb[i]);
+            Vector256<float> p = space.FromArgb(argb[i]);
             int best = 0;
             float least = float.MaxValue;
             for (int k = 0; k < palette.Length; k++)
             {
-                float d = result.Palette[k] == 0 ? float.MaxValue : Distance(palette[k], p, overPage);
+                float d = result.Palette[k] == 0 ? float.MaxValue : Distance(palette[k], p, space.Lanes);
                 if (d < least)
                 {
                     (least, best) = (d, k);
@@ -96,6 +99,44 @@ public class RgbaQuantizerTests
             }
 
             Assert.Equal(best, result.Indices[i]);
+        }
+    }
+
+    [Fact]
+    public void Translucent_colours_come_back_from_their_lanes()
+    {
+        // Alpha from the difference over black and over white, colour from both; premultiplied within two levels.
+        var space = new RgbaQuantizer.Space(overPage: true);
+        var random = new Random(3);
+        for (int round = 0; round < 5_000; round++)
+        {
+            uint colour = ((uint)random.Next(1, 256) << 24) | ((uint)random.Next(256) << 16) | ((uint)random.Next(256) << 8) | (uint)random.Next(256);
+            uint back = space.ToArgb(space.FromArgb(colour), opaque: false);
+            Vector128<float> difference = Vector128.Abs(RgbaQuantizer.Premultiply(back) - RgbaQuantizer.Premultiply(colour));
+            Assert.True(Vector128.LessThanOrEqualAll(difference, Vector128.Create(2.01f)), $"{colour:X8} came back as {back:X8}");
+        }
+    }
+
+    [Fact]
+    public void A_picture_opaque_but_for_a_transparent_background_keeps_opaque_colours()
+    {
+        // A sprite: noise inside, fully transparent around it.
+        const int Width = 64, Height = 64;
+        var random = new Random(9);
+        uint[] argb = new uint[Width * Height];
+        for (int i = 0; i < argb.Length; i++)
+        {
+            int x = i % Width, y = i / Width;
+            argb[i] = x is > 8 and < 56 && y is > 8 and < 56 ? 0xFF000000u | (uint)random.Next(1 << 24) : 0u;
+        }
+
+        RgbaQuantizer.Result result = RgbaQuantizer.Run(argb, Width, Height, 32, dither: 1);
+
+        Assert.Equal(32, result.Palette.Length);
+        for (int i = 0; i < argb.Length; i++)
+        {
+            uint colour = result.Palette[result.Indices[i]];
+            Assert.Equal(argb[i] == 0 ? 0u : 0xFFu, colour >> 24);
         }
     }
 
@@ -123,17 +164,16 @@ public class RgbaQuantizerTests
         }
     }
 
-    // As the quantiser measures, summed in the same order: plain, or over black plus over white.
-    private static float Distance(Vector128<float> a, Vector128<float> b, bool overPage)
+    // As the quantiser measures, summed lane by lane in the same order.
+    private static float Distance(Vector256<float> a, Vector256<float> b, int lanes)
     {
-        Vector128<float> d = a - b;
-        float da = d.GetElement(0), dr = d.GetElement(1), dg = d.GetElement(2), db = d.GetElement(3);
-        if (!overPage)
+        float sum = 0;
+        for (int lane = 0; lane < lanes; lane++)
         {
-            return (da * da) + (dr * dr) + ((dg * dg) + (db * db));
+            float d = a.GetElement(lane) - b.GetElement(lane);
+            sum += d * d;
         }
 
-        float wr = dr - da, wg = dg - da, wb = db - da;
-        return (dr * dr) + (dg * dg) + (db * db) + ((wr * wr) + (wg * wg) + (wb * wb));
+        return sum;
     }
 }

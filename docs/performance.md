@@ -8,6 +8,31 @@ in the Linux gate image, best of three runs, on one core: they are single-thread
 The machine runs other work too, so treat single numbers as roughly ±10%; what matters is the ratio to the native
 tools and the change between runs made back to back.
 
+## 2026-11-14: 256 colours in Oklab, with transparency, and faster
+
+Pictures with partly transparent pixels are now reduced in Oklab too: each colour as six lanes, its Oklab over black
+and over white, so alpha counts as much as a page shows it. Against pngquant, SSIMULACRA 2 over white: plant cut-outs
+-1.24 to +1.02, pngimg cut-outs -0.21 to +0.71, 512-pixel icons -0.15 to +0.49, 64-pixel icons +0.50 to +0.27; all 168
+images +1.28 to +1.53, GIF against libvips +1.67 to +1.75. Opaque pictures' output is unchanged byte for byte.
+
+The search for each pixel's nearest colour was rebuilt: only the lanes in use are measured (three for an opaque
+picture, where the alpha lane was a constant), one pass finds the nearest, mapping uses a grid of 64 levels instead of
+32 (about half the candidates), undithered pixels' indices are kept by colour, exact colours are converted once, an
+opaque pixel of a cut-out needs one Oklab conversion instead of two, and the last k-means pass runs only when it is
+needed. One core, ten pictures, time against the previous version (best of three runs, alternated):
+
+| | Dithered (default) | Undithered |
+|---|---:|---:|
+| Geometric mean, this machine | 1.00 | 0.77 |
+| Geometric mean, a Linux host with an i3-10300 | 0.98 | 0.75 |
+| Photos | 0.68 to 0.99 | 0.64 to 0.77 |
+| Photo texture | 0.70 | 0.43 |
+| Cut-outs with transparency | 1.19 to 1.26 | 0.90 to 1.13 |
+| 512-pixel icon | 1.63 (21 to 35 ms) | 1.01 |
+
+Dithered large photos stay about level: each pixel's carried colour must be converted to Oklab, and that is most of
+their time.
+
 ## 2026-11-14: 256 colours in Oklab
 
 The 256-colour quantiser (PNG `MaxColors`, GIF) now builds and matches an opaque picture's palette in Oklab. Same
